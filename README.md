@@ -1,5 +1,8 @@
 # MMM Workflow Project
 
+MMM workflow that includes Bayesian MMM, quasi-geo lift, optimizer/scenario
+planner, chart builder, and project TFT neural MMM (NMMM) research.
+
 This is the clean working folder for the current MMM script bundle.
 
 ## Folder Map
