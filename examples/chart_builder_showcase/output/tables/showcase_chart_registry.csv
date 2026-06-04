@@ -1,0 +1,13 @@
+chart_id,chart_name,audience,required_table,required_columns,business_question_answered,recommended_slide_title,available,skip_if_missing_columns
+contribution_by_variable,Contribution by variable,client,contribution_by_variable,variable|contribution|role,Which drivers contributed the most KPI?,What drove KPI contribution?,TRUE,FALSE
+contribution_trend,Contribution trend,client,contribution_by_period_variable,period_label|period_sort|variable|contribution,How did driver contribution move over time?,How contribution changed over time,TRUE,FALSE
+actual_vs_fitted,Actual vs fitted KPI,appendix,fit_by_period,period_label|period_sort|actual|pred,How closely did the model fit observed KPI?,Model fit over time,TRUE,FALSE
+residuals_by_period,Residuals by period,internal_qa,fit_by_period,period_label|period_sort|residual,Where are residuals concentrated?,Residual QA by period,TRUE,FALSE
+cost_per_outcome,Cost per KPI outcome,client,kpi_economics,variable|cost_per_outcome,Which channels look efficient on average?,Cost per KPI by channel,TRUE,FALSE
+spend_vs_contribution,Spend vs KPI contribution,client,kpi_economics,variable|spend|contribution,How does contribution compare with spend?,Spend and contribution by channel,TRUE,FALSE
+kpi_decomposition_funnel,KPI decomposition funnel,client,funnel_summary,stage|value,How does actual KPI decompose into model components?,KPI decomposition funnel,TRUE,FALSE
+optimizer_current_vs_recommended_spend,Current vs recommended spend,client,optimizer_plan,variable|current_spend|recommended_spend,How does the recommended plan change spend?,Recommended budget changes,TRUE,FALSE
+optimizer_scenario_incremental_contribution,Scenario incremental contribution,client,optimizer_scenario_comparison,plan_name|incremental_contribution,Which scenarios add the most incremental KPI?,Scenario KPI upside,TRUE,FALSE
+optimizer_response_curves,Response curves,client,optimizer_response_curves,variable|spend_multiplier|contribution,How does expected contribution change as spend/support changes?,Response curves by channel,TRUE,FALSE
+optimizer_mroi_curves,Marginal response curves,appendix,optimizer_response_curves,variable|spend_multiplier|mroi,Where is marginal response strongest or weakest?,Marginal response by channel,TRUE,FALSE
+optimizer_saturation_headroom,Saturation and headroom,appendix,optimizer_saturation_headroom,variable|pct_of_peak_grid_contribution,Which channels have response headroom?,Saturation and headroom,TRUE,FALSE

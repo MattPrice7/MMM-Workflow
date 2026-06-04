@@ -1,0 +1,14 @@
+numpy
+pandas
+
+# Optional, needed for neural training:
+torch
+
+# Optional, preferred for broader MMM simulation scenarios:
+pysimmmulator
+
+# Optional future conveniences:
+scikit-learn
+matplotlib
+scipy
+pyarrow

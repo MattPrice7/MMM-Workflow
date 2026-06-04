@@ -1,0 +1,21 @@
+test,status,detail
+clean session sources mmm_workflow.R,PASS,"Warning message:
+package ‘data.table’ was built under R version 4.4.3 
+workflow source ok"
+source marketing_mix_diagnostic_builder_production_final.R,PASS,""
+source semi_univariate_prior_builder_production_final.R,PASS,""
+source prior_recovery_builder.R,PASS,""
+source mmm_prior_workflow.R,PASS,""
+source quasi_experimental_dose_response_analysis.R,PASS,""
+source quasi_geo_test.R,PASS,""
+source hier_mmm.R,PASS,""
+source mmm_deck_output_builder.R,PASS,""
+source pull_dma_population.R,PASS,""
+coef shrinkage table selects tv,PASS,""
+coef shrinkage table selects search,PASS,""
+coef shrinkage table defaults missing variable,PASS,""
+prior builder ignores perturbed holdout rows,PASS,max_delta=0
+prior builder returns holdout audit,PASS,""
+quasi geo ignores perturbed holdout rows,PASS,max_delta=0
+pull_dma_population source has no eager output objects,PASS,""
+hier_mmm.stan compile skipped,PASS,Set RUN_STAN_TESTS=true to compile.

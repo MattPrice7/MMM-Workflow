@@ -1,0 +1,10 @@
+test,status,detail
+bad market-size column does not fail when scaling is false,PASS,""
+bad market-size column fails when scaling is true,PASS,""
+raw spend aligns to long_decomp reporting rows,PASS,""
+negative contribution economics are diagnostic not efficient,PASS,""
+deck builder returns KPI decomposition funnel,PASS,""
+Stan output spend/support attachment adds long and wide fields,PASS,""
+business prior helper accepts coef roi mroi ikpc and cpkpi inputs,PASS,""
+business prior helper preserves true input precision on transformed coefficient scale,PASS,""
+business prior metadata blend preserves audit fields and precision,PASS,""

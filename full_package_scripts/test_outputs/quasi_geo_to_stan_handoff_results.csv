@@ -1,0 +1,7 @@
+test,status,detail
+quasi-geo produces Stan handoff rows,PASS,""
+diagnostic or bundle-confounded evidence stays out of Stan coef handoff,PASS,""
+quasi-geo handoff updates metadata explicitly,PASS,""
+Stan data contract consumes quasi-geo coefficient prior,PASS,""
+Stan prep preserves quasi-geo audit fields in metadata,PASS,""
+quasi-geo Stan handoff does not create curve priors by itself,PASS,""

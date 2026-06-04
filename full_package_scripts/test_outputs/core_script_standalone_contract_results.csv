@@ -1,0 +1,16 @@
+test,status,detail
+hier_mmm.R stands alone for Stan data and curve metadata,PASS,"Warning message:
+package ‘data.table’ was built under R version 4.4.3 
+hier direct ok"
+quasi_geo_test.R exposes geo evidence and Stan handoff without prior workflow,PASS,"Warning message:
+package ‘data.table’ was built under R version 4.4.3 
+quasi direct ok"
+optimizer_scenario_planner.R works from response curves without Stan,PASS,"Warning message:
+package ‘data.table’ was built under R version 4.4.3 
+optimizer direct ok"
+mmm_deck_output_builder.R builds core tables without prior workflow,PASS,"Warning message:
+package ‘data.table’ was built under R version 4.4.3 
+deck direct ok"
+mmm_workflow.R wires core scripts and dependency manifest,PASS,"Warning message:
+package ‘data.table’ was built under R version 4.4.3 
+workflow aliases ok"

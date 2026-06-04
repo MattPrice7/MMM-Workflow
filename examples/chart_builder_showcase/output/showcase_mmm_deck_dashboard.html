@@ -1,0 +1,910 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MMM Deck Output Dashboard</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;background:#f8fafc;color:#111827;}header{background:#111827;color:white;padding:28px 36px;} header h1{margin:0;font-size:28px;letter-spacing:0;} header p{margin:8px 0 0;color:#d1d5db;}main{max-width:1180px;margin:0 auto;padding:24px 28px 48px;} .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:0 0 22px;}.card{background:white;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;} .label{color:#6b7280;font-size:12px;text-transform:uppercase;} .value{font-size:22px;font-weight:700;margin-top:4px;}.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:18px;margin:18px 0 28px;} figure{background:white;border:1px solid #e5e7eb;border-radius:8px;margin:0;padding:10px;} figure img{width:100%;height:auto;display:block;} figcaption{font-size:12px;color:#6b7280;padding:8px 4px 2px;text-transform:capitalize;}.toolbar{display:flex;align-items:center;gap:10px;margin:18px 0;} select{font-size:14px;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;background:white;}section{background:white;border:1px solid #e5e7eb;border-radius:8px;padding:18px;margin:16px 0;} h2{margin:0 0 12px;font-size:20px;} h3{margin:18px 0 8px;font-size:15px;color:#374151;}table{width:100%;border-collapse:collapse;font-size:13px;} th,td{border-bottom:1px solid #e5e7eb;text-align:left;padding:7px 8px;vertical-align:top;} th{background:#f3f4f6;color:#374151;font-weight:700;} .empty{color:#6b7280;}.flags td:first-child{font-weight:700;} footer{color:#6b7280;font-size:12px;margin-top:22px;}</style></head><body><header><h1>MMM Deck Output Dashboard</h1><p>Static reporting pack built from decomposition outputs, optional modcut spend, and optional optimizer scenarios.</p></header><main><div class="cards"><div class="card"><div class="label">Actual KPI</div><div class="value">287,630.1</div></div>
+<div class="card"><div class="label">Predicted KPI</div><div class="value">288,060.9</div></div>
+<div class="card"><div class="label">R-squared</div><div class="value">0.9709</div></div>
+<div class="card"><div class="label">Cost per outcome</div><div class="value">12.23</div></div></div><section><h2>Reporting flags</h2><div class="flags"><table><thead><tr><th>check</th><th>severity</th><th>detail</th></tr></thead><tbody><tr><td>no_reporting_flags</td><td>ok</td><td>No reporting guardrail flags were triggered.</td></tr></tbody></table></div></section><div class="charts"><figure><img src="charts/contribution_by_variable.png" alt="contribution by variable"><figcaption>contribution by variable</figcaption></figure>
+<figure><img src="charts/contribution_trend.png" alt="contribution trend"><figcaption>contribution trend</figcaption></figure>
+<figure><img src="charts/actual_vs_fitted.png" alt="actual vs fitted"><figcaption>actual vs fitted</figcaption></figure>
+<figure><img src="charts/residuals_by_period.png" alt="residuals by period"><figcaption>residuals by period</figcaption></figure>
+<figure><img src="charts/cost_per_outcome.png" alt="cost per outcome"><figcaption>cost per outcome</figcaption></figure>
+<figure><img src="charts/spend_vs_contribution.png" alt="spend vs contribution"><figcaption>spend vs contribution</figcaption></figure>
+<figure><img src="charts/kpi_decomposition_funnel.png" alt="kpi decomposition funnel"><figcaption>kpi decomposition funnel</figcaption></figure>
+<figure><img src="charts/optimizer_current_vs_recommended_spend.png" alt="optimizer current vs recommended spend"><figcaption>optimizer current vs recommended spend</figcaption></figure>
+<figure><img src="charts/optimizer_scenario_incremental_contribution.png" alt="optimizer scenario incremental contribution"><figcaption>optimizer scenario incremental contribution</figcaption></figure>
+<figure><img src="charts/optimizer_response_curves.png" alt="optimizer response curves"><figcaption>optimizer response curves</figcaption></figure>
+<figure><img src="charts/optimizer_mroi_curves.png" alt="optimizer mroi curves"><figcaption>optimizer mroi curves</figcaption></figure>
+<figure><img src="charts/optimizer_saturation_headroom.png" alt="optimizer saturation headroom"><figcaption>optimizer saturation headroom</figcaption></figure></div><section><h2>KPI decomposition funnel</h2><table><thead><tr><th>stage_order</th><th>stage</th><th>metric_type</th><th>value</th><th>share_of_actual_kpi</th><th>metric_note</th></tr></thead><tbody><tr><td>1</td><td>Actual KPI</td><td>kpi</td><td> 287630.0557</td><td> 1.000000000</td><td>KPI-unit stage used for model/decomposition funnel.</td></tr>
+<tr><td>2</td><td>Fitted KPI</td><td>kpi</td><td> 288060.8802</td><td> 1.001497842</td><td>KPI-unit stage used for model/decomposition funnel.</td></tr>
+<tr><td>3</td><td>Modeled contribution</td><td>kpi</td><td> 288060.8802</td><td> 1.001497842</td><td>KPI-unit stage used for model/decomposition funnel.</td></tr>
+<tr><td>4</td><td>Baseline/control contribution</td><td>kpi</td><td> 202778.5547</td><td> 0.704997794</td><td>KPI-unit stage used for model/decomposition funnel.</td></tr>
+<tr><td>5</td><td>Media contribution</td><td>kpi</td><td>  85282.3255</td><td> 0.296500049</td><td>KPI-unit stage used for model/decomposition funnel.</td></tr>
+<tr><td>6</td><td>Other modeled contribution</td><td>kpi</td><td>      0.0000</td><td> 0.000000000</td><td>KPI-unit stage used for model/decomposition funnel.</td></tr>
+<tr><td>7</td><td>Residual</td><td>kpi</td><td>   -430.8245</td><td>-0.001497842</td><td>KPI-unit stage used for model/decomposition funnel.</td></tr>
+<tr><td>8</td><td>Media spend</td><td>cost</td><td>1042616.9342</td><td>NA</td><td>Cost metric; not additive to KPI stages.</td></tr></tbody></table></section><section><h2>Optimizer scenarios</h2><table><thead><tr><th>plan_type</th><th>plan_name</th><th>spend</th><th>contribution</th><th>incremental_contribution</th><th>roi</th><th>cost_per_kpi</th><th>expected_profit</th><th>q05_profit</th><th>probability_profit_positive</th><th>probability_incremental_contribution_positive</th></tr></thead><tbody><tr><td>scenario</td><td>all_channels_1.3x</td><td>1355402.0</td><td>118660.65</td><td>16281.354</td><td>0.08754646</td><td>11.422506</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr>
+<tr><td>scenario</td><td>all_channels_1.15x</td><td>1199009.5</td><td>111077.10</td><td> 8697.799</td><td>0.09264072</td><td>10.794390</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr>
+<tr><td>scenario</td><td>search_social_push</td><td>1136474.1</td><td>109169.81</td><td> 6790.513</td><td>0.09606009</td><td>10.410150</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr>
+<tr><td>scenario</td><td>tv_hold_efficiency_push</td><td>1111297.8</td><td>107068.75</td><td> 4689.450</td><td>0.09634569</td><td>10.379292</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr>
+<tr><td>scenario</td><td>all_channels_1x</td><td>1042616.9</td><td>102379.30</td><td>    0.000</td><td>0.09819455</td><td>10.183865</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr>
+<tr><td>scenario</td><td>all_channels_0.85x</td><td> 886224.4</td><td> 92396.64</td><td>-9982.655</td><td>0.10425875</td><td> 9.591521</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr>
+<tr><td>optimized</td><td>response_curve_table_greedy_marginal_point_estimate</td><td>1126026.3</td><td>112673.21</td><td>10293.908</td><td>0.10006268</td><td> 9.993736</td><td>2367644</td><td>1760940</td><td> 1</td><td> 1</td></tr></tbody></table><h3>Recommended plan</h3><table><thead><tr><th>variable</th><th>current_spend</th><th>recommended_spend</th><th>spend_change</th><th>current_contribution</th><th>expected_contribution</th><th>contribution_change</th><th>expected_roi</th><th>expected_mroi</th></tr></thead><tbody><tr><td>tv</td><td>515319.09</td><td>337807.89</td><td>-177511.21</td><td>35534.888</td><td>27527.68</td><td>-8007.210</td><td>0.08148915</td><td>0.05340276</td></tr>
+<tr><td>paid_search</td><td>196231.04</td><td>291237.01</td><td>  95005.96</td><td>22688.238</td><td>28870.88</td><td> 6182.643</td><td>0.09913191</td><td>0.05436873</td></tr>
+<tr><td>paid_social</td><td>139951.50</td><td>208314.86</td><td>  68363.36</td><td>20237.546</td><td>24974.26</td><td> 4736.710</td><td>0.11988706</td><td>0.05517542</td></tr>
+<tr><td>retail_media</td><td>146914.36</td><td>191424.47</td><td>  44510.11</td><td>16032.382</td><td>18748.99</td><td> 2716.607</td><td>0.09794458</td><td>0.05253167</td></tr>
+<tr><td>display</td><td> 44200.94</td><td> 97242.06</td><td>  53041.12</td><td> 7886.245</td><td>12551.40</td><td> 4665.158</td><td>0.12907380</td><td>NA</td></tr></tbody></table><h3>Optimizer chart registry</h3><table><thead><tr><th>chart_id</th><th>chart_name</th><th>audience</th><th>required_table</th><th>required_columns</th><th>business_question_answered</th><th>recommended_slide_title</th><th>available</th><th>skip_if_missing_columns</th></tr></thead><tbody><tr><td>contribution_by_variable</td><td>Contribution by variable</td><td>client</td><td>contribution_by_variable</td><td>variable|contribution|role</td><td>Which drivers contributed the most KPI?</td><td>What drove KPI contribution?</td><td>TRUE</td><td>FALSE</td></tr>
+<tr><td>contribution_trend</td><td>Contribution trend</td><td>client</td><td>contribution_by_period_variable</td><td>period_label|period_sort|variable|contribution</td><td>How did driver contribution move over time?</td><td>How contribution changed over time</td><td>TRUE</td><td>FALSE</td></tr>
+<tr><td>actual_vs_fitted</td><td>Actual vs fitted KPI</td><td>appendix</td><td>fit_by_period</td><td>period_label|period_sort|actual|pred</td><td>How closely did the model fit observed KPI?</td><td>Model fit over time</td><td>TRUE</td><td>FALSE</td></tr>
+<tr><td>residuals_by_period</td><td>Residuals by period</td><td>internal_qa</td><td>fit_by_period</td><td>period_label|period_sort|residual</td><td>Where are residuals concentrated?</td><td>Residual QA by period</td><td>TRUE</td><td>FALSE</td></tr>
+<tr><td>cost_per_outcome</td><td>Cost per KPI outcome</td><td>client</td><td>kpi_economics</td><td>variable|cost_per_outcome</td><td>Which channels look efficient on average?</td><td>Cost per KPI by channel</td><td>TRUE</td><td>FALSE</td></tr>
+<tr><td>spend_vs_contribution</td><td>Spend vs KPI contribution</td><td>client</td><td>kpi_economics</td><td>variable|spend|contribution</td><td>How does contribution compare with spend?</td><td>Spend and contribution by channel</td><td>TRUE</td><td>FALSE</td></tr>
+<tr><td>kpi_decomposition_funnel</td><td>KPI decomposition funnel</td><td>client</td><td>funnel_summary</td><td>stage|value</td><td>How does actual KPI decompose into model components?</td><td>KPI decomposition funnel</td><td>TRUE</td><td>FALSE</td></tr>
+<tr><td>optimizer_current_vs_recommended_spend</td><td>Current vs recommended spend</td><td>client</td><td>optimizer_plan</td><td>variable|current_spend|recommended_spend</td><td>How does the recommended plan change spend?</td><td>Recommended budget changes</td><td>TRUE</td><td>FALSE</td></tr>
+<tr><td>optimizer_scenario_incremental_contribution</td><td>Scenario incremental contribution</td><td>client</td><td>optimizer_scenario_comparison</td><td>plan_name|incremental_contribution</td><td>Which scenarios add the most incremental KPI?</td><td>Scenario KPI upside</td><td>TRUE</td><td>FALSE</td></tr>
+<tr><td>optimizer_response_curves</td><td>Response curves</td><td>client</td><td>optimizer_response_curves</td><td>variable|spend_multiplier|contribution</td><td>How does expected contribution change as spend/support changes?</td><td>Response curves by channel</td><td>TRUE</td><td>FALSE</td></tr>
+<tr><td>optimizer_mroi_curves</td><td>Marginal response curves</td><td>appendix</td><td>optimizer_response_curves</td><td>variable|spend_multiplier|mroi</td><td>Where is marginal response strongest or weakest?</td><td>Marginal response by channel</td><td>TRUE</td><td>FALSE</td></tr>
+<tr><td>optimizer_saturation_headroom</td><td>Saturation and headroom</td><td>appendix</td><td>optimizer_saturation_headroom</td><td>variable|pct_of_peak_grid_contribution</td><td>Which channels have response headroom?</td><td>Saturation and headroom</td><td>TRUE</td><td>FALSE</td></tr></tbody></table></section><div class="toolbar"><label for="periodSelect">Period</label><select id="periodSelect"><option value="__all__">All periods</option><option value="2024-01-07">2024-01-07</option><option value="2024-01-14">2024-01-14</option><option value="2024-01-21">2024-01-21</option><option value="2024-01-28">2024-01-28</option><option value="2024-02-04">2024-02-04</option><option value="2024-02-11">2024-02-11</option><option value="2024-02-18">2024-02-18</option><option value="2024-02-25">2024-02-25</option><option value="2024-03-03">2024-03-03</option><option value="2024-03-10">2024-03-10</option><option value="2024-03-17">2024-03-17</option><option value="2024-03-24">2024-03-24</option><option value="2024-03-31">2024-03-31</option><option value="2024-04-07">2024-04-07</option><option value="2024-04-14">2024-04-14</option><option value="2024-04-21">2024-04-21</option><option value="2024-04-28">2024-04-28</option><option value="2024-05-05">2024-05-05</option><option value="2024-05-12">2024-05-12</option><option value="2024-05-19">2024-05-19</option><option value="2024-05-26">2024-05-26</option><option value="2024-06-02">2024-06-02</option><option value="2024-06-09">2024-06-09</option><option value="2024-06-16">2024-06-16</option><option value="2024-06-23">2024-06-23</option><option value="2024-06-30">2024-06-30</option><option value="2024-07-07">2024-07-07</option><option value="2024-07-14">2024-07-14</option><option value="2024-07-21">2024-07-21</option><option value="2024-07-28">2024-07-28</option><option value="2024-08-04">2024-08-04</option><option value="2024-08-11">2024-08-11</option><option value="2024-08-18">2024-08-18</option><option value="2024-08-25">2024-08-25</option><option value="2024-09-01">2024-09-01</option><option value="2024-09-08">2024-09-08</option><option value="2024-09-15">2024-09-15</option><option value="2024-09-22">2024-09-22</option><option value="2024-09-29">2024-09-29</option><option value="2024-10-06">2024-10-06</option><option value="2024-10-13">2024-10-13</option><option value="2024-10-20">2024-10-20</option><option value="2024-10-27">2024-10-27</option><option value="2024-11-03">2024-11-03</option><option value="2024-11-10">2024-11-10</option><option value="2024-11-17">2024-11-17</option><option value="2024-11-24">2024-11-24</option><option value="2024-12-01">2024-12-01</option><option value="2024-12-08">2024-12-08</option><option value="2024-12-15">2024-12-15</option><option value="2024-12-22">2024-12-22</option><option value="2024-12-29">2024-12-29</option><option value="2025-01-05">2025-01-05</option><option value="2025-01-12">2025-01-12</option><option value="2025-01-19">2025-01-19</option><option value="2025-01-26">2025-01-26</option><option value="2025-02-02">2025-02-02</option><option value="2025-02-09">2025-02-09</option><option value="2025-02-16">2025-02-16</option><option value="2025-02-23">2025-02-23</option><option value="2025-03-02">2025-03-02</option><option value="2025-03-09">2025-03-09</option><option value="2025-03-16">2025-03-16</option><option value="2025-03-23">2025-03-23</option><option value="2025-03-30">2025-03-30</option><option value="2025-04-06">2025-04-06</option><option value="2025-04-13">2025-04-13</option><option value="2025-04-20">2025-04-20</option><option value="2025-04-27">2025-04-27</option><option value="2025-05-04">2025-05-04</option><option value="2025-05-11">2025-05-11</option><option value="2025-05-18">2025-05-18</option><option value="2025-05-25">2025-05-25</option><option value="2025-06-01">2025-06-01</option><option value="2025-06-08">2025-06-08</option><option value="2025-06-15">2025-06-15</option><option value="2025-06-22">2025-06-22</option><option value="2025-06-29">2025-06-29</option></select></div><section class="period-panel" data-period="__all__"><h2>All periods</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_actual_kpi</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>200978.555</td><td>0.698739755</td></tr>
+<tr><td>tv</td><td>media</td><td> 25223.479</td><td>0.087694171</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 23495.181</td><td>0.081685417</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 16877.488</td><td>0.058677764</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 12978.050</td><td>0.045120633</td></tr>
+<tr><td>display</td><td>media</td><td>  6708.127</td><td>0.023322065</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>  1800.000</td><td>0.006258039</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th><th>efficiency_index</th></tr></thead><tbody><tr><td>display</td><td> 44200.94</td><td> 6708.127</td><td>0.15176436</td><td> 6.589162</td><td>1.855391</td></tr>
+<tr><td>paid_social</td><td>139951.50</td><td>16877.488</td><td>0.12059527</td><td> 8.292199</td><td>1.474334</td></tr>
+<tr><td>paid_search</td><td>196231.04</td><td>23495.181</td><td>0.11973223</td><td> 8.351970</td><td>1.463783</td></tr>
+<tr><td>retail_media</td><td>146914.36</td><td>12978.050</td><td>0.08833752</td><td>11.320218</td><td>1.079968</td></tr>
+<tr><td>tv</td><td>515319.09</td><td>25223.479</td><td>0.04894730</td><td>20.430135</td><td>0.598404</td></tr></tbody></table></section><section class="period-panel" data-period="2024-01-07"><h2>2024-01-07</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2491.09147</td><td>0.69736855</td></tr>
+<tr><td>tv</td><td>media</td><td> 297.03426</td><td>0.08315325</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 296.31126</td><td>0.08295085</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 248.53240</td><td>0.06957540</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 158.05834</td><td>0.04424764</td></tr>
+<tr><td>display</td><td>media</td><td>  81.10275</td><td>0.02270431</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 510.0938</td><td> 81.10275</td><td>0.15899577</td><td> 6.289476</td></tr>
+<tr><td>paid_search</td><td>2452.0355</td><td>296.31126</td><td>0.12084297</td><td> 8.275202</td></tr>
+<tr><td>paid_social</td><td>2238.0979</td><td>248.53240</td><td>0.11104626</td><td> 9.005256</td></tr>
+<tr><td>retail_media</td><td>1729.0698</td><td>158.05834</td><td>0.09141235</td><td>10.939440</td></tr>
+<tr><td>tv</td><td>5664.7992</td><td>297.03426</td><td>0.05243509</td><td>19.071198</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-01-14"><h2>2024-01-14</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2514.26656</td><td>0.69211424</td></tr>
+<tr><td>tv</td><td>media</td><td> 340.57829</td><td>0.09375262</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 286.39073</td><td>0.07883615</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 257.33046</td><td>0.07083659</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 159.35279</td><td>0.04386581</td></tr>
+<tr><td>display</td><td>media</td><td>  74.81463</td><td>0.02059458</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 456.2873</td><td> 74.81463</td><td>0.16396387</td><td> 6.098905</td></tr>
+<tr><td>paid_search</td><td>2327.3820</td><td>286.39073</td><td>0.12305274</td><td> 8.126597</td></tr>
+<tr><td>paid_social</td><td>2363.4076</td><td>257.33046</td><td>0.10888112</td><td> 9.184329</td></tr>
+<tr><td>retail_media</td><td>1765.9799</td><td>159.35279</td><td>0.09023477</td><td>11.082203</td></tr>
+<tr><td>tv</td><td>6977.9509</td><td>340.57829</td><td>0.04880778</td><td>20.488537</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-01-21"><h2>2024-01-21</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2536.81350</td><td>0.69677779</td></tr>
+<tr><td>tv</td><td>media</td><td> 329.09905</td><td>0.09039250</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 283.50758</td><td>0.07787005</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 243.15529</td><td>0.06678662</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 152.73369</td><td>0.04195084</td></tr>
+<tr><td>display</td><td>media</td><td>  95.46922</td><td>0.02622220</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 649.3141</td><td> 95.46922</td><td>0.14703088</td><td> 6.801292</td></tr>
+<tr><td>paid_search</td><td>2283.6433</td><td>283.50758</td><td>0.12414705</td><td> 8.054964</td></tr>
+<tr><td>paid_social</td><td>2147.1060</td><td>243.15529</td><td>0.11324792</td><td> 8.830184</td></tr>
+<tr><td>retail_media</td><td>1662.2464</td><td>152.73369</td><td>0.09188391</td><td>10.883298</td></tr>
+<tr><td>tv</td><td>6565.3563</td><td>329.09905</td><td>0.05012661</td><td>19.949484</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-01-28"><h2>2024-01-28</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2558.42966</td><td>0.69237280</td></tr>
+<tr><td>tv</td><td>media</td><td> 343.25857</td><td>0.09289405</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 279.04942</td><td>0.07551751</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 253.84452</td><td>0.06869645</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 161.06294</td><td>0.04358752</td></tr>
+<tr><td>display</td><td>media</td><td>  99.51691</td><td>0.02693168</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 695.1424</td><td> 99.51691</td><td>0.14316046</td><td> 6.985169</td></tr>
+<tr><td>paid_search</td><td>2214.9975</td><td>279.04942</td><td>0.12598182</td><td> 7.937653</td></tr>
+<tr><td>paid_social</td><td>2338.9549</td><td>253.84452</td><td>0.10852904</td><td> 9.214124</td></tr>
+<tr><td>retail_media</td><td>1764.6805</td><td>161.06294</td><td>0.09127031</td><td>10.956465</td></tr>
+<tr><td>tv</td><td>6995.5366</td><td>343.25857</td><td>0.04906823</td><td>20.379787</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-02-04"><h2>2024-02-04</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2578.8260</td><td>0.69414775</td></tr>
+<tr><td>tv</td><td>media</td><td> 343.7735</td><td>0.09253419</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 294.8121</td><td>0.07935516</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 246.6082</td><td>0.06638003</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 148.3072</td><td>0.03992014</td></tr>
+<tr><td>display</td><td>media</td><td> 102.7697</td><td>0.02766273</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 744.059</td><td>102.7697</td><td>0.13812039</td><td> 7.240061</td></tr>
+<tr><td>paid_search</td><td>2429.487</td><td>294.8121</td><td>0.12134746</td><td> 8.240799</td></tr>
+<tr><td>paid_social</td><td>2179.149</td><td>246.6082</td><td>0.11316721</td><td> 8.836482</td></tr>
+<tr><td>retail_media</td><td>1565.452</td><td>148.3072</td><td>0.09473764</td><td>10.555467</td></tr>
+<tr><td>tv</td><td>7023.411</td><td>343.7735</td><td>0.04894680</td><td>20.430345</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-02-11"><h2>2024-02-11</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2597.73131</td><td>0.71020580</td></tr>
+<tr><td>tv</td><td>media</td><td> 359.90535</td><td>0.09839619</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 292.40088</td><td>0.07994083</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 166.16931</td><td>0.04542980</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 148.40036</td><td>0.04057186</td></tr>
+<tr><td>display</td><td>media</td><td>  93.10909</td><td>0.02545553</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 627.4769</td><td> 93.10909</td><td>0.14838649</td><td> 6.739158</td></tr>
+<tr><td>paid_search</td><td>2380.8207</td><td>292.40088</td><td>0.12281516</td><td> 8.142317</td></tr>
+<tr><td>paid_social</td><td>1179.5987</td><td>166.16931</td><td>0.14086936</td><td> 7.098776</td></tr>
+<tr><td>retail_media</td><td>1574.0828</td><td>148.40036</td><td>0.09427735</td><td>10.607001</td></tr>
+<tr><td>tv</td><td>7556.7402</td><td>359.90535</td><td>0.04762706</td><td>20.996466</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-02-18"><h2>2024-02-18</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2614.89604</td><td>0.70623405</td></tr>
+<tr><td>tv</td><td>media</td><td> 378.60296</td><td>0.10225351</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 297.60749</td><td>0.08037816</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 181.86175</td><td>0.04911742</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 156.62126</td><td>0.04230045</td></tr>
+<tr><td>display</td><td>media</td><td>  73.00181</td><td>0.01971641</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 443.2932</td><td> 73.00181</td><td>0.16468063</td><td> 6.072359</td></tr>
+<tr><td>paid_search</td><td>2458.6632</td><td>297.60749</td><td>0.12104443</td><td> 8.261429</td></tr>
+<tr><td>paid_social</td><td>1355.2354</td><td>181.86175</td><td>0.13419200</td><td> 7.452009</td></tr>
+<tr><td>retail_media</td><td>1716.7907</td><td>156.62126</td><td>0.09122910</td><td>10.961415</td></tr>
+<tr><td>tv</td><td>8197.9943</td><td>378.60296</td><td>0.04618239</td><td>21.653276</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-02-25"><h2>2024-02-25</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2630.09607</td><td>0.70746916</td></tr>
+<tr><td>tv</td><td>media</td><td> 377.08147</td><td>0.10143109</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 277.81366</td><td>0.07472906</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 196.85246</td><td>0.05295132</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 153.61522</td><td>0.04132094</td></tr>
+<tr><td>display</td><td>media</td><td>  82.15347</td><td>0.02209845</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 517.0363</td><td> 82.15347</td><td>0.15889302</td><td> 6.293543</td></tr>
+<tr><td>paid_search</td><td>2204.4488</td><td>277.81366</td><td>0.12602409</td><td> 7.934991</td></tr>
+<tr><td>paid_social</td><td>1538.6765</td><td>196.85246</td><td>0.12793623</td><td> 7.816394</td></tr>
+<tr><td>retail_media</td><td>1665.3792</td><td>153.61522</td><td>0.09224039</td><td>10.841238</td></tr>
+<tr><td>tv</td><td>8139.1890</td><td>377.08147</td><td>0.04632912</td><td>21.584696</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-03-03"><h2>2024-03-03</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2643.13593</td><td>0.69996608</td></tr>
+<tr><td>tv</td><td>media</td><td> 385.35824</td><td>0.10205215</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 303.97269</td><td>0.08049929</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 203.74899</td><td>0.05395764</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 159.76697</td><td>0.04231014</td></tr>
+<tr><td>display</td><td>media</td><td>  80.10866</td><td>0.02121470</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 500.5281</td><td> 80.10866</td><td>0.16004826</td><td> 6.248115</td></tr>
+<tr><td>paid_search</td><td>2556.7360</td><td>303.97269</td><td>0.11889092</td><td> 8.411072</td></tr>
+<tr><td>paid_social</td><td>1611.1297</td><td>203.74899</td><td>0.12646343</td><td> 7.907425</td></tr>
+<tr><td>retail_media</td><td>1751.7466</td><td>159.76697</td><td>0.09120439</td><td>10.964385</td></tr>
+<tr><td>tv</td><td>8443.8932</td><td>385.35824</td><td>0.04563751</td><td>21.911801</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-03-10"><h2>2024-03-10</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2653.85164</td><td>0.68878426</td></tr>
+<tr><td>tv</td><td>media</td><td> 397.47976</td><td>0.10316244</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 286.09657</td><td>0.07425389</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 192.34656</td><td>0.04992189</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 149.18254</td><td>0.03871904</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.00000</td><td>0.02595414</td></tr>
+<tr><td>display</td><td>media</td><td>  73.99342</td><td>0.01920435</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 450.4851</td><td> 73.99342</td><td>0.16425278</td><td> 6.088177</td></tr>
+<tr><td>paid_search</td><td>2347.4414</td><td>286.09657</td><td>0.12187592</td><td> 8.205066</td></tr>
+<tr><td>paid_social</td><td>1466.8594</td><td>192.34656</td><td>0.13112815</td><td> 7.626127</td></tr>
+<tr><td>retail_media</td><td>1592.0990</td><td>149.18254</td><td>0.09370180</td><td>10.672154</td></tr>
+<tr><td>tv</td><td>8880.4048</td><td>397.47976</td><td>0.04475919</td><td>22.341779</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-03-17"><h2>2024-03-17</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2662.11312</td><td>0.68759805</td></tr>
+<tr><td>tv</td><td>media</td><td> 392.09493</td><td>0.10127432</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 283.20683</td><td>0.07314958</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 204.32120</td><td>0.05277419</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 152.35120</td><td>0.03935084</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.00000</td><td>0.02582903</td></tr>
+<tr><td>display</td><td>media</td><td>  77.52511</td><td>0.02002399</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 477.2819</td><td> 77.52511</td><td>0.16243044</td><td> 6.156482</td></tr>
+<tr><td>paid_search</td><td>2264.7312</td><td>283.20683</td><td>0.12505097</td><td> 7.996739</td></tr>
+<tr><td>paid_social</td><td>1594.2097</td><td>204.32120</td><td>0.12816457</td><td> 7.802469</td></tr>
+<tr><td>retail_media</td><td>1628.9000</td><td>152.35120</td><td>0.09353011</td><td>10.691744</td></tr>
+<tr><td>tv</td><td>8662.0290</td><td>392.09493</td><td>0.04526594</td><td>22.091663</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-03-24"><h2>2024-03-24</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2667.82606</td><td>0.68511733</td></tr>
+<tr><td>tv</td><td>media</td><td> 376.98650</td><td>0.09681290</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 310.82721</td><td>0.07982271</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 204.61244</td><td>0.05254598</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 160.38112</td><td>0.04118705</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.00000</td><td>0.02568073</td></tr>
+<tr><td>display</td><td>media</td><td>  73.33628</td><td>0.01883329</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 444.0498</td><td> 73.33628</td><td>0.16515328</td><td> 6.054981</td></tr>
+<tr><td>paid_search</td><td>2660.8859</td><td>310.82721</td><td>0.11681343</td><td> 8.560659</td></tr>
+<tr><td>paid_social</td><td>1595.5897</td><td>204.61244</td><td>0.12823625</td><td> 7.798107</td></tr>
+<tr><td>retail_media</td><td>1772.2379</td><td>160.38112</td><td>0.09049638</td><td>11.050166</td></tr>
+<tr><td>tv</td><td>8232.7853</td><td>376.98650</td><td>0.04579088</td><td>21.838409</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-03-31"><h2>2024-03-31</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2670.93333</td><td>0.70442213</td></tr>
+<tr><td>tv</td><td>media</td><td> 392.49720</td><td>0.10351577</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 276.17558</td><td>0.07283753</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 200.07976</td><td>0.05276830</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 152.14151</td><td>0.04012524</td></tr>
+<tr><td>display</td><td>media</td><td>  99.83843</td><td>0.02633102</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 698.5018</td><td> 99.83843</td><td>0.14293225</td><td> 6.996322</td></tr>
+<tr><td>paid_search</td><td>2192.6033</td><td>276.17558</td><td>0.12595784</td><td> 7.939164</td></tr>
+<tr><td>paid_social</td><td>1555.6377</td><td>200.07976</td><td>0.12861591</td><td> 7.775088</td></tr>
+<tr><td>retail_media</td><td>1620.4533</td><td>152.14151</td><td>0.09388824</td><td>10.650961</td></tr>
+<tr><td>tv</td><td>8791.0441</td><td>392.49720</td><td>0.04464739</td><td>22.397724</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-04-07"><h2>2024-04-07</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2671.41580</td><td>0.68594593</td></tr>
+<tr><td>tv</td><td>media</td><td> 381.39786</td><td>0.09793245</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 297.89686</td><td>0.07649170</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 254.78378</td><td>0.06542145</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 190.39638</td><td>0.04888854</td></tr>
+<tr><td>display</td><td>media</td><td>  98.60842</td><td>0.02531992</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 683.1649</td><td> 98.60842</td><td>0.14434058</td><td> 6.928059</td></tr>
+<tr><td>paid_search</td><td>2458.0987</td><td>297.89686</td><td>0.12118995</td><td> 8.251509</td></tr>
+<tr><td>paid_social</td><td>2367.3220</td><td>254.78378</td><td>0.10762532</td><td> 9.291494</td></tr>
+<tr><td>retail_media</td><td>2288.9268</td><td>190.39638</td><td>0.08318151</td><td>12.021903</td></tr>
+<tr><td>tv</td><td>8304.1783</td><td>381.39786</td><td>0.04592843</td><td>21.773007</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-04-14"><h2>2024-04-14</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2669.2926</td><td>0.68236061</td></tr>
+<tr><td>tv</td><td>media</td><td> 392.8488</td><td>0.10042530</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 298.3118</td><td>0.07625849</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 251.7687</td><td>0.06436052</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 197.4438</td><td>0.05047325</td></tr>
+<tr><td>display</td><td>media</td><td> 102.1847</td><td>0.02612183</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 733.610</td><td>102.1847</td><td>0.13929019</td><td> 7.179257</td></tr>
+<tr><td>paid_search</td><td>2454.194</td><td>298.3118</td><td>0.12155184</td><td> 8.226942</td></tr>
+<tr><td>paid_social</td><td>2285.220</td><td>251.7687</td><td>0.11017263</td><td> 9.076664</td></tr>
+<tr><td>retail_media</td><td>2437.333</td><td>197.4438</td><td>0.08100812</td><td>12.344442</td></tr>
+<tr><td>tv</td><td>8794.616</td><td>392.8488</td><td>0.04466923</td><td>22.386774</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-04-21"><h2>2024-04-21</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2664.62087</td><td>0.68706972</td></tr>
+<tr><td>tv</td><td>media</td><td> 381.43033</td><td>0.09835141</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 288.22952</td><td>0.07431968</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 247.29495</td><td>0.06376474</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 198.42892</td><td>0.05116469</td></tr>
+<tr><td>display</td><td>media</td><td>  98.23486</td><td>0.02532976</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 683.1243</td><td> 98.23486</td><td>0.14380232</td><td> 6.953991</td></tr>
+<tr><td>paid_search</td><td>2332.8272</td><td>288.22952</td><td>0.12355374</td><td> 8.093644</td></tr>
+<tr><td>paid_social</td><td>2252.4876</td><td>247.29495</td><td>0.10978748</td><td> 9.108506</td></tr>
+<tr><td>retail_media</td><td>2465.0121</td><td>198.42892</td><td>0.08049815</td><td>12.422646</td></tr>
+<tr><td>tv</td><td>8304.5723</td><td>381.43033</td><td>0.04593016</td><td>21.772187</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-04-28"><h2>2024-04-28</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2657.49491</td><td>0.68725922</td></tr>
+<tr><td>tv</td><td>media</td><td> 393.91287</td><td>0.10187047</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 294.40281</td><td>0.07613601</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 245.75633</td><td>0.06355546</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 196.09253</td><td>0.05071182</td></tr>
+<tr><td>display</td><td>media</td><td>  79.14195</td><td>0.02046703</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 497.7373</td><td> 79.14195</td><td>0.15900344</td><td> 6.289172</td></tr>
+<tr><td>paid_search</td><td>2428.1929</td><td>294.40281</td><td>0.12124359</td><td> 8.247859</td></tr>
+<tr><td>paid_social</td><td>2191.8215</td><td>245.75633</td><td>0.11212425</td><td> 8.918677</td></tr>
+<tr><td>retail_media</td><td>2422.9843</td><td>196.09253</td><td>0.08093017</td><td>12.356331</td></tr>
+<tr><td>tv</td><td>8828.7459</td><td>393.91287</td><td>0.04461708</td><td>22.412941</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-05-05"><h2>2024-05-05</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2648.04479</td><td>0.68887530</td></tr>
+<tr><td>tv</td><td>media</td><td> 380.33332</td><td>0.09894177</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 292.98828</td><td>0.07621940</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 251.16510</td><td>0.06533932</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 199.43057</td><td>0.05188084</td></tr>
+<tr><td>display</td><td>media</td><td>  72.04973</td><td>0.01874337</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 441.0141</td><td> 72.04973</td><td>0.16337285</td><td> 6.120968</td></tr>
+<tr><td>paid_search</td><td>2387.3056</td><td>292.98828</td><td>0.12272760</td><td> 8.148126</td></tr>
+<tr><td>paid_social</td><td>2262.0412</td><td>251.16510</td><td>0.11103471</td><td> 9.006192</td></tr>
+<tr><td>retail_media</td><td>2541.1755</td><td>199.43057</td><td>0.07847965</td><td>12.742156</td></tr>
+<tr><td>tv</td><td>8242.5597</td><td>380.33332</td><td>0.04614262</td><td>21.671937</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-05-12"><h2>2024-05-12</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2636.43450</td><td>0.69863329</td></tr>
+<tr><td>tv</td><td>media</td><td> 381.58571</td><td>0.10111705</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 294.29582</td><td>0.07798595</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 196.01682</td><td>0.05194283</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 185.52240</td><td>0.04916190</td></tr>
+<tr><td>display</td><td>media</td><td>  79.84767</td><td>0.02115897</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 496.1766</td><td> 79.84767</td><td>0.16092591</td><td> 6.214040</td></tr>
+<tr><td>paid_search</td><td>2430.1246</td><td>294.29582</td><td>0.12110318</td><td> 8.257421</td></tr>
+<tr><td>paid_social</td><td>1379.1039</td><td>185.52240</td><td>0.13452388</td><td> 7.433624</td></tr>
+<tr><td>retail_media</td><td>2445.0045</td><td>196.01682</td><td>0.08017033</td><td>12.473442</td></tr>
+<tr><td>tv</td><td>8286.5314</td><td>381.58571</td><td>0.04604891</td><td>21.716042</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-05-19"><h2>2024-05-19</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2622.85951</td><td>0.69758260</td></tr>
+<tr><td>tv</td><td>media</td><td> 366.64569</td><td>0.09751405</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 296.92655</td><td>0.07897136</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 200.46919</td><td>0.05331731</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 193.23963</td><td>0.05139452</td></tr>
+<tr><td>display</td><td>media</td><td>  79.78624</td><td>0.02122016</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 497.8445</td><td> 79.78624</td><td>0.16026338</td><td> 6.239729</td></tr>
+<tr><td>paid_search</td><td>2463.4478</td><td>296.92655</td><td>0.12053292</td><td> 8.296489</td></tr>
+<tr><td>paid_social</td><td>1545.6523</td><td>200.46919</td><td>0.12969876</td><td> 7.710174</td></tr>
+<tr><td>retail_media</td><td>2351.4835</td><td>193.23963</td><td>0.08217775</td><td>12.168744</td></tr>
+<tr><td>tv</td><td>7788.1282</td><td>366.64569</td><td>0.04707751</td><td>21.241565</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-05-26"><h2>2024-05-26</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2607.5440</td><td>0.70325717</td></tr>
+<tr><td>tv</td><td>media</td><td> 374.6808</td><td>0.10105177</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 293.0832</td><td>0.07904482</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 205.3607</td><td>0.05538599</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 150.7556</td><td>0.04065894</td></tr>
+<tr><td>display</td><td>media</td><td>  76.3857</td><td>0.02060130</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 469.6449</td><td> 76.3857</td><td>0.16264564</td><td> 6.148336</td></tr>
+<tr><td>paid_search</td><td>2404.0152</td><td>293.0832</td><td>0.12191403</td><td> 8.202501</td></tr>
+<tr><td>paid_social</td><td>1621.9218</td><td>205.3607</td><td>0.12661568</td><td> 7.897916</td></tr>
+<tr><td>retail_media</td><td>1599.8473</td><td>150.7556</td><td>0.09423127</td><td>10.612189</td></tr>
+<tr><td>tv</td><td>8109.3039</td><td>374.6808</td><td>0.04620381</td><td>21.643236</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-06-02"><h2>2024-06-02</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2590.73735</td><td>0.70469603</td></tr>
+<tr><td>tv</td><td>media</td><td> 347.36589</td><td>0.09448560</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 314.08954</td><td>0.08543423</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 200.72031</td><td>0.05459712</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 151.04213</td><td>0.04108436</td></tr>
+<tr><td>display</td><td>media</td><td>  72.43469</td><td>0.01970267</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 439.9101</td><td> 72.43469</td><td>0.16465791</td><td> 6.073197</td></tr>
+<tr><td>paid_search</td><td>2685.2502</td><td>314.08954</td><td>0.11696845</td><td> 8.549314</td></tr>
+<tr><td>paid_social</td><td>1567.0728</td><td>200.72031</td><td>0.12808614</td><td> 7.807246</td></tr>
+<tr><td>retail_media</td><td>1606.2060</td><td>151.04213</td><td>0.09403659</td><td>10.634159</td></tr>
+<tr><td>tv</td><td>7169.5542</td><td>347.36589</td><td>0.04845014</td><td>20.639776</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-06-09"><h2>2024-06-09</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2572.71093</td><td>0.68709199</td></tr>
+<tr><td>tv</td><td>media</td><td> 339.54443</td><td>0.09068188</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 287.68825</td><td>0.07683269</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 188.65231</td><td>0.05038323</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 157.32035</td><td>0.04201543</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.00000</td><td>0.02670693</td></tr>
+<tr><td>display</td><td>media</td><td>  98.43091</td><td>0.02628787</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 685.2017</td><td> 98.43091</td><td>0.14365246</td><td> 6.961245</td></tr>
+<tr><td>paid_search</td><td>2319.9795</td><td>287.68825</td><td>0.12400465</td><td> 8.064214</td></tr>
+<tr><td>paid_social</td><td>1429.1009</td><td>188.65231</td><td>0.13200769</td><td> 7.575316</td></tr>
+<tr><td>retail_media</td><td>1704.9929</td><td>157.32035</td><td>0.09227039</td><td>10.837713</td></tr>
+<tr><td>tv</td><td>6866.6419</td><td>339.54443</td><td>0.04944840</td><td>20.223103</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-06-16"><h2>2024-06-16</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2553.7537</td><td>0.68324853</td></tr>
+<tr><td>tv</td><td>media</td><td> 332.8718</td><td>0.08905876</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 296.9264</td><td>0.07944169</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 197.9412</td><td>0.05295853</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 155.5553</td><td>0.04161831</td></tr>
+<tr><td>display</td><td>media</td><td> 100.6161</td><td>0.02691950</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.0000</td><td>0.02675468</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 702.1185</td><td>100.6161</td><td>0.14330355</td><td> 6.978194</td></tr>
+<tr><td>paid_search</td><td>2439.5892</td><td>296.9264</td><td>0.12171162</td><td> 8.216142</td></tr>
+<tr><td>paid_social</td><td>1551.0891</td><td>197.9412</td><td>0.12761435</td><td> 7.836110</td></tr>
+<tr><td>retail_media</td><td>1690.9313</td><td>155.5553</td><td>0.09199385</td><td>10.870292</td></tr>
+<tr><td>tv</td><td>6673.4579</td><td>332.8718</td><td>0.04987996</td><td>20.048134</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-06-23"><h2>2024-06-23</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2534.16840</td><td>0.68122678</td></tr>
+<tr><td>tv</td><td>media</td><td> 330.01911</td><td>0.08871465</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 295.78883</td><td>0.07951298</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 208.61426</td><td>0.05607900</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 155.82688</td><td>0.04188887</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.00000</td><td>0.02688167</td></tr>
+<tr><td>display</td><td>media</td><td>  95.58955</td><td>0.02569607</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 654.3477</td><td> 95.58955</td><td>0.14608371</td><td> 6.845390</td></tr>
+<tr><td>paid_search</td><td>2435.8061</td><td>295.78883</td><td>0.12143365</td><td> 8.234950</td></tr>
+<tr><td>paid_social</td><td>1697.8979</td><td>208.61426</td><td>0.12286620</td><td> 8.138935</td></tr>
+<tr><td>retail_media</td><td>1707.2027</td><td>155.82688</td><td>0.09127614</td><td>10.955766</td></tr>
+<tr><td>tv</td><td>6613.2124</td><td>330.01911</td><td>0.04990300</td><td>20.038877</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-06-30"><h2>2024-06-30</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2514.2667</td><td>0.70202025</td></tr>
+<tr><td>tv</td><td>media</td><td> 312.3904</td><td>0.08722400</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 307.2222</td><td>0.08578097</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 197.8628</td><td>0.05524621</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 149.6054</td><td>0.04177202</td></tr>
+<tr><td>display</td><td>media</td><td> 100.1256</td><td>0.02795655</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 697.2436</td><td>100.1256</td><td>0.14360207</td><td> 6.963688</td></tr>
+<tr><td>paid_search</td><td>2645.0201</td><td>307.2222</td><td>0.11615119</td><td> 8.609468</td></tr>
+<tr><td>paid_social</td><td>1522.1794</td><td>197.8628</td><td>0.12998654</td><td> 7.693104</td></tr>
+<tr><td>retail_media</td><td>1618.3313</td><td>149.6054</td><td>0.09244422</td><td>10.817334</td></tr>
+<tr><td>tv</td><td>6081.3128</td><td>312.3904</td><td>0.05136891</td><td>19.467028</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-07-07"><h2>2024-07-07</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2494.36494</td><td>0.69615964</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 305.75616</td><td>0.08533439</td></tr>
+<tr><td>tv</td><td>media</td><td> 295.93062</td><td>0.08259215</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 247.74786</td><td>0.06914468</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 158.34709</td><td>0.04419356</td></tr>
+<tr><td>display</td><td>media</td><td>  80.88917</td><td>0.02257560</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 508.3155</td><td> 80.88917</td><td>0.15913182</td><td> 6.284098</td></tr>
+<tr><td>paid_search</td><td>2572.7675</td><td>305.75616</td><td>0.11884329</td><td> 8.414442</td></tr>
+<tr><td>paid_social</td><td>2196.5233</td><td>247.74786</td><td>0.11279091</td><td> 8.865963</td></tr>
+<tr><td>retail_media</td><td>1730.2243</td><td>158.34709</td><td>0.09151825</td><td>10.926783</td></tr>
+<tr><td>tv</td><td>5742.3923</td><td>295.93062</td><td>0.05153438</td><td>19.404522</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-07-14"><h2>2024-07-14</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2474.77959</td><td>0.69956361</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 291.31113</td><td>0.08234700</td></tr>
+<tr><td>tv</td><td>media</td><td> 284.27297</td><td>0.08035747</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 239.88086</td><td>0.06780884</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 164.54997</td><td>0.04651452</td></tr>
+<tr><td>display</td><td>media</td><td>  82.81027</td><td>0.02340857</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 522.4296</td><td> 82.81027</td><td>0.15850992</td><td> 6.308754</td></tr>
+<tr><td>paid_search</td><td>2367.5159</td><td>291.31113</td><td>0.12304506</td><td> 8.127104</td></tr>
+<tr><td>paid_social</td><td>2101.3895</td><td>239.88086</td><td>0.11415345</td><td> 8.760138</td></tr>
+<tr><td>retail_media</td><td>1827.4770</td><td>164.54997</td><td>0.09004216</td><td>11.105909</td></tr>
+<tr><td>tv</td><td>5318.7586</td><td>284.27297</td><td>0.05344724</td><td>18.710040</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-07-21"><h2>2024-07-21</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2455.8224</td><td>0.69694902</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 296.0780</td><td>0.08402532</td></tr>
+<tr><td>tv</td><td>media</td><td> 291.8413</td><td>0.08282296</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 255.6916</td><td>0.07256389</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 152.5178</td><td>0.04328371</td></tr>
+<tr><td>display</td><td>media</td><td>  71.7248</td><td>0.02035511</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 429.381</td><td> 71.7248</td><td>0.16704233</td><td> 5.986506</td></tr>
+<tr><td>paid_search</td><td>2430.901</td><td>296.0780</td><td>0.12179763</td><td> 8.210341</td></tr>
+<tr><td>paid_social</td><td>2363.859</td><td>255.6916</td><td>0.10816705</td><td> 9.244960</td></tr>
+<tr><td>retail_media</td><td>1681.870</td><td>152.5178</td><td>0.09068346</td><td>11.027370</td></tr>
+<tr><td>tv</td><td>5576.055</td><td>291.8413</td><td>0.05233830</td><td>19.106466</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-07-28"><h2>2024-07-28</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2437.79598</td><td>0.69407773</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 317.01763</td><td>0.09025976</td></tr>
+<tr><td>tv</td><td>media</td><td> 267.66908</td><td>0.07620947</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 246.91932</td><td>0.07030170</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 160.08913</td><td>0.04557982</td></tr>
+<tr><td>display</td><td>media</td><td>  82.78983</td><td>0.02357153</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 524.8949</td><td> 82.78983</td><td>0.15772647</td><td> 6.340090</td></tr>
+<tr><td>paid_search</td><td>2731.9052</td><td>317.01763</td><td>0.11604269</td><td> 8.617518</td></tr>
+<tr><td>paid_social</td><td>2212.6721</td><td>246.91932</td><td>0.11159327</td><td> 8.961114</td></tr>
+<tr><td>retail_media</td><td>1770.0479</td><td>160.08913</td><td>0.09044339</td><td>11.056640</td></tr>
+<tr><td>tv</td><td>4907.1014</td><td>267.66908</td><td>0.05454729</td><td>18.332717</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-08-04"><h2>2024-08-04</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2420.98937</td><td>0.71349756</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 287.34824</td><td>0.08468532</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 240.48252</td><td>0.07087338</td></tr>
+<tr><td>tv</td><td>media</td><td> 230.83613</td><td>0.06803046</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 144.41111</td><td>0.04255986</td></tr>
+<tr><td>display</td><td>media</td><td>  69.06178</td><td>0.02035342</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 407.7353</td><td> 69.06178</td><td>0.16937896</td><td> 5.903921</td></tr>
+<tr><td>paid_search</td><td>2321.5112</td><td>287.34824</td><td>0.12377638</td><td> 8.079086</td></tr>
+<tr><td>paid_social</td><td>2078.6863</td><td>240.48252</td><td>0.11568966</td><td> 8.643815</td></tr>
+<tr><td>retail_media</td><td>1511.5283</td><td>144.41111</td><td>0.09553980</td><td>10.466842</td></tr>
+<tr><td>tv</td><td>4069.1072</td><td>230.83613</td><td>0.05672894</td><td>17.627687</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-08-11"><h2>2024-08-11</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2405.6738</td><td>0.71462993</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 299.8305</td><td>0.08906771</td></tr>
+<tr><td>tv</td><td>media</td><td> 232.0683</td><td>0.06893826</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 195.1783</td><td>0.05797971</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 152.5491</td><td>0.04531625</td></tr>
+<tr><td>display</td><td>media</td><td>  81.0211</td><td>0.02406814</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 511.1804</td><td> 81.0211</td><td>0.15849804</td><td> 6.309226</td></tr>
+<tr><td>paid_search</td><td>2503.2809</td><td>299.8305</td><td>0.11977502</td><td> 8.348986</td></tr>
+<tr><td>paid_social</td><td>1498.3866</td><td>195.1783</td><td>0.13025899</td><td> 7.677014</td></tr>
+<tr><td>retail_media</td><td>1625.7506</td><td>152.5491</td><td>0.09383300</td><td>10.657231</td></tr>
+<tr><td>tv</td><td>4116.8901</td><td>232.0683</td><td>0.05636981</td><td>17.739993</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-08-18"><h2>2024-08-18</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2392.09883</td><td>0.71098624</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 301.07401</td><td>0.08948605</td></tr>
+<tr><td>tv</td><td>media</td><td> 220.60099</td><td>0.06556764</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 214.90470</td><td>0.06387457</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 136.44108</td><td>0.04055340</td></tr>
+<tr><td>display</td><td>media</td><td>  99.36018</td><td>0.02953211</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 710.1402</td><td> 99.36018</td><td>0.13991628</td><td> 7.147131</td></tr>
+<tr><td>paid_search</td><td>2490.2879</td><td>301.07401</td><td>0.12089928</td><td> 8.271348</td></tr>
+<tr><td>paid_social</td><td>1726.6565</td><td>214.90470</td><td>0.12446292</td><td> 8.034522</td></tr>
+<tr><td>retail_media</td><td>1393.2019</td><td>136.44108</td><td>0.09793346</td><td>10.211015</td></tr>
+<tr><td>tv</td><td>3812.5481</td><td>220.60099</td><td>0.05786182</td><td>17.282552</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-08-25"><h2>2024-08-25</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2380.48855</td><td>0.70912997</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 293.35749</td><td>0.08738903</td></tr>
+<tr><td>tv</td><td>media</td><td> 230.94778</td><td>0.06879764</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 196.15944</td><td>0.05843445</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 160.23522</td><td>0.04773289</td></tr>
+<tr><td>display</td><td>media</td><td>  95.72584</td><td>0.02851602</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 665.9851</td><td> 95.72584</td><td>0.14373570</td><td> 6.957214</td></tr>
+<tr><td>paid_search</td><td>2401.8776</td><td>293.35749</td><td>0.12213674</td><td> 8.187545</td></tr>
+<tr><td>paid_social</td><td>1503.3072</td><td>196.15944</td><td>0.13048527</td><td> 7.663700</td></tr>
+<tr><td>retail_media</td><td>1755.2511</td><td>160.23522</td><td>0.09128906</td><td>10.954215</td></tr>
+<tr><td>tv</td><td>4056.9649</td><td>230.94778</td><td>0.05692624</td><td>17.566590</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-09-01"><h2>2024-09-01</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2371.0384</td><td>0.71064618</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 304.4866</td><td>0.09126054</td></tr>
+<tr><td>tv</td><td>media</td><td> 201.4484</td><td>0.06037800</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 196.2603</td><td>0.05882303</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 160.9783</td><td>0.04824831</td></tr>
+<tr><td>display</td><td>media</td><td> 102.2421</td><td>0.03064394</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 732.6611</td><td>102.2421</td><td>0.13954898</td><td> 7.165943</td></tr>
+<tr><td>paid_search</td><td>2543.9049</td><td>304.4866</td><td>0.11969261</td><td> 8.354735</td></tr>
+<tr><td>paid_social</td><td>1521.1541</td><td>196.2603</td><td>0.12902068</td><td> 7.750695</td></tr>
+<tr><td>retail_media</td><td>1763.0033</td><td>160.9783</td><td>0.09130911</td><td>10.951809</td></tr>
+<tr><td>tv</td><td>3400.7152</td><td>201.4484</td><td>0.05923708</td><td>16.881319</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-09-08"><h2>2024-09-08</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2363.9125</td><td>0.68777244</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 305.5369</td><td>0.08889493</td></tr>
+<tr><td>tv</td><td>media</td><td> 212.9145</td><td>0.06194677</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 185.7880</td><td>0.05405439</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 165.5352</td><td>0.04816190</td></tr>
+<tr><td>display</td><td>media</td><td> 103.3691</td><td>0.03007490</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.0000</td><td>0.02909467</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 748.2403</td><td>103.3691</td><td>0.13814962</td><td> 7.238529</td></tr>
+<tr><td>paid_search</td><td>2601.7014</td><td>305.5369</td><td>0.11743733</td><td> 8.515180</td></tr>
+<tr><td>paid_social</td><td>1380.5360</td><td>185.7880</td><td>0.13457669</td><td> 7.430707</td></tr>
+<tr><td>retail_media</td><td>1859.4577</td><td>165.5352</td><td>0.08902336</td><td>11.233007</td></tr>
+<tr><td>tv</td><td>3652.1211</td><td>212.9145</td><td>0.05829886</td><td>17.152993</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-09-15"><h2>2024-09-15</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2359.24073</td><td>0.69427760</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 303.09586</td><td>0.08919508</td></tr>
+<tr><td>tv</td><td>media</td><td> 216.38085</td><td>0.06367658</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 181.50180</td><td>0.05341237</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 157.06408</td><td>0.04622083</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.00000</td><td>0.02942801</td></tr>
+<tr><td>display</td><td>media</td><td>  80.83975</td><td>0.02378953</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 504.7124</td><td> 80.83975</td><td>0.16016993</td><td> 6.243369</td></tr>
+<tr><td>paid_search</td><td>2530.6258</td><td>303.09586</td><td>0.11977111</td><td> 8.349259</td></tr>
+<tr><td>paid_social</td><td>1338.0159</td><td>181.50180</td><td>0.13564996</td><td> 7.371915</td></tr>
+<tr><td>retail_media</td><td>1699.8208</td><td>157.06408</td><td>0.09240037</td><td>10.822467</td></tr>
+<tr><td>tv</td><td>3737.9144</td><td>216.38085</td><td>0.05788812</td><td>17.274701</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-09-22"><h2>2024-09-22</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2357.1175</td><td>0.69339938</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 295.8033</td><td>0.08701721</td></tr>
+<tr><td>tv</td><td>media</td><td> 219.0717</td><td>0.06444489</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 192.3601</td><td>0.05658706</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 158.6947</td><td>0.04668363</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.0000</td><td>0.02941726</td></tr>
+<tr><td>display</td><td>media</td><td>  76.3177</td><td>0.02245057</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 473.423</td><td> 76.3177</td><td>0.16120404</td><td> 6.203318</td></tr>
+<tr><td>paid_search</td><td>2426.862</td><td>295.8033</td><td>0.12188716</td><td> 8.204309</td></tr>
+<tr><td>paid_social</td><td>1473.151</td><td>192.3601</td><td>0.13057727</td><td> 7.658301</td></tr>
+<tr><td>retail_media</td><td>1729.270</td><td>158.6947</td><td>0.09176976</td><td>10.896835</td></tr>
+<tr><td>tv</td><td>3788.191</td><td>219.0717</td><td>0.05783016</td><td>17.292014</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-09-29"><h2>2024-09-29</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2357.6000</td><td>0.71341860</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 290.8382</td><td>0.08800873</td></tr>
+<tr><td>tv</td><td>media</td><td> 223.3066</td><td>0.06757341</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 202.3236</td><td>0.06122388</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 155.7307</td><td>0.04712470</td></tr>
+<tr><td>display</td><td>media</td><td>  74.8526</td><td>0.02265068</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 464.2346</td><td> 74.8526</td><td>0.16123872</td><td> 6.201984</td></tr>
+<tr><td>paid_search</td><td>2380.8869</td><td>290.8382</td><td>0.12215541</td><td> 8.186293</td></tr>
+<tr><td>paid_social</td><td>1569.9069</td><td>202.3236</td><td>0.12887618</td><td> 7.759386</td></tr>
+<tr><td>retail_media</td><td>1694.9789</td><td>155.7307</td><td>0.09187768</td><td>10.884037</td></tr>
+<tr><td>tv</td><td>3868.6149</td><td>223.3066</td><td>0.05772262</td><td>17.324232</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-10-06"><h2>2024-10-06</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2360.7073</td><td>0.69814435</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 299.6384</td><td>0.08861362</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 249.6719</td><td>0.07383679</td></tr>
+<tr><td>tv</td><td>media</td><td> 208.0672</td><td>0.06153279</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 196.9782</td><td>0.05825339</td></tr>
+<tr><td>display</td><td>media</td><td>  66.3399</td><td>0.01961905</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 391.7621</td><td> 66.3399</td><td>0.16933718</td><td> 5.905378</td></tr>
+<tr><td>paid_search</td><td>2471.5602</td><td>299.6384</td><td>0.12123450</td><td> 8.248477</td></tr>
+<tr><td>paid_social</td><td>2242.8223</td><td>249.6719</td><td>0.11132042</td><td> 8.983078</td></tr>
+<tr><td>retail_media</td><td>2434.3713</td><td>196.9782</td><td>0.08091542</td><td>12.358583</td></tr>
+<tr><td>tv</td><td>3594.3364</td><td>208.0672</td><td>0.05788750</td><td>17.274886</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-10-13"><h2>2024-10-13</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2366.42022</td><td>0.69658610</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 303.92705</td><td>0.08946482</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 255.64152</td><td>0.07525136</td></tr>
+<tr><td>tv</td><td>media</td><td> 200.83642</td><td>0.05911877</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 194.26804</td><td>0.05718529</td></tr>
+<tr><td>display</td><td>media</td><td>  76.07505</td><td>0.02239366</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 465.8002</td><td> 76.07505</td><td>0.16332121</td><td> 6.122904</td></tr>
+<tr><td>paid_search</td><td>2541.1888</td><td>303.92705</td><td>0.11960034</td><td> 8.361180</td></tr>
+<tr><td>paid_social</td><td>2349.7132</td><td>255.64152</td><td>0.10879690</td><td> 9.191438</td></tr>
+<tr><td>retail_media</td><td>2399.7421</td><td>194.26804</td><td>0.08095372</td><td>12.352738</td></tr>
+<tr><td>tv</td><td>3430.1180</td><td>200.83642</td><td>0.05855088</td><td>17.079164</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-10-20"><h2>2024-10-20</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2374.68169</td><td>0.69714738</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 305.06940</td><td>0.08956078</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 251.65835</td><td>0.07388062</td></tr>
+<tr><td>tv</td><td>media</td><td> 210.25464</td><td>0.06172552</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 192.39693</td><td>0.05648294</td></tr>
+<tr><td>display</td><td>media</td><td>  72.22261</td><td>0.02120276</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 435.9343</td><td> 72.22261</td><td>0.16567314</td><td> 6.035981</td></tr>
+<tr><td>paid_search</td><td>2556.2516</td><td>305.06940</td><td>0.11934248</td><td> 8.379246</td></tr>
+<tr><td>paid_social</td><td>2321.9030</td><td>251.65835</td><td>0.10838452</td><td> 9.226410</td></tr>
+<tr><td>retail_media</td><td>2334.9871</td><td>192.39693</td><td>0.08239743</td><td>12.136301</td></tr>
+<tr><td>tv</td><td>3598.6272</td><td>210.25464</td><td>0.05842635</td><td>17.115566</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-10-27"><h2>2024-10-27</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2385.3974</td><td>0.69151956</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 306.6222</td><td>0.08888884</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 246.3536</td><td>0.07141717</td></tr>
+<tr><td>tv</td><td>media</td><td> 211.2664</td><td>0.06124550</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 198.3456</td><td>0.05749979</td></tr>
+<tr><td>display</td><td>media</td><td> 101.5158</td><td>0.02942914</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 714.9692</td><td>101.5158</td><td>0.14198632</td><td> 7.042932</td></tr>
+<tr><td>paid_search</td><td>2584.1095</td><td>306.6222</td><td>0.11865680</td><td> 8.427667</td></tr>
+<tr><td>paid_social</td><td>2197.7719</td><td>246.3536</td><td>0.11209244</td><td> 8.921209</td></tr>
+<tr><td>retail_media</td><td>2484.1332</td><td>198.3456</td><td>0.07984498</td><td>12.524268</td></tr>
+<tr><td>tv</td><td>3615.8978</td><td>211.2664</td><td>0.05842709</td><td>17.115348</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-11-03"><h2>2024-11-03</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2398.43726</td><td>0.69052158</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 307.99955</td><td>0.08867455</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 244.18430</td><td>0.07030183</td></tr>
+<tr><td>tv</td><td>media</td><td> 226.98342</td><td>0.06534961</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 201.89894</td><td>0.05812767</td></tr>
+<tr><td>display</td><td>media</td><td>  93.86699</td><td>0.02702476</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 643.1773</td><td> 93.86699</td><td>0.14594263</td><td> 6.852007</td></tr>
+<tr><td>paid_search</td><td>2596.7110</td><td>307.99955</td><td>0.11861141</td><td> 8.430892</td></tr>
+<tr><td>paid_social</td><td>2144.0323</td><td>244.18430</td><td>0.11389022</td><td> 8.780385</td></tr>
+<tr><td>retail_media</td><td>2536.2724</td><td>201.89894</td><td>0.07960460</td><td>12.562089</td></tr>
+<tr><td>tv</td><td>3987.4071</td><td>226.98342</td><td>0.05692507</td><td>17.566953</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-11-10"><h2>2024-11-10</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2413.6373</td><td>0.70407530</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 315.0017</td><td>0.09188824</td></tr>
+<tr><td>tv</td><td>media</td><td> 226.5097</td><td>0.06607450</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 189.2055</td><td>0.05519259</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 178.2290</td><td>0.05199068</td></tr>
+<tr><td>display</td><td>media</td><td> 105.5123</td><td>0.03077870</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 779.6729</td><td>105.5123</td><td>0.13532893</td><td> 7.389403</td></tr>
+<tr><td>paid_search</td><td>2723.1935</td><td>315.0017</td><td>0.11567362</td><td> 8.645013</td></tr>
+<tr><td>paid_social</td><td>1313.5711</td><td>178.2290</td><td>0.13568281</td><td> 7.370130</td></tr>
+<tr><td>retail_media</td><td>2272.4969</td><td>189.2055</td><td>0.08325884</td><td>12.010736</td></tr>
+<tr><td>tv</td><td>3932.1495</td><td>226.5097</td><td>0.05760454</td><td>17.359742</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-11-17"><h2>2024-11-17</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2430.8020</td><td>0.70012953</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 311.2339</td><td>0.08964285</td></tr>
+<tr><td>tv</td><td>media</td><td> 225.6432</td><td>0.06499068</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 206.5832</td><td>0.05950095</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 195.1921</td><td>0.05622003</td></tr>
+<tr><td>display</td><td>media</td><td> 102.4774</td><td>0.02951597</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 728.3918</td><td>102.4774</td><td>0.14068997</td><td> 7.107827</td></tr>
+<tr><td>paid_search</td><td>2643.9540</td><td>311.2339</td><td>0.11771531</td><td> 8.495072</td></tr>
+<tr><td>paid_social</td><td>1627.5390</td><td>206.5832</td><td>0.12692983</td><td> 7.878369</td></tr>
+<tr><td>retail_media</td><td>2393.5753</td><td>195.1921</td><td>0.08154834</td><td>12.262665</td></tr>
+<tr><td>tv</td><td>3931.7596</td><td>225.6432</td><td>0.05738988</td><td>17.424676</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-11-24"><h2>2024-11-24</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2449.70732</td><td>0.71341497</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 294.50957</td><td>0.08576843</td></tr>
+<tr><td>tv</td><td>media</td><td> 251.41923</td><td>0.07321946</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 198.37296</td><td>0.05777108</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 155.26825</td><td>0.04521793</td></tr>
+<tr><td>display</td><td>media</td><td>  84.49882</td><td>0.02460813</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 541.210</td><td> 84.49882</td><td>0.15612943</td><td> 6.404942</td></tr>
+<tr><td>paid_search</td><td>2401.621</td><td>294.50957</td><td>0.12262949</td><td> 8.154645</td></tr>
+<tr><td>paid_social</td><td>1527.018</td><td>198.37296</td><td>0.12990870</td><td> 7.697714</td></tr>
+<tr><td>retail_media</td><td>1667.108</td><td>155.26825</td><td>0.09313627</td><td>10.736955</td></tr>
+<tr><td>tv</td><td>4534.501</td><td>251.41923</td><td>0.05544584</td><td>18.035617</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-12-01"><h2>2024-12-01</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2470.10368</td><td>0.70516750</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 317.78660</td><td>0.09072202</td></tr>
+<tr><td>tv</td><td>media</td><td> 280.79065</td><td>0.08016038</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 195.32489</td><td>0.05576153</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 167.07543</td><td>0.04769685</td></tr>
+<tr><td>display</td><td>media</td><td>  71.77969</td><td>0.02049173</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 429.8784</td><td> 71.77969</td><td>0.16697672</td><td> 5.988859</td></tr>
+<tr><td>paid_search</td><td>2753.8004</td><td>317.78660</td><td>0.11539929</td><td> 8.665565</td></tr>
+<tr><td>paid_social</td><td>1496.9326</td><td>195.32489</td><td>0.13048342</td><td> 7.663809</td></tr>
+<tr><td>retail_media</td><td>1858.8402</td><td>167.07543</td><td>0.08988155</td><td>11.125754</td></tr>
+<tr><td>tv</td><td>5285.7120</td><td>280.79065</td><td>0.05312258</td><td>18.824388</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-12-08"><h2>2024-12-08</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2491.71984</td><td>0.69461516</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 296.82184</td><td>0.08274484</td></tr>
+<tr><td>tv</td><td>media</td><td> 261.64008</td><td>0.07293724</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 192.33081</td><td>0.05361594</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 168.48331</td><td>0.04696799</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.00000</td><td>0.02787694</td></tr>
+<tr><td>display</td><td>media</td><td>  76.19884</td><td>0.02124190</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 470.8821</td><td> 76.19884</td><td>0.16182149</td><td> 6.179649</td></tr>
+<tr><td>paid_search</td><td>2438.4430</td><td>296.82184</td><td>0.12172597</td><td> 8.215174</td></tr>
+<tr><td>paid_social</td><td>1467.3118</td><td>192.33081</td><td>0.13107698</td><td> 7.629104</td></tr>
+<tr><td>retail_media</td><td>1888.9802</td><td>168.48331</td><td>0.08919274</td><td>11.211675</td></tr>
+<tr><td>tv</td><td>4751.4411</td><td>261.64008</td><td>0.05506542</td><td>18.160219</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-12-15"><h2>2024-12-15</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2514.26677</td><td>0.68543271</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 320.70048</td><td>0.08742851</td></tr>
+<tr><td>tv</td><td>media</td><td> 309.72509</td><td>0.08443643</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 193.09797</td><td>0.05264185</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 150.04709</td><td>0.04090544</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.00000</td><td>0.02726173</td></tr>
+<tr><td>display</td><td>media</td><td>  80.30789</td><td>0.02189332</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 503.8356</td><td> 80.30789</td><td>0.15939302</td><td> 6.273800</td></tr>
+<tr><td>paid_search</td><td>2807.2839</td><td>320.70048</td><td>0.11423871</td><td> 8.753601</td></tr>
+<tr><td>paid_social</td><td>1468.3515</td><td>193.09797</td><td>0.13150663</td><td> 7.604179</td></tr>
+<tr><td>retail_media</td><td>1606.1125</td><td>150.04709</td><td>0.09342253</td><td>10.704056</td></tr>
+<tr><td>tv</td><td>6024.4369</td><td>309.72509</td><td>0.05141146</td><td>19.450916</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-12-22"><h2>2024-12-22</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2537.44186</td><td>0.68839645</td></tr>
+<tr><td>tv</td><td>media</td><td> 309.03906</td><td>0.08384089</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 308.38405</td><td>0.08366319</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 206.12808</td><td>0.05592161</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 147.92298</td><td>0.04013083</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.00000</td><td>0.02712955</td></tr>
+<tr><td>display</td><td>media</td><td>  77.10219</td><td>0.02091747</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 474.8276</td><td> 77.10219</td><td>0.16237935</td><td> 6.158418</td></tr>
+<tr><td>paid_search</td><td>2608.8305</td><td>308.38405</td><td>0.11820778</td><td> 8.459680</td></tr>
+<tr><td>paid_social</td><td>1660.8125</td><td>206.12808</td><td>0.12411279</td><td> 8.057187</td></tr>
+<tr><td>retail_media</td><td>1565.8552</td><td>147.92298</td><td>0.09446785</td><td>10.585612</td></tr>
+<tr><td>tv</td><td>6018.5081</td><td>309.03906</td><td>0.05134812</td><td>19.474911</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2024-12-29"><h2>2024-12-29</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2560.93333</td><td>0.71085856</td></tr>
+<tr><td>tv</td><td>media</td><td> 306.22682</td><td>0.08500180</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 300.22946</td><td>0.08333707</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 199.22501</td><td>0.05530047</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 160.45450</td><td>0.04453863</td></tr>
+<tr><td>display</td><td>media</td><td>  75.52282</td><td>0.02096347</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 465.4815</td><td> 75.52282</td><td>0.16224666</td><td> 6.163455</td></tr>
+<tr><td>paid_search</td><td>2510.7427</td><td>300.22946</td><td>0.11957795</td><td> 8.362746</td></tr>
+<tr><td>paid_social</td><td>1533.6926</td><td>199.22501</td><td>0.12989892</td><td> 7.698293</td></tr>
+<tr><td>retail_media</td><td>1761.7729</td><td>160.45450</td><td>0.09107559</td><td>10.979891</td></tr>
+<tr><td>tv</td><td>5922.6324</td><td>306.22682</td><td>0.05170451</td><td>19.340672</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-01-05"><h2>2025-01-05</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2584.42481</td><td>0.69611165</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 315.17576</td><td>0.08489220</td></tr>
+<tr><td>tv</td><td>media</td><td> 311.68187</td><td>0.08395113</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 247.50123</td><td>0.06666415</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 157.32951</td><td>0.04237651</td></tr>
+<tr><td>display</td><td>media</td><td>  96.54529</td><td>0.02600435</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 673.6298</td><td> 96.54529</td><td>0.14332098</td><td> 6.977345</td></tr>
+<tr><td>paid_search</td><td>2703.3486</td><td>315.17576</td><td>0.11658717</td><td> 8.577273</td></tr>
+<tr><td>paid_social</td><td>2204.9435</td><td>247.50123</td><td>0.11224834</td><td> 8.908818</td></tr>
+<tr><td>retail_media</td><td>1711.5485</td><td>157.32951</td><td>0.09192232</td><td>10.878751</td></tr>
+<tr><td>tv</td><td>6074.4346</td><td>311.68187</td><td>0.05131043</td><td>19.489214</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-01-12"><h2>2025-01-12</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2607.5999</td><td>0.69773667</td></tr>
+<tr><td>tv</td><td>media</td><td> 332.7108</td><td>0.08902612</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 296.5368</td><td>0.07934677</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 245.1083</td><td>0.06558561</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 156.5280</td><td>0.04188347</td></tr>
+<tr><td>display</td><td>media</td><td>  98.7426</td><td>0.02642136</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 689.7344</td><td> 98.7426</td><td>0.14316033</td><td> 6.985175</td></tr>
+<tr><td>paid_search</td><td>2492.0106</td><td>296.5368</td><td>0.11899502</td><td> 8.403713</td></tr>
+<tr><td>paid_social</td><td>2165.7957</td><td>245.1083</td><td>0.11317239</td><td> 8.836078</td></tr>
+<tr><td>retail_media</td><td>1698.9060</td><td>156.5280</td><td>0.09213458</td><td>10.853688</td></tr>
+<tr><td>tv</td><td>6777.7056</td><td>332.7108</td><td>0.04908900</td><td>20.371164</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-01-19"><h2>2025-01-19</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2630.1468</td><td>0.69419847</td></tr>
+<tr><td>tv</td><td>media</td><td> 338.4558</td><td>0.08933171</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 304.5575</td><td>0.08038461</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 262.0661</td><td>0.06916947</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 152.0857</td><td>0.04014136</td></tr>
+<tr><td>display</td><td>media</td><td> 101.4415</td><td>0.02677438</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 733.213</td><td>101.4415</td><td>0.13835206</td><td> 7.227937</td></tr>
+<tr><td>paid_search</td><td>2552.892</td><td>304.5575</td><td>0.11929902</td><td> 8.382298</td></tr>
+<tr><td>paid_social</td><td>2463.284</td><td>262.0661</td><td>0.10638890</td><td> 9.399477</td></tr>
+<tr><td>retail_media</td><td>1627.462</td><td>152.0857</td><td>0.09344963</td><td>10.700952</td></tr>
+<tr><td>tv</td><td>6891.124</td><td>338.4558</td><td>0.04911475</td><td>20.360484</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-01-26"><h2>2025-01-26</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2651.7630</td><td>0.69282960</td></tr>
+<tr><td>tv</td><td>media</td><td> 341.2990</td><td>0.08917164</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 310.5521</td><td>0.08113836</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 255.7638</td><td>0.06682375</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 164.7751</td><td>0.04305101</td></tr>
+<tr><td>display</td><td>media</td><td> 103.2859</td><td>0.02698564</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 742.8652</td><td>103.2859</td><td>0.13903719</td><td> 7.192320</td></tr>
+<tr><td>paid_search</td><td>2632.0055</td><td>310.5521</td><td>0.11799068</td><td> 8.475246</td></tr>
+<tr><td>paid_social</td><td>2372.7125</td><td>255.7638</td><td>0.10779384</td><td> 9.276968</td></tr>
+<tr><td>retail_media</td><td>1838.7899</td><td>164.7751</td><td>0.08961063</td><td>11.159390</td></tr>
+<tr><td>tv</td><td>6951.9856</td><td>341.2990</td><td>0.04909375</td><td>20.369193</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-02-02"><h2>2025-02-02</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2672.15935</td><td>0.70036704</td></tr>
+<tr><td>tv</td><td>media</td><td> 365.24476</td><td>0.09572984</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 301.29158</td><td>0.07896785</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 241.27198</td><td>0.06323685</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 160.98251</td><td>0.04219316</td></tr>
+<tr><td>display</td><td>media</td><td>  74.41975</td><td>0.01950525</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 454.4104</td><td> 74.41975</td><td>0.16377210</td><td> 6.106046</td></tr>
+<tr><td>paid_search</td><td>2522.8749</td><td>301.29158</td><td>0.11942391</td><td> 8.373533</td></tr>
+<tr><td>paid_social</td><td>2104.3423</td><td>241.27198</td><td>0.11465434</td><td> 8.721868</td></tr>
+<tr><td>retail_media</td><td>1762.9198</td><td>160.98251</td><td>0.09131584</td><td>10.951002</td></tr>
+<tr><td>tv</td><td>7708.5404</td><td>365.24476</td><td>0.04738183</td><td>21.105136</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-02-09"><h2>2025-02-09</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2691.06464</td><td>0.70702420</td></tr>
+<tr><td>tv</td><td>media</td><td> 375.61219</td><td>0.09868470</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 307.22816</td><td>0.08071814</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 201.33940</td><td>0.05289796</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 155.44830</td><td>0.04084098</td></tr>
+<tr><td>display</td><td>media</td><td>  75.49197</td><td>0.01983403</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 463.5978</td><td> 75.49197</td><td>0.16283938</td><td> 6.141021</td></tr>
+<tr><td>paid_search</td><td>2583.3119</td><td>307.22816</td><td>0.11892801</td><td> 8.408448</td></tr>
+<tr><td>paid_social</td><td>1576.0715</td><td>201.33940</td><td>0.12774763</td><td> 7.827934</td></tr>
+<tr><td>retail_media</td><td>1673.9918</td><td>155.44830</td><td>0.09286085</td><td>10.768801</td></tr>
+<tr><td>tv</td><td>8087.8570</td><td>375.61219</td><td>0.04644150</td><td>21.532467</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-02-16"><h2>2025-02-16</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2708.22937</td><td>0.71036718</td></tr>
+<tr><td>tv</td><td>media</td><td> 372.95376</td><td>0.09782558</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 309.74161</td><td>0.08124507</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 191.07770</td><td>0.05011958</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 156.84299</td><td>0.04113984</td></tr>
+<tr><td>display</td><td>media</td><td>  73.59054</td><td>0.01930276</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 451.4232</td><td> 73.59054</td><td>0.16301896</td><td> 6.134256</td></tr>
+<tr><td>paid_search</td><td>2632.0679</td><td>309.74161</td><td>0.11767995</td><td> 8.497624</td></tr>
+<tr><td>paid_social</td><td>1438.7209</td><td>191.07770</td><td>0.13281081</td><td> 7.529507</td></tr>
+<tr><td>retail_media</td><td>1700.5555</td><td>156.84299</td><td>0.09223045</td><td>10.842406</td></tr>
+<tr><td>tv</td><td>8012.2318</td><td>372.95376</td><td>0.04654805</td><td>21.483178</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-02-23"><h2>2025-02-23</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2723.42940</td><td>0.71078674</td></tr>
+<tr><td>tv</td><td>media</td><td> 375.11064</td><td>0.09789997</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 293.34858</td><td>0.07656093</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 202.86220</td><td>0.05294492</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 165.36802</td><td>0.04315933</td></tr>
+<tr><td>display</td><td>media</td><td>  71.45153</td><td>0.01864811</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 430.766</td><td> 71.45153</td><td>0.16587089</td><td> 6.028785</td></tr>
+<tr><td>paid_search</td><td>2395.929</td><td>293.34858</td><td>0.12243627</td><td> 8.167514</td></tr>
+<tr><td>paid_social</td><td>1590.227</td><td>202.86220</td><td>0.12756808</td><td> 7.838951</td></tr>
+<tr><td>retail_media</td><td>1837.113</td><td>165.36802</td><td>0.09001515</td><td>11.109241</td></tr>
+<tr><td>tv</td><td>8074.726</td><td>375.11064</td><td>0.04645491</td><td>21.526252</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-03-02"><h2>2025-03-02</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2736.4693</td><td>0.71349242</td></tr>
+<tr><td>tv</td><td>media</td><td> 386.0929</td><td>0.10066782</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 302.0839</td><td>0.07876374</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 186.9394</td><td>0.04874160</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 150.1172</td><td>0.03914075</td></tr>
+<tr><td>display</td><td>media</td><td>  73.6138</td><td>0.01919367</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 445.2731</td><td> 73.6138</td><td>0.16532281</td><td> 6.048772</td></tr>
+<tr><td>paid_search</td><td>2534.1711</td><td>302.0839</td><td>0.11920422</td><td> 8.388965</td></tr>
+<tr><td>paid_social</td><td>1429.3458</td><td>186.9394</td><td>0.13078672</td><td> 7.646036</td></tr>
+<tr><td>retail_media</td><td>1595.4490</td><td>150.1172</td><td>0.09409086</td><td>10.628025</td></tr>
+<tr><td>tv</td><td>8535.8895</td><td>386.0929</td><td>0.04523172</td><td>22.108380</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-03-09"><h2>2025-03-09</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2747.18497</td><td>0.68517071</td></tr>
+<tr><td>tv</td><td>media</td><td> 403.95540</td><td>0.10074983</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 300.92477</td><td>0.07505313</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 215.57480</td><td>0.05376614</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 160.69896</td><td>0.04007965</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.00000</td><td>0.02494083</td></tr>
+<tr><td>display</td><td>media</td><td>  81.15087</td><td>0.02023970</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 508.8425</td><td> 81.15087</td><td>0.15948133</td><td> 6.270327</td></tr>
+<tr><td>paid_search</td><td>2528.0703</td><td>300.92477</td><td>0.11903339</td><td> 8.401004</td></tr>
+<tr><td>paid_social</td><td>1729.1646</td><td>215.57480</td><td>0.12466991</td><td> 8.021181</td></tr>
+<tr><td>retail_media</td><td>1757.5838</td><td>160.69896</td><td>0.09143175</td><td>10.937120</td></tr>
+<tr><td>tv</td><td>9241.7469</td><td>403.95540</td><td>0.04370985</td><td>22.878136</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-03-16"><h2>2025-03-16</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2755.44645</td><td>0.69061620</td></tr>
+<tr><td>tv</td><td>media</td><td> 387.52481</td><td>0.09712797</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 302.29918</td><td>0.07576729</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 194.84266</td><td>0.04883473</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 151.75911</td><td>0.03803641</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.00000</td><td>0.02506368</td></tr>
+<tr><td>display</td><td>media</td><td>  97.96537</td><td>0.02455372</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 681.8259</td><td> 97.96537</td><td>0.14368091</td><td> 6.959867</td></tr>
+<tr><td>paid_search</td><td>2534.0905</td><td>302.29918</td><td>0.11929297</td><td> 8.382724</td></tr>
+<tr><td>paid_social</td><td>1514.6725</td><td>194.84266</td><td>0.12863682</td><td> 7.773824</td></tr>
+<tr><td>retail_media</td><td>1617.5500</td><td>151.75911</td><td>0.09382035</td><td>10.658668</td></tr>
+<tr><td>tv</td><td>8547.4150</td><td>387.52481</td><td>0.04533825</td><td>22.056433</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-03-23"><h2>2025-03-23</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2761.1594</td><td>0.68531815</td></tr>
+<tr><td>tv</td><td>media</td><td> 388.2334</td><td>0.09635930</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 305.0535</td><td>0.07571411</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 202.9168</td><td>0.05036383</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 162.8501</td><td>0.04041929</td></tr>
+<tr><td>display</td><td>media</td><td> 108.8051</td><td>0.02700537</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.0000</td><td>0.02481994</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 804.9353</td><td>108.8051</td><td>0.13517253</td><td> 7.397953</td></tr>
+<tr><td>paid_search</td><td>2567.3864</td><td>305.0535</td><td>0.11881870</td><td> 8.416183</td></tr>
+<tr><td>paid_social</td><td>1588.0816</td><td>202.9168</td><td>0.12777480</td><td> 7.826270</td></tr>
+<tr><td>retail_media</td><td>1803.8691</td><td>162.8501</td><td>0.09027821</td><td>11.076870</td></tr>
+<tr><td>tv</td><td>8575.7122</td><td>388.2334</td><td>0.04527127</td><td>22.089064</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-03-30"><h2>2025-03-30</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2764.2667</td><td>0.70373487</td></tr>
+<tr><td>tv</td><td>media</td><td> 392.2603</td><td>0.09986275</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 317.7817</td><td>0.08090177</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 202.2180</td><td>0.05148124</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 148.8201</td><td>0.03788705</td></tr>
+<tr><td>display</td><td>media</td><td> 102.6476</td><td>0.02613233</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 733.9669</td><td>102.6476</td><td>0.13985322</td><td> 7.150354</td></tr>
+<tr><td>paid_search</td><td>2744.5996</td><td>317.7817</td><td>0.11578436</td><td> 8.636745</td></tr>
+<tr><td>paid_social</td><td>1592.1288</td><td>202.2180</td><td>0.12701110</td><td> 7.873328</td></tr>
+<tr><td>retail_media</td><td>1591.6391</td><td>148.8201</td><td>0.09350116</td><td>10.695054</td></tr>
+<tr><td>tv</td><td>8700.7418</td><td>392.2603</td><td>0.04508355</td><td>22.181040</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-04-06"><h2>2025-04-06</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2764.7491</td><td>0.69102404</td></tr>
+<tr><td>tv</td><td>media</td><td> 374.6072</td><td>0.09362968</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 312.2076</td><td>0.07803347</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 254.1664</td><td>0.06352658</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 191.6432</td><td>0.04789948</td></tr>
+<tr><td>display</td><td>media</td><td> 103.5715</td><td>0.02588675</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 751.3957</td><td>103.5715</td><td>0.13783878</td><td> 7.254853</td></tr>
+<tr><td>paid_search</td><td>2652.8091</td><td>312.2076</td><td>0.11768943</td><td> 8.496939</td></tr>
+<tr><td>paid_social</td><td>2328.4858</td><td>254.1664</td><td>0.10915521</td><td> 9.161267</td></tr>
+<tr><td>retail_media</td><td>2320.9195</td><td>191.6432</td><td>0.08257209</td><td>12.110629</td></tr>
+<tr><td>tv</td><td>8042.3238</td><td>374.6072</td><td>0.04657947</td><td>21.468684</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-04-13"><h2>2025-04-13</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2762.62594</td><td>0.69436971</td></tr>
+<tr><td>tv</td><td>media</td><td> 384.27342</td><td>0.09658485</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 303.26894</td><td>0.07622486</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 243.98433</td><td>0.06132402</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 204.63347</td><td>0.05143341</td></tr>
+<tr><td>display</td><td>media</td><td>  79.82344</td><td>0.02006315</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 499.4732</td><td> 79.82344</td><td>0.15981526</td><td> 6.257225</td></tr>
+<tr><td>paid_search</td><td>2537.7302</td><td>303.26894</td><td>0.11950401</td><td> 8.367920</td></tr>
+<tr><td>paid_social</td><td>2158.0646</td><td>243.98433</td><td>0.11305701</td><td> 8.845095</td></tr>
+<tr><td>retail_media</td><td>2614.0510</td><td>204.63347</td><td>0.07828212</td><td>12.774308</td></tr>
+<tr><td>tv</td><td>8429.2740</td><td>384.27342</td><td>0.04558796</td><td>21.935616</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-04-20"><h2>2025-04-20</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2757.95421</td><td>0.69651467</td></tr>
+<tr><td>tv</td><td>media</td><td> 380.65885</td><td>0.09613447</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 305.89577</td><td>0.07725324</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 240.35734</td><td>0.06070166</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 197.08977</td><td>0.04977454</td></tr>
+<tr><td>display</td><td>media</td><td>  77.69391</td><td>0.01962141</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 478.4549</td><td> 77.69391</td><td>0.16238502</td><td> 6.158203</td></tr>
+<tr><td>paid_search</td><td>2601.7093</td><td>305.89577</td><td>0.11757492</td><td> 8.505215</td></tr>
+<tr><td>paid_social</td><td>2110.9227</td><td>240.35734</td><td>0.11386364</td><td> 8.782435</td></tr>
+<tr><td>retail_media</td><td>2420.2652</td><td>197.08977</td><td>0.08143313</td><td>12.280014</td></tr>
+<tr><td>tv</td><td>8261.3306</td><td>380.65885</td><td>0.04607718</td><td>21.702715</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-04-27"><h2>2025-04-27</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2750.82824</td><td>0.69703344</td></tr>
+<tr><td>tv</td><td>media</td><td> 372.71565</td><td>0.09444256</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 305.83574</td><td>0.07749584</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 244.98213</td><td>0.06207612</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 199.11845</td><td>0.05045470</td></tr>
+<tr><td>display</td><td>media</td><td>  72.99938</td><td>0.01849734</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 438.5225</td><td> 72.99938</td><td>0.16646669</td><td> 6.007208</td></tr>
+<tr><td>paid_search</td><td>2556.2700</td><td>305.83574</td><td>0.11964141</td><td> 8.358310</td></tr>
+<tr><td>paid_social</td><td>2209.2233</td><td>244.98213</td><td>0.11089061</td><td> 9.017896</td></tr>
+<tr><td>retail_media</td><td>2484.7687</td><td>199.11845</td><td>0.08013561</td><td>12.478847</td></tr>
+<tr><td>tv</td><td>8004.8244</td><td>372.71565</td><td>0.04656138</td><td>21.477028</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-05-04"><h2>2025-05-04</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2741.37812</td><td>0.69356660</td></tr>
+<tr><td>tv</td><td>media</td><td> 373.72839</td><td>0.09455300</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 301.05098</td><td>0.07616567</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 257.20832</td><td>0.06507351</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 198.99166</td><td>0.05034474</td></tr>
+<tr><td>display</td><td>media</td><td>  80.22348</td><td>0.02029648</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 504.8457</td><td> 80.22348</td><td>0.15890694</td><td> 6.292991</td></tr>
+<tr><td>paid_search</td><td>2505.0568</td><td>301.05098</td><td>0.12017731</td><td> 8.321038</td></tr>
+<tr><td>paid_social</td><td>2405.9800</td><td>257.20832</td><td>0.10690377</td><td> 9.354207</td></tr>
+<tr><td>retail_media</td><td>2479.1700</td><td>198.99166</td><td>0.08026544</td><td>12.458663</td></tr>
+<tr><td>tv</td><td>8013.7840</td><td>373.72839</td><td>0.04663570</td><td>21.442802</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-05-11"><h2>2025-05-11</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2729.76783</td><td>0.70283920</td></tr>
+<tr><td>tv</td><td>media</td><td> 378.12095</td><td>0.09735561</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 310.52713</td><td>0.07995209</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 201.20242</td><td>0.05180402</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 186.40338</td><td>0.04799368</td></tr>
+<tr><td>display</td><td>media</td><td>  77.89347</td><td>0.02005540</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 485.7582</td><td> 77.89347</td><td>0.16035440</td><td> 6.236187</td></tr>
+<tr><td>paid_search</td><td>2623.4176</td><td>310.52713</td><td>0.11836740</td><td> 8.448272</td></tr>
+<tr><td>paid_social</td><td>1571.6758</td><td>201.20242</td><td>0.12801776</td><td> 7.811416</td></tr>
+<tr><td>retail_media</td><td>2229.9885</td><td>186.40338</td><td>0.08358939</td><td>11.963241</td></tr>
+<tr><td>tv</td><td>8212.7982</td><td>378.12095</td><td>0.04604045</td><td>21.720030</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-05-18"><h2>2025-05-18</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2716.19285</td><td>0.71289891</td></tr>
+<tr><td>tv</td><td>media</td><td> 362.25355</td><td>0.09507799</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 291.04307</td><td>0.07638791</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 186.73588</td><td>0.04901118</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 178.54566</td><td>0.04686155</td></tr>
+<tr><td>display</td><td>media</td><td>  75.29634</td><td>0.01976247</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 463.5485</td><td> 75.29634</td><td>0.16243467</td><td> 6.156321</td></tr>
+<tr><td>paid_search</td><td>2365.8323</td><td>291.04307</td><td>0.12301931</td><td> 8.128805</td></tr>
+<tr><td>paid_social</td><td>1313.6612</td><td>178.54566</td><td>0.13591454</td><td> 7.357565</td></tr>
+<tr><td>retail_media</td><td>2230.2593</td><td>186.73588</td><td>0.08372833</td><td>11.943389</td></tr>
+<tr><td>tv</td><td>7636.1900</td><td>362.25355</td><td>0.04743904</td><td>21.079683</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-05-25"><h2>2025-05-25</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2700.8773</td><td>0.70816026</td></tr>
+<tr><td>tv</td><td>media</td><td> 352.2260</td><td>0.09235238</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 301.9962</td><td>0.07918230</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 215.1058</td><td>0.05639997</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 139.5606</td><td>0.03659228</td></tr>
+<tr><td>display</td><td>media</td><td> 104.1693</td><td>0.02731281</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.0000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 753.4177</td><td>104.1693</td><td>0.13826232</td><td> 7.232628</td></tr>
+<tr><td>paid_search</td><td>2565.6906</td><td>301.9962</td><td>0.11770561</td><td> 8.495772</td></tr>
+<tr><td>paid_social</td><td>1745.8497</td><td>215.1058</td><td>0.12320983</td><td> 8.116236</td></tr>
+<tr><td>retail_media</td><td>1444.8446</td><td>139.5606</td><td>0.09659210</td><td>10.352813</td></tr>
+<tr><td>tv</td><td>7286.1374</td><td>352.2260</td><td>0.04834193</td><td>20.685975</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-06-01"><h2>2025-06-01</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2684.07068</td><td>0.71460264</td></tr>
+<tr><td>tv</td><td>media</td><td> 359.10572</td><td>0.09560773</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 305.25383</td><td>0.08127029</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 163.62077</td><td>0.04356213</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 147.96176</td><td>0.03939310</td></tr>
+<tr><td>display</td><td>media</td><td>  96.01964</td><td>0.02556411</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 658.9302</td><td> 96.01964</td><td>0.14572051</td><td> 6.862452</td></tr>
+<tr><td>paid_search</td><td>2570.7941</td><td>305.25383</td><td>0.11873912</td><td> 8.421824</td></tr>
+<tr><td>paid_social</td><td>1165.5014</td><td>163.62077</td><td>0.14038659</td><td> 7.123187</td></tr>
+<tr><td>retail_media</td><td>1562.1526</td><td>147.96176</td><td>0.09471659</td><td>10.557813</td></tr>
+<tr><td>tv</td><td>7548.7218</td><td>359.10572</td><td>0.04757173</td><td>21.020890</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-06-08"><h2>2025-06-08</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2666.04426</td><td>0.68242342</td></tr>
+<tr><td>tv</td><td>media</td><td> 346.34164</td><td>0.08865256</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 323.51582</td><td>0.08280987</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 203.54529</td><td>0.05210119</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 168.45927</td><td>0.04312027</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.00000</td><td>0.02559685</td></tr>
+<tr><td>display</td><td>media</td><td>  98.82405</td><td>0.02529585</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 689.0614</td><td> 98.82405</td><td>0.14341835</td><td> 6.972609</td></tr>
+<tr><td>paid_search</td><td>2847.6620</td><td>323.51582</td><td>0.11360752</td><td> 8.802234</td></tr>
+<tr><td>paid_social</td><td>1581.1181</td><td>203.54529</td><td>0.12873503</td><td> 7.767893</td></tr>
+<tr><td>retail_media</td><td>1896.9344</td><td>168.45927</td><td>0.08880606</td><td>11.260493</td></tr>
+<tr><td>tv</td><td>7157.3861</td><td>346.34164</td><td>0.04838940</td><td>20.665682</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-06-15"><h2>2025-06-15</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2647.08708</td><td>0.68617349</td></tr>
+<tr><td>tv</td><td>media</td><td> 336.86103</td><td>0.08732055</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 324.30064</td><td>0.08406467</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 194.96658</td><td>0.05053891</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 156.62001</td><td>0.04059878</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.00000</td><td>0.02592183</td></tr>
+<tr><td>display</td><td>media</td><td>  97.91653</td><td>0.02538176</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 686.1155</td><td> 97.91653</td><td>0.14271144</td><td> 7.007147</td></tr>
+<tr><td>paid_search</td><td>2848.4080</td><td>324.30064</td><td>0.11385330</td><td> 8.783233</td></tr>
+<tr><td>paid_social</td><td>1483.6877</td><td>194.96658</td><td>0.13140675</td><td> 7.609959</td></tr>
+<tr><td>retail_media</td><td>1721.6096</td><td>156.62001</td><td>0.09097301</td><td>10.992271</td></tr>
+<tr><td>tv</td><td>6820.5340</td><td>336.86103</td><td>0.04938925</td><td>20.247323</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-06-22"><h2>2025-06-22</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2627.5017</td><td>0.69511291</td></tr>
+<tr><td>tv</td><td>media</td><td> 332.4329</td><td>0.08794605</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 309.9149</td><td>0.08198884</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 189.1869</td><td>0.05004991</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 153.2062</td><td>0.04053112</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td> 100.0000</td><td>0.02645528</td></tr>
+<tr><td>display</td><td>media</td><td>  67.7214</td><td>0.01791589</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 398.2748</td><td> 67.7214</td><td>0.17003687</td><td> 5.881077</td></tr>
+<tr><td>paid_search</td><td>2624.3635</td><td>309.9149</td><td>0.11809144</td><td> 8.468015</td></tr>
+<tr><td>paid_social</td><td>1430.7050</td><td>189.1869</td><td>0.13223331</td><td> 7.562391</td></tr>
+<tr><td>retail_media</td><td>1657.3490</td><td>153.2062</td><td>0.09244051</td><td>10.817768</td></tr>
+<tr><td>tv</td><td>6689.0979</td><td>332.4329</td><td>0.04969772</td><td>20.121649</td></tr></tbody></table></section>
+<section class="period-panel" data-period="2025-06-29"><h2>2025-06-29</h2><h3>Contribution by variable</h3><table><thead><tr><th>variable</th><th>role</th><th>contribution</th><th>share_of_period_model_contribution</th></tr></thead><tbody><tr><td>baseline</td><td>baseline_control</td><td>2607.60000</td><td>0.71000355</td></tr>
+<tr><td>paid_search</td><td>media</td><td> 328.31510</td><td>0.08939442</td></tr>
+<tr><td>tv</td><td>media</td><td> 314.55033</td><td>0.08564651</td></tr>
+<tr><td>paid_social</td><td>media</td><td> 193.75852</td><td>0.05275703</td></tr>
+<tr><td>retail_media</td><td>media</td><td> 156.21146</td><td>0.04253363</td></tr>
+<tr><td>display</td><td>media</td><td>  72.22227</td><td>0.01966485</td></tr>
+<tr><td>promo</td><td>baseline_control</td><td>   0.00000</td><td>0.00000000</td></tr></tbody></table><h3>KPI economics</h3><table><thead><tr><th>variable</th><th>spend</th><th>contribution</th><th>outcome_per_cost</th><th>cost_per_outcome</th></tr></thead><tbody><tr><td>display</td><td> 434.8106</td><td> 72.22227</td><td>0.16610051</td><td> 6.020451</td></tr>
+<tr><td>paid_search</td><td>2909.0991</td><td>328.31510</td><td>0.11285800</td><td> 8.860692</td></tr>
+<tr><td>paid_social</td><td>1524.8552</td><td>193.75852</td><td>0.12706683</td><td> 7.869874</td></tr>
+<tr><td>retail_media</td><td>1699.9921</td><td>156.21146</td><td>0.09188953</td><td>10.882633</td></tr>
+<tr><td>tv</td><td>6167.7288</td><td>314.55033</td><td>0.05099938</td><td>19.608083</td></tr></tbody></table></section><footer>Use the CSV tables for deck chart rebuilds. Cost metrics are generic KPI economics: outcome per cost and cost per outcome, not revenue ROI unless a KPI value is supplied.</footer></main><script>const select=document.getElementById('periodSelect');function updatePeriod(){const val=select.value;document.querySelectorAll('.period-panel').forEach(p=>{p.style.display=(val==='__all__'?p.dataset.period==='__all__':p.dataset.period===val)?'block':'none';});}select.addEventListener('change',updatePeriod);updatePeriod();</script></body></html>

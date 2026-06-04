@@ -1,0 +1,7 @@
+test,status,detail
+synthetic MMM panel returns required objects,PASS,""
+synthetic MMM panel has known-truth curves and holdout,PASS,""
+synthetic MMM panel has spend/support columns for media,PASS,""
+synthetic quasi-geo panel returns event truth,PASS,""
+synthetic quasi-geo bundle contains treated media movement,PASS,""
+synthetic decomposition outputs reconcile,PASS,""

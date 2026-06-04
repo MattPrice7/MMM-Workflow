@@ -1,0 +1,32 @@
+# macOS/editor noise
+.DS_Store
+*.swp
+*.tmp
+
+# R session/build artifacts
+.Rhistory
+.RData
+.Rproj.user/
+renv/library/
+packrat/lib*/
+
+# Python caches/environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Generated archives/checkpoints
+*.zip
+*.tar.gz
+*.pt
+*.pth
+*.ckpt
+
+# Heavy generated model outputs
+nmmm_research/outputs/
+
+# Local-only scratch outputs
+full_package_scripts/test_outputs/tmp/
+public_data_pilot/outputs/
+
