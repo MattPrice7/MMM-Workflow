@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from .transforms import (
+    SUPPORTED_CURVE_TYPES,
     apply_saturation,
     curve_parameter_from_anchor,
     finite_median_positive,
@@ -198,6 +199,7 @@ def make_synthetic_mmm_panel(
     """
     rng = np.random.default_rng(seed)
     scenario = str(scenario).lower()
+    curve_type = str(curve_type).lower()
     if scenario == "messy_realistic":
         national_media_share = max(national_media_share, 0.35)
         collinear_media_strength = max(collinear_media_strength, 0.35)
@@ -219,6 +221,8 @@ def make_synthetic_mmm_panel(
         noise_sd = max(noise_sd, 0.07)
     elif scenario != "standard":
         raise ValueError("scenario must be one of: standard, messy_realistic, hostile_collinear, weak_geo")
+    if curve_type != "mixed" and curve_type not in SUPPORTED_CURVE_TYPES:
+        raise ValueError(f"curve_type must be 'mixed' or one of: {', '.join(SUPPORTED_CURVE_TYPES)}")
     collinear_media_strength = float(np.clip(collinear_media_strength, 0.0, 0.95))
     missing_media_rate = float(np.clip(missing_media_rate, 0.0, 0.50))
     control_availability = str(control_availability).lower()
@@ -226,6 +230,12 @@ def make_synthetic_mmm_panel(
         raise ValueError("control_availability must be one of: none, partial, standard, rich, noisy_proxy")
     kpi_scale_multiplier = max(float(kpi_scale_multiplier), 1e-6)
     channels = channels or ["tv", "search", "social", "display"]
+    curve_type_by_channel: Dict[str, str] = {}
+    for ch in channels:
+        if curve_type == "mixed":
+            curve_type_by_channel[ch] = str(rng.choice(SUPPORTED_CURVE_TYPES))
+        else:
+            curve_type_by_channel[ch] = curve_type
     dates = _weekly_dates(n_weeks, start)
     geos = [f"geo_{i + 1:02d}" for i in range(n_geos)]
     product_id = "product_total"
@@ -333,20 +343,35 @@ def make_synthetic_mmm_panel(
 
     for ch in channels:
         decay = channel_defaults[ch]["decay"]
+        ch_curve_type = curve_type_by_channel[ch]
         shape = channel_defaults[ch]["shape"]
+        if ch_curve_type == "threshold":
+            shape = max(3.0, shape * 4.5)
+        elif ch_curve_type == "gompertz":
+            shape = max(1.2, shape * 2.0)
+        elif ch_curve_type == "linear_plateau":
+            shape = 1.0
+        elif ch_curve_type == "near_linear":
+            shape = min(shape, 0.90)
         anchor_sat = channel_defaults[ch]["anchor_sat"]
+        if ch_curve_type == "near_linear":
+            anchor_sat = min(anchor_sat, 0.35)
+        elif ch_curve_type == "linear_plateau":
+            anchor_sat = float(np.clip(anchor_sat, 0.35, 0.75))
+        elif ch_curve_type == "threshold":
+            anchor_sat = float(np.clip(anchor_sat, 0.25, 0.65))
         coef = channel_defaults[ch]["coef"]
         adstock_all = []
         for geo in geos:
             adstock = geometric_adstock_1d(media_store[ch][geo], decay)
             adstock_all.append(adstock)
         anchor = finite_median_positive(np.concatenate(adstock_all), fallback=100.0)
-        curve_param = curve_parameter_from_anchor(anchor, anchor_sat, curve_type=curve_type, shape=shape)
+        curve_param = curve_parameter_from_anchor(anchor, anchor_sat, curve_type=ch_curve_type, shape=shape)
         for geo in geos:
             support = media_store[ch][geo]
             spend = spend_store[ch][geo]
             adstock = geometric_adstock_1d(support, decay)
-            saturated = apply_saturation(adstock, curve_param, shape=shape, curve_type=curve_type)
+            saturated = apply_saturation(adstock, curve_param, shape=shape, curve_type=ch_curve_type)
             contribution = coef * saturated * float(geo_scale[geo])
             contribution_by_geo[geo] += contribution
             for i, date in enumerate(dates):
@@ -362,7 +387,7 @@ def make_synthetic_mmm_panel(
                         "saturated_support": float(saturated[i]),
                         "true_contribution": float(contribution[i]),
                         "true_decay": float(decay),
-                        "true_curve_type": curve_type,
+                        "true_curve_type": ch_curve_type,
                         "true_curve_param": float(curve_param),
                         "true_shape": float(shape),
                         "true_coef": float(coef),
@@ -373,7 +398,7 @@ def make_synthetic_mmm_panel(
         params_rows.append(
             {
                 "channel": ch,
-                "curve_type": curve_type,
+                "curve_type": ch_curve_type,
                 "decay": float(decay),
                 "curve_param": float(curve_param),
                 "shape": float(shape),
@@ -510,7 +535,7 @@ def make_synthetic_mmm_panel(
         steady_state_adstock = p["anchor_support"] * grid
         steady_state_support = steady_state_adstock * max(1.0 - p["decay"], 1e-6)
         steady_state_spend = steady_state_support * median_spend_per_support
-        sat = apply_saturation(steady_state_adstock, p["curve_param"], shape=p["shape"], curve_type=curve_type)
+        sat = apply_saturation(steady_state_adstock, p["curve_param"], shape=p["shape"], curve_type=p["curve_type"])
         contribution_curve = p["coef"] * sat
         mroi_curve = np.gradient(contribution_curve, np.maximum(steady_state_spend, 1e-12))
         roi_curve = contribution_curve / np.maximum(steady_state_spend, 1e-12)
@@ -527,7 +552,7 @@ def make_synthetic_mmm_panel(
             response_curves.append(
                 {
                     "channel": p["channel"],
-                    "curve_type": curve_type,
+                    "curve_type": p["curve_type"],
                     "pct_of_anchor_support": float(pct),
                     "steady_state_support": float(raw_support),
                     "steady_state_spend": float(spend),

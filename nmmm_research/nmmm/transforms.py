@@ -7,6 +7,16 @@ from typing import Iterable
 
 import numpy as np
 
+SUPPORTED_CURVE_TYPES = (
+    "hill",
+    "weibull",
+    "gompertz",
+    "concave",
+    "threshold",
+    "linear_plateau",
+    "near_linear",
+)
+
 
 def geometric_adstock_1d(x: Iterable[float], decay: float) -> np.ndarray:
     """Apply geometric adstock to a single ordered series."""
@@ -39,6 +49,77 @@ def weibull_saturation(x: Iterable[float], scale: float, shape: float = 1.0) -> 
     return 1.0 - np.exp(-np.power(x_arr / scale, shape))
 
 
+def gompertz_saturation(x: Iterable[float], scale: float, shape: float = 1.0) -> np.ndarray:
+    """Modified Gompertz curve normalized to start at zero and saturate at one."""
+    x_arr = np.maximum(np.asarray(x, dtype=float), 0.0)
+    scale = max(float(scale), 1e-12)
+    shape = max(float(shape), 1e-6)
+    raw0 = math.exp(-shape)
+    raw = np.exp(-shape * np.exp(-x_arr / scale))
+    return np.clip((raw - raw0) / max(1.0 - raw0, 1e-12), 0.0, 1.0)
+
+
+def concave_saturation(x: Iterable[float], scale: float, shape: float = 1.0) -> np.ndarray:
+    """Smooth concave saturation with a heavy tail."""
+    x_arr = np.maximum(np.asarray(x, dtype=float), 0.0)
+    scale = max(float(scale), 1e-12)
+    shape = max(float(shape), 1e-6)
+    return np.clip(1.0 - np.power(1.0 + x_arr / scale, -shape), 0.0, 1.0)
+
+
+def threshold_saturation(x: Iterable[float], scale: float, shape: float = 6.0) -> np.ndarray:
+    """S-shaped threshold-like saturation normalized to start at zero."""
+    x_arr = np.maximum(np.asarray(x, dtype=float), 0.0)
+    scale = max(float(scale), 1e-12)
+    shape = max(float(shape), 1e-6)
+    low = 1.0 / (1.0 + math.exp(shape))
+    raw = 1.0 / (1.0 + np.exp(-shape * (x_arr / scale - 1.0)))
+    return np.clip((raw - low) / max(1.0 - low, 1e-12), 0.0, 1.0)
+
+
+def linear_plateau_saturation(x: Iterable[float], scale: float, shape: float = 1.0) -> np.ndarray:
+    """Near-linear response until a plateau."""
+    x_arr = np.maximum(np.asarray(x, dtype=float), 0.0)
+    scale = max(float(scale), 1e-12)
+    return np.clip(x_arr / scale, 0.0, 1.0)
+
+
+def _saturation_given_scale(x: Iterable[float], scale: float, shape: float, curve_type: str) -> np.ndarray:
+    curve_type = str(curve_type).lower()
+    if curve_type == "hill":
+        return hill_saturation(x, half_saturation=scale, slope=shape)
+    if curve_type in {"weibull", "near_linear"}:
+        return weibull_saturation(x, scale=scale, shape=shape)
+    if curve_type == "gompertz":
+        return gompertz_saturation(x, scale=scale, shape=shape)
+    if curve_type == "concave":
+        return concave_saturation(x, scale=scale, shape=shape)
+    if curve_type == "threshold":
+        return threshold_saturation(x, scale=scale, shape=shape)
+    if curve_type == "linear_plateau":
+        return linear_plateau_saturation(x, scale=scale, shape=shape)
+    raise ValueError(f"Unsupported curve_type: {curve_type}")
+
+
+def _scale_from_anchor_by_bisection(
+    support_anchor: float,
+    anchor_saturation: float,
+    curve_type: str,
+    shape: float,
+) -> float:
+    """Find scale so saturation(support_anchor) matches anchor_saturation."""
+    lo = support_anchor * 1e-6
+    hi = support_anchor * 1e6
+    for _ in range(90):
+        mid = math.sqrt(lo * hi)
+        sat = float(_saturation_given_scale([support_anchor], mid, shape, curve_type)[0])
+        if sat > anchor_saturation:
+            lo = mid
+        else:
+            hi = mid
+    return math.sqrt(lo * hi)
+
+
 def curve_parameter_from_anchor(
     support_anchor: float,
     anchor_saturation: float = 0.5,
@@ -47,7 +128,8 @@ def curve_parameter_from_anchor(
 ) -> float:
     """Convert a saturation-at-anchor belief into the curve parameter.
 
-    For Hill this returns half_saturation/ec. For Weibull it returns scale.
+    For Hill this returns half_saturation/ec. For other supported synthetic
+    families it returns the scale parameter.
     """
     support_anchor = max(float(support_anchor), 1e-12)
     anchor_saturation = float(np.clip(anchor_saturation, 1e-6, 1.0 - 1e-6))
@@ -57,6 +139,15 @@ def curve_parameter_from_anchor(
         return support_anchor * math.pow((1.0 - anchor_saturation) / anchor_saturation, 1.0 / shape)
     if curve_type == "weibull":
         return support_anchor / math.pow(-math.log(1.0 - anchor_saturation), 1.0 / shape)
+    if curve_type == "near_linear":
+        return support_anchor / math.pow(-math.log(1.0 - anchor_saturation), 1.0 / max(shape, 0.75))
+    if curve_type == "concave":
+        denom = math.pow(1.0 / (1.0 - anchor_saturation), 1.0 / shape) - 1.0
+        return support_anchor / max(denom, 1e-12)
+    if curve_type == "linear_plateau":
+        return support_anchor / anchor_saturation
+    if curve_type in {"gompertz", "threshold"}:
+        return _scale_from_anchor_by_bisection(support_anchor, anchor_saturation, curve_type, shape)
     raise ValueError(f"Unsupported curve_type: {curve_type}")
 
 
@@ -68,11 +159,7 @@ def apply_saturation(
 ) -> np.ndarray:
     """Apply a named saturation curve."""
     curve_type = str(curve_type).lower()
-    if curve_type == "hill":
-        return hill_saturation(x, half_saturation=curve_param, slope=shape)
-    if curve_type == "weibull":
-        return weibull_saturation(x, scale=curve_param, shape=shape)
-    raise ValueError(f"Unsupported curve_type: {curve_type}")
+    return _saturation_given_scale(x, curve_param, shape, curve_type)
 
 
 def finite_median_positive(x: Iterable[float], fallback: float = 1.0) -> float:

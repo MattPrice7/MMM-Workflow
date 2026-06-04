@@ -261,7 +261,7 @@ large high-channel panels: the model runs and remains internally consistent,
 but needs stronger architecture or more training to recover attribution at that
 scale.
 
-Mixed Hill/Weibull quick data-level suite after label-audited simulator
+Earlier mixed Hill/Weibull quick data-level suite after label-audited simulator
 updates:
 
 ```text
@@ -277,6 +277,28 @@ all training label audits:              passed
 Interpretation: curve-family rotation did not break the TFT path. The Weibull
 missing-media case recovered well. Hostile collinearity remains the main
 attribution weakness.
+
+Current neural response-curve prior lane:
+
+```text
+truth generators: Hill, Weibull, Gompertz, concave, threshold,
+                  linear-plateau, near-linear
+model output:     flexible monotone response grid, not named curve params
+scope:            curve/adstock prior and identifiability diagnostics
+not scope:        final causal ROI/contribution estimator
+```
+
+Latest mixed-family curve-prior smoke:
+
+```text
+curve grid MAE mean:             0.0148
+curve grid MAE median:           0.0095
+median curve-shape correlation:  0.9997
+monotonic violation share:       0.0000
+adstock decay MAE:               0.0222
+saturation score MAE:            0.0247
+fallback weight MAE:             0.0088
+```
 
 ## What Is Working
 

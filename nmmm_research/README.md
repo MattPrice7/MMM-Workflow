@@ -218,12 +218,19 @@ run as valid evidence.
 Current modeling default:
 
 - role-aware, semantics-blind inputs
-- mixed Hill/Weibull synthetic truth panels for robustness testing
-- learned response outputs rather than giving the TFT curve-family labels
+- mixed synthetic truth panels across Hill, Weibull, Gompertz, concave,
+  threshold, linear-plateau, and near-linear response families
+- learned response-grid outputs rather than named curve-family labels or fixed
+  Hill/Weibull parameters
 - shrunken group x media multipliers
 - no automatic population scaling unless explicitly requested and validated
 - saved TFT brains are reusable for compatible model shapes; transfer across
   different channel counts/media schemas is a future architecture hardening item
+
+The neural curve-prior lane is intentionally different from the Stan MMM curve
+parameterization. Synthetic named curves are training truth generators and audit
+labels only. The neural prior model predicts a monotone response grid, adstock
+prior, saturation score, confidence, fallback weight, and uncertainty width.
 
 ## Status
 
