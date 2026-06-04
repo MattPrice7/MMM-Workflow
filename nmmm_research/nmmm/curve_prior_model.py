@@ -34,6 +34,7 @@ class CurvePriorDataset:
     saturation_targets: np.ndarray
     confidence_targets: np.ndarray
     fallback_targets: np.ndarray
+    uncertainty_targets: np.ndarray
 
 
 @dataclass
@@ -147,7 +148,7 @@ def _target_saturation(response_curves: pd.DataFrame, channel: str) -> float:
     return float(np.clip(pd.to_numeric(row["true_saturation"], errors="coerce").iloc[0], 0.0, 1.0))
 
 
-def _difficulty_targets(row: pd.Series) -> tuple[float, float]:
+def _difficulty_targets(row: pd.Series) -> tuple[float, float, float]:
     learnability = float(row.get("learnability_score_0_100", 50.0)) / 100.0
     high_collinear = bool(row.get("high_collinearity_flag", False))
     national = bool(row.get("national_repeated_media_flag", False))
@@ -160,7 +161,20 @@ def _difficulty_targets(row: pd.Series) -> tuple[float, float]:
     fallback += 0.06 if always_on else 0.0
     fallback = float(np.clip(fallback, 0.05, 0.95))
     confidence = float(np.clip(1.0 - fallback, 0.05, 0.95))
-    return confidence, fallback
+    uncertainty = float(np.clip(0.04 + 0.30 * fallback, 0.05, 0.35))
+    return confidence, fallback, uncertainty
+
+
+def _default_curve_grid(grid: np.ndarray = CURVE_GRID, anchor_saturation: float = 0.50) -> np.ndarray:
+    """Conservative monotone default curve used only for blending weak evidence."""
+    grid = np.asarray(grid, dtype=float)
+    anchor_saturation = float(np.clip(anchor_saturation, 1e-6, 1.0 - 1e-6))
+    scale = (1.0 - anchor_saturation) / anchor_saturation
+    raw = grid / (grid + scale + 1e-12)
+    denom = max(float(raw[-1]), 1e-12)
+    out = np.clip(raw / denom, 0.0, 1.0)
+    out[0] = 0.0
+    return np.maximum.accumulate(out)
 
 
 def build_curve_prior_dataset(
@@ -177,9 +191,14 @@ def build_curve_prior_dataset(
     saturation_targets: List[float] = []
     confidence_targets: List[float] = []
     fallback_targets: List[float] = []
+    uncertainty_targets: List[float] = []
 
     for panel_id, synth in enumerate(panels):
         panel = synth.panel.copy()
+        split_group = getattr(synth, "curve_prior_split_group", panel_id)
+        data_scenario = getattr(synth, "curve_prior_scenario", "unknown")
+        geo_regime = getattr(synth, "curve_prior_geo_regime", "unknown")
+        measurement_regime = getattr(synth, "curve_prior_measurement_regime", "unknown")
         channels = sorted(synth.truth_params["channel"].astype(str).unique())
         local_controls = controls or [c for c in ["promo", "holiday", "price_index", "competitor_index", "macro_index", "category_trend"] if c in panel.columns]
         validation = validate_nmmm_training_data(
@@ -200,6 +219,10 @@ def build_curve_prior_dataset(
             params = synth.truth_params.loc[synth.truth_params["channel"].astype(str).eq(ch)].head(1)
             feature_row: Dict[str, Any] = {
                 "panel_id": panel_id,
+                "split_group": str(split_group),
+                "data_scenario": str(data_scenario),
+                "geo_regime": str(geo_regime),
+                "measurement_regime": str(measurement_regime),
                 "channel": ch,
                 "truth_curve_type": str(params["curve_type"].iloc[0]) if not params.empty and "curve_type" in params.columns else "unknown",
                 "n_weeks": float(panel["date"].nunique()),
@@ -230,9 +253,9 @@ def build_curve_prior_dataset(
                         continue
                     else:
                         feature_row[col] = float(val) if pd.notna(val) else 0.0
-                conf, fallback = _difficulty_targets(learn.loc[ch])
+                conf, fallback, uncertainty = _difficulty_targets(learn.loc[ch])
             else:
-                conf, fallback = 0.50, 0.50
+                conf, fallback, uncertainty = 0.50, 0.50, 0.19
             adstock = float(params["decay"].iloc[0]) if not params.empty and "decay" in params.columns else 0.30
             rows.append(feature_row)
             curve_targets.append(_curve_target(synth.response_curves, ch, grid=grid))
@@ -240,9 +263,18 @@ def build_curve_prior_dataset(
             saturation_targets.append(_target_saturation(synth.response_curves, ch))
             confidence_targets.append(conf)
             fallback_targets.append(fallback)
+            uncertainty_targets.append(uncertainty)
 
     features = pd.DataFrame(rows)
-    excluded = {"panel_id", "channel", "truth_curve_type"}
+    excluded = {
+        "panel_id",
+        "split_group",
+        "data_scenario",
+        "geo_regime",
+        "measurement_regime",
+        "channel",
+        "truth_curve_type",
+    }
     feature_columns = [c for c in features.columns if c not in excluded and pd.api.types.is_numeric_dtype(features[c])]
     features[feature_columns] = features[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return CurvePriorDataset(
@@ -253,6 +285,7 @@ def build_curve_prior_dataset(
         saturation_targets=np.asarray(saturation_targets, dtype=float),
         confidence_targets=np.asarray(confidence_targets, dtype=float),
         fallback_targets=np.asarray(fallback_targets, dtype=float),
+        uncertainty_targets=np.asarray(uncertainty_targets, dtype=float),
     )
 
 
@@ -308,22 +341,38 @@ def fit_curve_prior_model(
     hidden_size: int = 96,
     dropout: float = 0.05,
     seed: int = 20260604,
+    split_group_col: str = "split_group",
 ) -> CurvePriorResult:
     """Fit a monotone neural curve-prior model on synthetic known truth."""
     torch, nn, F = _require_torch_nn()
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
-    x_np = dataset.features[dataset.feature_columns].to_numpy(float)
-    x_center = np.mean(x_np, axis=0)
-    x_scale = np.std(x_np, axis=0)
-    x_scale = np.where(x_scale > 1e-8, x_scale, 1.0)
-    x_np = (x_np - x_center) / x_scale
-    n = x_np.shape[0]
+    raw_x = dataset.features[dataset.feature_columns].to_numpy(float)
+    n = raw_x.shape[0]
     idx = np.arange(n)
-    rng.shuffle(idx)
-    n_val = max(1, int(round(n * validation_fraction))) if n >= 8 else max(0, n // 5)
-    val_idx = idx[:n_val]
-    train_idx = idx[n_val:] if n_val else idx
+    validation_strategy = "row_random"
+    if split_group_col in dataset.features.columns and dataset.features[split_group_col].nunique(dropna=False) > 1:
+        groups = pd.Series(dataset.features[split_group_col].astype(str).unique())
+        group_idx = np.arange(len(groups))
+        rng.shuffle(group_idx)
+        n_val_groups = max(1, int(round(len(groups) * validation_fraction)))
+        val_groups = set(groups.iloc[group_idx[:n_val_groups]].astype(str))
+        val_mask = dataset.features[split_group_col].astype(str).isin(val_groups).to_numpy()
+        val_idx = idx[val_mask]
+        train_idx = idx[~val_mask]
+        if len(train_idx) == 0:
+            train_idx = idx
+            val_idx = idx[:0]
+        validation_strategy = f"grouped_by_{split_group_col}"
+    else:
+        rng.shuffle(idx)
+        n_val = max(1, int(round(n * validation_fraction))) if n >= 8 else max(0, n // 5)
+        val_idx = idx[:n_val]
+        train_idx = idx[n_val:] if n_val else idx
+    x_center = np.mean(raw_x[train_idx], axis=0)
+    x_scale = np.std(raw_x[train_idx], axis=0)
+    x_scale = np.where(x_scale > 1e-8, x_scale, 1.0)
+    x_np = (raw_x - x_center) / x_scale
 
     device = torch.device("cpu")
     model = build_monotone_curve_prior_net(
@@ -339,6 +388,7 @@ def fit_curve_prior_model(
     saturation_y = torch.tensor(dataset.saturation_targets, dtype=torch.float32, device=device)
     confidence_y = torch.tensor(dataset.confidence_targets, dtype=torch.float32, device=device)
     fallback_y = torch.tensor(dataset.fallback_targets, dtype=torch.float32, device=device)
+    uncertainty_y = torch.tensor(dataset.uncertainty_targets, dtype=torch.float32, device=device)
     train_t = torch.tensor(train_idx, dtype=torch.long, device=device)
     val_t = torch.tensor(val_idx, dtype=torch.long, device=device) if len(val_idx) else train_t
     history = []
@@ -358,6 +408,7 @@ def fit_curve_prior_model(
             + F.mse_loss(out["saturation_score"], saturation_y[indices])
             + F.mse_loss(out["confidence"], confidence_y[indices])
             + F.mse_loss(out["fallback_weight"], fallback_y[indices])
+            + F.mse_loss(out["uncertainty_width"], uncertainty_y[indices])
         )
         smoothness = torch.mean((pred_marginal[:, 1:] - pred_marginal[:, :-1]) ** 2)
         return curve_loss + 0.50 * marginal_loss + 0.25 * scalar_loss + 0.02 * smoothness
@@ -386,20 +437,41 @@ def fit_curve_prior_model(
     model.eval()
     with torch.no_grad():
         out = model(x)
-    metadata_cols = [c for c in ["panel_id", "channel", "truth_curve_type"] if c in dataset.features.columns]
+    metadata_cols = [
+        c
+        for c in [
+            "panel_id",
+            "split_group",
+            "data_scenario",
+            "geo_regime",
+            "measurement_regime",
+            "channel",
+            "truth_curve_type",
+        ]
+        if c in dataset.features.columns
+    ]
     pred = dataset.features[metadata_cols].copy()
+    split_role = np.full(n, "train", dtype=object)
+    split_role[val_idx] = "validation"
+    pred["split_role"] = split_role
     curve_pred = np.asarray(out["curve"].detach().cpu().tolist(), dtype=float)
+    fallback_pred = np.asarray(out["fallback_weight"].detach().cpu().tolist(), dtype=float)
+    default_curve = _default_curve_grid(CURVE_GRID)
+    blended_curve = (1.0 - fallback_pred.reshape(-1, 1)) * curve_pred + fallback_pred.reshape(-1, 1) * default_curve.reshape(1, -1)
     for i, pct in enumerate(CURVE_GRID):
         pred[f"curve_prior_p{int(round(pct * 100)):03d}"] = curve_pred[:, i]
+        pred[f"default_curve_p{int(round(pct * 100)):03d}"] = default_curve[i]
+        pred[f"conservative_blend_curve_p{int(round(pct * 100)):03d}"] = blended_curve[:, i]
     pred["adstock_decay_prior_mean"] = np.asarray(out["adstock_decay"].detach().cpu().tolist(), dtype=float)
     pred["saturation_score_prior_mean"] = np.asarray(out["saturation_score"].detach().cpu().tolist(), dtype=float)
     pred["confidence_score"] = np.asarray(out["confidence"].detach().cpu().tolist(), dtype=float)
-    pred["fallback_default_weight"] = np.asarray(out["fallback_weight"].detach().cpu().tolist(), dtype=float)
+    pred["fallback_default_weight"] = fallback_pred
     pred["uncertainty_width"] = np.asarray(out["uncertainty_width"].detach().cpu().tolist(), dtype=float)
     pred["true_adstock_decay"] = dataset.adstock_targets
     pred["true_saturation_score"] = dataset.saturation_targets
     pred["true_confidence_score"] = dataset.confidence_targets
     pred["true_fallback_default_weight"] = dataset.fallback_targets
+    pred["true_uncertainty_width"] = dataset.uncertainty_targets
     for i, pct in enumerate(CURVE_GRID):
         pred[f"true_curve_p{int(round(pct * 100)):03d}"] = dataset.curve_targets[:, i]
 
@@ -414,6 +486,9 @@ def fit_curve_prior_model(
             "epochs_requested": int(epochs),
             "epochs_run": int(len(history)),
             "validation_fraction": validation_fraction,
+            "validation_strategy": validation_strategy,
+            "validation_row_n": int(len(val_idx)),
+            "train_row_n": int(len(train_idx)),
             "feature_center": x_center.tolist(),
             "feature_scale": x_scale.tolist(),
             "model_type": "monotone_neural_curve_prior_net",
@@ -426,31 +501,55 @@ def fit_curve_prior_model(
 def evaluate_curve_prior_predictions(result: CurvePriorResult) -> pd.DataFrame:
     pred = result.predictions
     curve_cols = [c for c in pred.columns if c.startswith("curve_prior_p")]
+    conservative_blend_curve_cols = [c for c in pred.columns if c.startswith("conservative_blend_curve_p")]
     true_cols = [c for c in pred.columns if c.startswith("true_curve_p")]
-    rows = []
-    if curve_cols and true_cols:
-        est = pred[curve_cols].to_numpy(float)
-        truth = pred[true_cols].to_numpy(float)
+    rows: List[Dict[str, Any]] = []
+
+    def add_curve_metrics(sub: pd.DataFrame, scope: str, est_cols: List[str], prefix: str) -> None:
+        if not est_cols or not true_cols:
+            return
+        est = sub[est_cols].to_numpy(float)
+        truth = sub[true_cols].to_numpy(float)
         mae = np.mean(np.abs(est - truth), axis=1)
         corr = []
         for e, t in zip(est, truth):
             corr.append(np.corrcoef(e, t)[0, 1] if np.std(e) > 1e-10 and np.std(t) > 1e-10 else np.nan)
         rows.extend(
             [
-                {"metric": "curve_grid_mae_mean", "value": float(np.nanmean(mae))},
-                {"metric": "curve_grid_mae_median", "value": float(np.nanmedian(mae))},
-                {"metric": "curve_shape_corr_median", "value": float(np.nanmedian(corr))},
-                {"metric": "curve_monotonic_violation_share", "value": float(np.mean(np.diff(est, axis=1) < -1e-8))},
+                {"scope": scope, "metric": f"{prefix}_curve_grid_mae_mean", "value": float(np.nanmean(mae))},
+                {"scope": scope, "metric": f"{prefix}_curve_grid_mae_median", "value": float(np.nanmedian(mae))},
+                {"scope": scope, "metric": f"{prefix}_curve_shape_corr_median", "value": float(np.nanmedian(corr))},
+                {"scope": scope, "metric": f"{prefix}_curve_monotonic_violation_share", "value": float(np.mean(np.diff(est, axis=1) < -1e-8))},
             ]
         )
-    for est_col, true_col, metric in [
-        ("adstock_decay_prior_mean", "true_adstock_decay", "adstock_decay_mae"),
-        ("saturation_score_prior_mean", "true_saturation_score", "saturation_score_mae"),
-        ("confidence_score", "true_confidence_score", "confidence_score_mae"),
-        ("fallback_default_weight", "true_fallback_default_weight", "fallback_weight_mae"),
-    ]:
-        if est_col in pred.columns and true_col in pred.columns:
-            rows.append({"metric": metric, "value": float(np.mean(np.abs(pred[est_col] - pred[true_col])))})
+
+    def add_metrics(sub: pd.DataFrame, scope: str) -> None:
+        if sub.empty:
+            return
+        rows.append({"scope": scope, "metric": "row_n", "value": float(len(sub))})
+        add_curve_metrics(sub, scope, curve_cols, "model")
+        add_curve_metrics(sub, scope, conservative_blend_curve_cols, "conservative_blend")
+        for est_col, true_col, metric in [
+            ("adstock_decay_prior_mean", "true_adstock_decay", "adstock_decay_mae"),
+            ("saturation_score_prior_mean", "true_saturation_score", "saturation_score_mae"),
+            ("confidence_score", "true_confidence_score", "confidence_score_mae"),
+            ("fallback_default_weight", "true_fallback_default_weight", "fallback_weight_mae"),
+            ("uncertainty_width", "true_uncertainty_width", "uncertainty_width_mae"),
+        ]:
+            if est_col in sub.columns and true_col in sub.columns:
+                rows.append({"scope": scope, "metric": metric, "value": float(np.mean(np.abs(sub[est_col] - sub[true_col])))})
+
+    add_metrics(pred, "all")
+    if "split_role" in pred.columns:
+        for split_role, sub in pred.groupby("split_role", dropna=False):
+            add_metrics(sub, f"split:{split_role}")
+    if "truth_curve_type" in pred.columns:
+        for curve_type, sub in pred.groupby("truth_curve_type", dropna=False):
+            add_metrics(sub, f"truth_curve_type:{curve_type}")
+    if "data_scenario" in pred.columns:
+        for scenario, sub in pred.groupby("data_scenario", dropna=False):
+            add_metrics(sub, f"scenario:{scenario}")
+
     return pd.DataFrame(rows)
 
 

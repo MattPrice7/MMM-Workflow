@@ -8,6 +8,7 @@ The model is a black-box neural diagnostics encoder with constrained,
 auditable outputs:
 
 - flexible monotone response grid over spend/support levels
+- conservative fallback-blended response grid for weak evidence review
 - adstock decay prior
 - saturation score
 - confidence score
@@ -16,6 +17,9 @@ auditable outputs:
 
 It does not output Hill, Weibull, or any other named curve parameter. Named
 curves are used only to generate diverse synthetic truth and to audit recovery.
+The primary model curve is the learned monotone grid. The conservative blend is
+reported separately because it can be safer for weak evidence, but it is not
+always the best point estimate.
 
 ## Why This Shape
 
@@ -52,3 +56,4 @@ should be based on curve/adstock/decision recovery, not only R2.
 - benchmark against Meridian-style default anchors
 - test downstream impact on Stan priors and optimizer scenarios
 - add by-truth-family and by-data-regime recovery scorecards
+- calibrate fallback blending against downstream Stan/optimizer performance

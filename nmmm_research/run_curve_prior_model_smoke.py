@@ -125,6 +125,14 @@ def _apply_geo_regime(synth, geo_regime: str):
     raise ValueError(f"Unknown geo regime: {geo_regime}")
 
 
+def _tag_panel(synth, *, split_group: str, scenario: str, geo_regime: str, measurement_regime: str):
+    setattr(synth, "curve_prior_split_group", split_group)
+    setattr(synth, "curve_prior_scenario", scenario)
+    setattr(synth, "curve_prior_geo_regime", geo_regime)
+    setattr(synth, "curve_prior_measurement_regime", measurement_regime)
+    return synth
+
+
 def _make_training_panels() -> list:
     panels = []
     scenarios = ["standard", "messy_realistic", "hostile_collinear", "weak_geo"]
@@ -134,26 +142,36 @@ def _make_training_panels() -> list:
     seed = 20260670
     for scenario in scenarios:
         for curve_type in curve_types:
-            base = make_synthetic_mmm_panel(
-                n_weeks=156,
-                n_geos=8,
-                channels=CHANNELS,
-                curve_type=curve_type,
-                scenario=scenario,
-                randomize_channel_parameters=True,
-                permute_channel_roles=True,
-                zero_inflated_media=scenario in {"messy_realistic", "weak_geo"},
-                volatile_media_measurement=scenario in {"messy_realistic", "hostile_collinear"},
-                missing_media_rate=0.02 if scenario == "messy_realistic" else 0.0,
-                media_block_missing_rate=0.08 if scenario == "messy_realistic" else 0.0,
-                control_availability="noisy_proxy" if scenario == "messy_realistic" else "standard",
-                seed=seed,
-            )
-            seed += 1
-            for geo_regime in geo_regimes:
-                for measurement in measurement_regimes:
-                    panel = _apply_measurement_regime(_apply_geo_regime(base, geo_regime), measurement)
-                    panels.append(panel)
+            for repeat in range(3):
+                split_group = f"{scenario}_{curve_type}_{repeat:02d}"
+                base = make_synthetic_mmm_panel(
+                    n_weeks=156,
+                    n_geos=8,
+                    channels=CHANNELS,
+                    curve_type=curve_type,
+                    scenario=scenario,
+                    randomize_channel_parameters=True,
+                    permute_channel_roles=True,
+                    zero_inflated_media=scenario in {"messy_realistic", "weak_geo"},
+                    volatile_media_measurement=scenario in {"messy_realistic", "hostile_collinear"},
+                    missing_media_rate=0.02 if scenario == "messy_realistic" else 0.0,
+                    media_block_missing_rate=0.08 if scenario == "messy_realistic" else 0.0,
+                    control_availability="noisy_proxy" if scenario == "messy_realistic" else "standard",
+                    seed=seed,
+                )
+                seed += 1
+                for geo_regime in geo_regimes:
+                    for measurement in measurement_regimes:
+                        panel = _apply_measurement_regime(_apply_geo_regime(base, geo_regime), measurement)
+                        panels.append(
+                            _tag_panel(
+                                panel,
+                                split_group=split_group,
+                                scenario=scenario,
+                                geo_regime=geo_regime,
+                                measurement_regime=measurement,
+                            )
+                        )
     return panels
 
 
@@ -182,6 +200,7 @@ def main() -> None:
         extra={
             "panel_count": len(panels),
             "training_example_count": int(len(dataset.features)),
+            "split_group_count": int(dataset.features["split_group"].nunique()) if "split_group" in dataset.features.columns else None,
             "scope": "response-curve/adstock prior builder, not final causal ROI model",
         },
     )
