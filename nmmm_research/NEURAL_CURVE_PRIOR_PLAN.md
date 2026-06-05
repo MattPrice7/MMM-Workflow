@@ -33,6 +33,10 @@ always the best point estimate.
   so collinearity, co-movement, and conditional identifiability can be learned.
 - Shared output heads for monotone curve grid, adstock decay, saturation score,
   confidence, fallback/default weight, and uncertainty width.
+- Quasi-geo diagnostic feature layer that scans geo-specific up/down media
+  shocks, donor-market KPI deltas, other-media contamination, donor
+  contamination, sign consistency, and identifiability score. This is a feature
+  layer, not a replacement for the production quasi-geo lift script.
 
 ## Why This Shape
 
@@ -84,9 +88,30 @@ when the conservative default curve is actually close enough to truth to lean on
 more heavily. On real data, truth is absent, so the model can only infer this
 behavior from diagnostics learned during synthetic pretraining.
 
+## Conservative Shape Guardrails
+
+Curve outputs are monotone by construction. Training also penalizes increasing
+marginal slopes on the response grid, using interval-adjusted slopes rather than
+raw grid increments. This makes concavity/diminishing returns the default
+pressure while still allowing threshold or S-shaped curves when the data and
+known-truth synthetic labels make that worthwhile.
+
+Missing, invalid, or all-zero synthetic curve labels no longer become fake
+linear targets. They fall back to the conservative default curve, get low target
+quality, are down-weighted in curve/marginal loss, and push fallback/uncertainty
+targets upward.
+
+## Harsh Holdout
+
+`run_curve_prior_harsh_holdout.py` trains on one set of synthetic panels and
+scores separate harsher holdout panels. Holdouts deliberately include higher
+national media repetition, stronger collinearity, media missingness blocks,
+business shocks, weak/no controls, and noisy KPI variants. Outputs include
+holdout predictions, holdout metrics, fallback calibration buckets, and a saved
+checkpoint.
+
 ## Next Hardening
 
-- add quasi-geo / ramp evidence features when available
 - benchmark against Meridian-style default anchors
 - test downstream impact on Stan priors and optimizer scenarios
 - add by-truth-family and by-data-regime recovery scorecards

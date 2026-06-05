@@ -13,6 +13,7 @@ from .curve_prior_model import (
     build_curve_prior_dataset,
     evaluate_curve_prior_predictions,
     fit_curve_prior_model,
+    predict_curve_prior_model,
     save_curve_prior_model,
 )
 from .torch_training import load_torch_nmmm_checkpoint, save_torch_nmmm_checkpoint
@@ -28,6 +29,7 @@ __all__ = [
     "write_training_data_validation",
     "build_curve_prior_dataset",
     "fit_curve_prior_model",
+    "predict_curve_prior_model",
     "evaluate_curve_prior_predictions",
     "save_curve_prior_model",
     "save_torch_nmmm_checkpoint",

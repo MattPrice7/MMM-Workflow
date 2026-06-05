@@ -172,6 +172,12 @@ The latest architecture uses:
 - geo-time encoder with population-scaled support/spend features when available
 - cross-channel Set Transformer for collinearity and co-movement context
 - conservative default-curve blending for weak evidence
+- quasi-geo diagnostic features from signed geo media shocks and treated-vs-donor
+  KPI movement
+- interval-adjusted concavity penalty, so diminishing marginal response is the
+  default pressure
+- low-quality/missing curve targets are down-weighted and mapped to conservative
+  fallback behavior instead of fake linear labels
 
 Medium low-data suite, 84 panels / 504 channel examples, 80 epochs:
 
@@ -203,6 +209,25 @@ family label leaks into the model features. The fallback/default head is
 directionally learning weak-data diagnostics, but it still needs calibration
 against downstream Stan and optimizer decisions before using it automatically on
 client data.
+
+First quick harsh-holdout code-path check after adding quasi-geo features and
+concavity guardrails:
+
+```text
+holdout rows:                        12
+holdout curve grid MAE mean:         0.059
+holdout curve shape corr median:     0.998
+monotonic violations:                0.000
+raw model concavity violations:      0.417
+conservative blend concavity viol.:  0.021
+fallback weight MAE:                 0.136
+```
+
+Interpretation: the code path works and the conservative blend is behaving more
+like the safe output. The raw flexible curve can still show convex segments,
+especially in tiny quick runs and threshold-like truth families. That is why
+the conservative blend and fallback calibration should be evaluated separately
+before any promotion.
 
 First quick TFT grid before baseline isolation, 8 runs across
 standard/messy-realistic panels:

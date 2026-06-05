@@ -164,6 +164,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=220)
     parser.add_argument("--hidden-size", type=int, default=96)
     parser.add_argument("--dropout", type=float, default=0.08)
+    parser.add_argument("--concavity-penalty-weight", type=float, default=0.25)
     parser.add_argument("--weeks", type=int, default=156)
     parser.add_argument("--geos", type=int, default=8)
     parser.add_argument("--channels", type=int, default=8)
@@ -218,6 +219,7 @@ def main() -> None:
         epochs=args.epochs,
         hidden_size=args.hidden_size,
         dropout=args.dropout,
+        concavity_penalty_weight=args.concavity_penalty_weight,
         seed=args.seed,
     )
     metrics = evaluate_curve_prior_predictions(result)
@@ -232,6 +234,7 @@ def main() -> None:
             "panel_count": len(panels),
             "training_example_count": int(len(dataset.features)),
             "media_inputs": media_inputs,
+            "concavity_penalty_weight": args.concavity_penalty_weight,
             "regimes": [dict(r) for r in LOW_DATA_REGIMES],
             "kpi_variants": args.kpi_variants,
             "scope": "low-data response-curve/adstock prior builder stress suite",

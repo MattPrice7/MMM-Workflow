@@ -38,6 +38,7 @@ class CurvePriorDataset:
     confidence_targets: np.ndarray
     fallback_targets: np.ndarray
     uncertainty_targets: np.ndarray
+    curve_target_quality: Optional[np.ndarray] = None
     channel_sequences: Optional[np.ndarray] = None
     geo_sequences: Optional[np.ndarray] = None
     set_features: Optional[np.ndarray] = None
@@ -295,6 +296,173 @@ def _geo_variation(panel: pd.DataFrame, channel: str, suffix: str, group_col: st
     return float(np.nanmean(np.nanvar(arr, axis=1)) / max(np.nanvar(arr), 1e-12))
 
 
+def _window_mean(arr: np.ndarray, start: int, end: int) -> np.ndarray:
+    if end <= start:
+        return np.full(arr.shape[1], np.nan, dtype=float)
+    with np.errstate(invalid="ignore"):
+        return np.nanmean(arr[start:end, :], axis=0)
+
+
+def _quasi_geo_lift_features(
+    panel: pd.DataFrame,
+    channel: str,
+    channels: List[str],
+    dates: pd.DatetimeIndex,
+    media_suffix: str = "_support",
+    prefix: str = "qgeo_support",
+    pre_periods: int = 4,
+    post_periods: int = 4,
+    max_events: int = 40,
+) -> Dict[str, float]:
+    """Return observational geo-shock diagnostics for one channel.
+
+    This is intentionally a feature layer, not a causal lift-test engine. It
+    summarizes whether geo-level media movement contains clean, signed,
+    donor-comparable variation that a stronger quasi-geo estimator could use.
+    """
+    media_col = f"{channel}{media_suffix}"
+    if "geo_id" not in panel.columns or media_col not in panel.columns or "kpi" not in panel.columns:
+        return {f"{prefix}_{name}": 0.0 for name in [
+            "available",
+            "event_count",
+            "clean_event_count",
+            "up_event_count",
+            "down_event_count",
+            "mean_abs_shock_strength",
+            "median_abs_shock_strength",
+            "positive_effect_share",
+            "signed_response_corr",
+            "median_abs_lift_to_kpi_sd",
+            "other_media_contamination_mean",
+            "donor_media_contamination_mean",
+            "identifiable_score",
+        ]}
+    media = _date_geo_matrix(panel, media_col, dates)
+    kpi = _date_geo_matrix(panel, "kpi", dates)
+    if media.shape[1] < 2 or kpi.shape != media.shape or len(dates) < pre_periods + post_periods + 1:
+        return {f"{prefix}_{name}": 0.0 for name in [
+            "available",
+            "event_count",
+            "clean_event_count",
+            "up_event_count",
+            "down_event_count",
+            "mean_abs_shock_strength",
+            "median_abs_shock_strength",
+            "positive_effect_share",
+            "signed_response_corr",
+            "median_abs_lift_to_kpi_sd",
+            "other_media_contamination_mean",
+            "donor_media_contamination_mean",
+            "identifiable_score",
+        ]}
+    finite_media = media[np.isfinite(media)]
+    positive_media = finite_media[finite_media > 0]
+    media_scale = float(np.nanmedian(positive_media)) if positive_media.size else 0.0
+    material = max(1e-8, 0.30 * media_scale)
+    if media_scale <= 1e-12:
+        return {f"{prefix}_{name}": 0.0 for name in [
+            "available",
+            "event_count",
+            "clean_event_count",
+            "up_event_count",
+            "down_event_count",
+            "mean_abs_shock_strength",
+            "median_abs_shock_strength",
+            "positive_effect_share",
+            "signed_response_corr",
+            "median_abs_lift_to_kpi_sd",
+            "other_media_contamination_mean",
+            "donor_media_contamination_mean",
+            "identifiable_score",
+        ]}
+
+    other_mats = {
+        other: _date_geo_matrix(panel, f"{other}{media_suffix}", dates)
+        for other in channels
+        if other != channel and f"{other}{media_suffix}" in panel.columns
+    }
+    event_rows: List[Dict[str, float]] = []
+    kpi_sd = float(np.nanstd(kpi))
+    for t in range(pre_periods, len(dates) - post_periods + 1):
+        media_pre = _window_mean(media, t - pre_periods, t)
+        media_post = _window_mean(media, t, t + post_periods)
+        media_delta = media_post - media_pre
+        kpi_delta = _window_mean(kpi, t, t + post_periods) - _window_mean(kpi, t - pre_periods, t)
+        for g in range(media.shape[1]):
+            donor_idx = [i for i in range(media.shape[1]) if i != g]
+            if not donor_idx:
+                continue
+            treated_delta = float(media_delta[g])
+            donor_delta = float(np.nanmedian(media_delta[donor_idx]))
+            net_media_delta = treated_delta - donor_delta
+            if not np.isfinite(net_media_delta) or abs(net_media_delta) < material:
+                continue
+            treated_kpi_delta = float(kpi_delta[g])
+            donor_kpi_delta = float(np.nanmedian(kpi_delta[donor_idx]))
+            lift = treated_kpi_delta - donor_kpi_delta
+            if not np.isfinite(lift):
+                continue
+            other_contam = 0.0
+            for mat in other_mats.values():
+                if mat.shape != media.shape:
+                    continue
+                other_delta = _window_mean(mat, t, t + post_periods) - _window_mean(mat, t - pre_periods, t)
+                other_net = float(other_delta[g] - np.nanmedian(other_delta[donor_idx]))
+                if np.isfinite(other_net):
+                    other_scale = max(float(np.nanmedian(np.abs(other_delta[np.isfinite(other_delta)]))), material)
+                    other_contam = max(other_contam, abs(other_net) / max(other_scale, 1e-8))
+            donor_contam = abs(donor_delta) / max(abs(treated_delta), media_scale, 1e-8)
+            event_rows.append(
+                {
+                    "net_media_delta": net_media_delta,
+                    "shock_strength": abs(net_media_delta) / max(media_scale, 1e-8),
+                    "lift": lift,
+                    "signed_effect": 1.0 if np.sign(net_media_delta) * np.sign(lift) > 0 else 0.0,
+                    "lift_to_kpi_sd": abs(lift) / max(kpi_sd, 1e-8),
+                    "other_contam": min(other_contam, 10.0),
+                    "donor_contam": min(donor_contam, 10.0),
+                }
+            )
+    if not event_rows:
+        return {
+            f"{prefix}_available": 1.0,
+            f"{prefix}_event_count": 0.0,
+            f"{prefix}_clean_event_count": 0.0,
+            f"{prefix}_up_event_count": 0.0,
+            f"{prefix}_down_event_count": 0.0,
+            f"{prefix}_mean_abs_shock_strength": 0.0,
+            f"{prefix}_median_abs_shock_strength": 0.0,
+            f"{prefix}_positive_effect_share": 0.0,
+            f"{prefix}_signed_response_corr": 0.0,
+            f"{prefix}_median_abs_lift_to_kpi_sd": 0.0,
+            f"{prefix}_other_media_contamination_mean": 0.0,
+            f"{prefix}_donor_media_contamination_mean": 0.0,
+            f"{prefix}_identifiable_score": 0.0,
+        }
+    events = pd.DataFrame(event_rows).sort_values("shock_strength", ascending=False).head(int(max_events))
+    clean = events[(events["other_contam"] <= 1.0) & (events["donor_contam"] <= 1.0)].copy()
+    response_corr = _safe_corr(events["net_media_delta"], events["lift"])
+    clean_share = len(clean) / max(len(events), 1)
+    sign_share = float(events["signed_effect"].mean())
+    strength = float(np.clip(events["shock_strength"].median() / 2.0, 0.0, 1.0))
+    identifiable = float(np.clip(0.35 * clean_share + 0.35 * sign_share + 0.30 * strength, 0.0, 1.0))
+    return {
+        f"{prefix}_available": 1.0,
+        f"{prefix}_event_count": float(len(events)),
+        f"{prefix}_clean_event_count": float(len(clean)),
+        f"{prefix}_up_event_count": float(np.sum(events["net_media_delta"] > 0)),
+        f"{prefix}_down_event_count": float(np.sum(events["net_media_delta"] < 0)),
+        f"{prefix}_mean_abs_shock_strength": float(events["shock_strength"].mean()),
+        f"{prefix}_median_abs_shock_strength": float(events["shock_strength"].median()),
+        f"{prefix}_positive_effect_share": sign_share,
+        f"{prefix}_signed_response_corr": response_corr,
+        f"{prefix}_median_abs_lift_to_kpi_sd": float(events["lift_to_kpi_sd"].median()),
+        f"{prefix}_other_media_contamination_mean": float(events["other_contam"].mean()),
+        f"{prefix}_donor_media_contamination_mean": float(events["donor_contam"].mean()),
+        f"{prefix}_identifiable_score": identifiable,
+    }
+
+
 def _positive_share(values: Iterable[object]) -> float:
     arr = pd.to_numeric(pd.Series(values), errors="coerce").to_numpy(float)
     finite = arr[np.isfinite(arr)]
@@ -356,25 +524,36 @@ def _build_set_feature_matrix(
     return np.asarray(rows, dtype=float), cols, int(target_index)
 
 
-def _curve_target(response_curves: pd.DataFrame, channel: str, grid: np.ndarray = CURVE_GRID) -> np.ndarray:
+def _curve_target_with_status(
+    response_curves: pd.DataFrame,
+    channel: str,
+    grid: np.ndarray = CURVE_GRID,
+) -> tuple[np.ndarray, float, float, str]:
     curve = response_curves.loc[response_curves["channel"].astype(str).eq(str(channel))].copy()
     if curve.empty:
-        return np.linspace(0.0, 1.0, len(grid))
+        return _default_curve_grid(grid), 0.15, 1.0, "missing_curve_rows"
+    required = {"pct_of_anchor_support", "true_incremental_contribution"}
+    if not required.issubset(curve.columns):
+        return _default_curve_grid(grid), 0.15, 1.0, "missing_curve_columns"
     pct = pd.to_numeric(curve["pct_of_anchor_support"], errors="coerce").to_numpy(float)
     y = pd.to_numeric(curve["true_incremental_contribution"], errors="coerce").to_numpy(float)
     ok = np.isfinite(pct) & np.isfinite(y)
     if ok.sum() < 4:
-        return np.linspace(0.0, 1.0, len(grid))
+        return _default_curve_grid(grid), 0.25, 1.0, "too_few_curve_points"
     order = np.argsort(pct[ok])
     target = np.interp(grid, pct[ok][order], y[ok][order])
     target = np.maximum(target, 0.0)
     scale = float(np.max(target))
     if scale <= 1e-12:
-        return np.linspace(0.0, 1.0, len(grid))
+        return _default_curve_grid(grid), 0.20, 1.0, "zero_or_negative_curve"
     target = target / scale
     target[0] = 0.0
     target = np.maximum.accumulate(target)
-    return np.clip(target, 0.0, 1.0)
+    return np.clip(target, 0.0, 1.0), 1.0, 0.0, "ok"
+
+
+def _curve_target(response_curves: pd.DataFrame, channel: str, grid: np.ndarray = CURVE_GRID) -> np.ndarray:
+    return _curve_target_with_status(response_curves, channel, grid=grid)[0]
 
 
 def _target_saturation(response_curves: pd.DataFrame, channel: str) -> float:
@@ -407,6 +586,7 @@ def _truth_calibrated_fallback_targets(
     curve_target: np.ndarray,
     diagnostic_fallback: float,
     grid: np.ndarray = CURVE_GRID,
+    target_quality: float = 1.0,
 ) -> tuple[float, float, float, float]:
     """Blend weak-data diagnostics with known-truth default-curve adequacy.
 
@@ -418,10 +598,13 @@ def _truth_calibrated_fallback_targets(
     default_mae = float(np.mean(np.abs(np.asarray(curve_target, dtype=float) - default_curve)))
     default_adequacy = float(np.clip(1.0 - default_mae / 0.18, 0.0, 1.0))
     diagnostic_fallback = float(np.clip(diagnostic_fallback, 0.05, 0.95))
-    fallback = 1.0 - (1.0 - diagnostic_fallback) * (1.0 - 0.75 * default_adequacy)
+    target_quality = float(np.clip(target_quality, 0.0, 1.0))
+    fallback = 1.0 - (1.0 - diagnostic_fallback) * (1.0 - 0.75 * default_adequacy * target_quality)
+    if target_quality < 0.50:
+        fallback = max(fallback, 0.80 - 0.30 * target_quality)
     fallback = float(np.clip(fallback, 0.05, 0.95))
     confidence = float(np.clip(1.0 - fallback, 0.05, 0.95))
-    uncertainty = float(np.clip(0.04 + 0.24 * diagnostic_fallback + 0.35 * default_mae, 0.05, 0.40))
+    uncertainty = float(np.clip(0.04 + 0.24 * diagnostic_fallback + 0.35 * default_mae + 0.12 * (1.0 - target_quality), 0.05, 0.45))
     return confidence, fallback, uncertainty, default_mae
 
 
@@ -461,6 +644,7 @@ def build_curve_prior_dataset(
     confidence_targets: List[float] = []
     fallback_targets: List[float] = []
     uncertainty_targets: List[float] = []
+    curve_target_quality: List[float] = []
 
     for panel_id, synth in enumerate(panels):
         panel = synth.panel.copy()
@@ -529,13 +713,15 @@ def build_curve_prior_dataset(
             }
             feature_row.update(_stats(support, "support"))
             feature_row.update(_stats(spend, "spend"))
+            feature_row.update(_quasi_geo_lift_features(panel, ch, channels, dates, media_suffix="_support", prefix="qgeo_support"))
+            feature_row.update(_quasi_geo_lift_features(panel, ch, channels, dates, media_suffix="_spend", prefix="qgeo_spend"))
             other_corrs = []
             for other, other_support in support_series.items():
                 if other != ch:
                     other_corrs.append(abs(_safe_corr(support, other_support)))
             feature_row["max_abs_other_channel_support_corr"] = float(np.nanmax(other_corrs)) if other_corrs else 0.0
             feature_row["mean_abs_other_channel_support_corr"] = float(np.nanmean(other_corrs)) if other_corrs else 0.0
-            curve_target = _curve_target(synth.response_curves, ch, grid=grid)
+            curve_target, target_quality, target_defaulted, target_reason = _curve_target_with_status(synth.response_curves, ch, grid=grid)
             if ch in learn.index:
                 for col, val in learn.loc[ch].items():
                     if isinstance(val, (bool, np.bool_)):
@@ -551,9 +737,13 @@ def build_curve_prior_dataset(
                 curve_target,
                 diagnostic_fallback=diagnostic_fallback,
                 grid=grid,
+                target_quality=target_quality,
             )
             feature_row["diagnostic_default_weight_target"] = diagnostic_fallback
             feature_row["truth_default_curve_mae"] = default_curve_mae
+            feature_row["curve_target_quality"] = target_quality
+            feature_row["curve_target_defaulted"] = target_defaulted
+            feature_row["curve_target_default_reason"] = str(target_reason)
             adstock = float(params["decay"].iloc[0]) if not params.empty and "decay" in params.columns else 0.30
             rows.append(feature_row)
             channel_sequences.append(channel_seq)
@@ -566,6 +756,7 @@ def build_curve_prior_dataset(
             confidence_targets.append(conf)
             fallback_targets.append(fallback)
             uncertainty_targets.append(uncertainty)
+            curve_target_quality.append(target_quality)
 
     features = pd.DataFrame(rows)
     excluded = {
@@ -579,6 +770,9 @@ def build_curve_prior_dataset(
         "truth_curve_type",
         "diagnostic_default_weight_target",
         "truth_default_curve_mae",
+        "curve_target_quality",
+        "curve_target_defaulted",
+        "curve_target_default_reason",
     }
     feature_columns = [c for c in features.columns if c not in excluded and pd.api.types.is_numeric_dtype(features[c])]
     features[feature_columns] = features[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
@@ -601,6 +795,7 @@ def build_curve_prior_dataset(
         confidence_targets=np.asarray(confidence_targets, dtype=float),
         fallback_targets=np.asarray(fallback_targets, dtype=float),
         uncertainty_targets=np.asarray(uncertainty_targets, dtype=float),
+        curve_target_quality=np.asarray(curve_target_quality, dtype=float),
         channel_sequences=np.nan_to_num(np.stack(channel_sequences), nan=0.0, posinf=0.0, neginf=0.0) if channel_sequences else None,
         geo_sequences=np.nan_to_num(np.stack(geo_sequences), nan=0.0, posinf=0.0, neginf=0.0) if geo_sequences else None,
         set_features=set_tensor if len(set_matrices) else None,
@@ -737,6 +932,7 @@ def fit_curve_prior_model(
     dropout: float = 0.05,
     seed: int = 20260604,
     split_group_col: str = "split_group",
+    concavity_penalty_weight: float = 0.25,
 ) -> CurvePriorResult:
     """Fit a monotone neural curve-prior model on synthetic known truth."""
     torch, nn, F = _require_torch_nn()
@@ -796,6 +992,12 @@ def fit_curve_prior_model(
     confidence_y = torch.tensor(dataset.confidence_targets, dtype=torch.float32, device=device)
     fallback_y = torch.tensor(dataset.fallback_targets, dtype=torch.float32, device=device)
     uncertainty_y = torch.tensor(dataset.uncertainty_targets, dtype=torch.float32, device=device)
+    curve_quality_y = torch.tensor(
+        dataset.curve_target_quality if dataset.curve_target_quality is not None else np.ones(n, dtype=float),
+        dtype=torch.float32,
+        device=device,
+    )
+    grid_delta_t = torch.tensor(np.diff(CURVE_GRID), dtype=torch.float32, device=device).reshape(1, -1)
     train_t = torch.tensor(train_idx, dtype=torch.long, device=device)
     val_t = torch.tensor(val_idx, dtype=torch.long, device=device) if len(val_idx) else train_t
     history = []
@@ -813,10 +1015,12 @@ def fit_curve_prior_model(
             set_channel_mask=set_channel_mask_t[indices] if set_channel_mask_t is not None else None,
             target_channel_index=target_channel_index_t[indices] if target_channel_index_t is not None else None,
         )
-        curve_loss = F.mse_loss(out["curve"], curve_y[indices])
         pred_marginal = out["curve"][:, 1:] - out["curve"][:, :-1]
         true_marginal = curve_y[indices][:, 1:] - curve_y[indices][:, :-1]
-        marginal_loss = F.mse_loss(pred_marginal, true_marginal)
+        pred_slope = pred_marginal / torch.clamp(grid_delta_t, min=1e-6)
+        quality = torch.clamp(curve_quality_y[indices], min=0.05, max=1.0)
+        curve_loss = torch.mean(torch.mean((out["curve"] - curve_y[indices]) ** 2, dim=1) * quality)
+        marginal_loss = torch.mean(torch.mean((pred_marginal - true_marginal) ** 2, dim=1) * quality)
         scalar_loss = (
             F.mse_loss(out["adstock_decay"], adstock_y[indices])
             + F.mse_loss(out["saturation_score"], saturation_y[indices])
@@ -824,8 +1028,10 @@ def fit_curve_prior_model(
             + F.mse_loss(out["fallback_weight"], fallback_y[indices])
             + F.mse_loss(out["uncertainty_width"], uncertainty_y[indices])
         )
-        smoothness = torch.mean((pred_marginal[:, 1:] - pred_marginal[:, :-1]) ** 2)
-        return curve_loss + 0.50 * marginal_loss + 0.25 * scalar_loss + 0.02 * smoothness
+        smoothness = torch.mean((pred_slope[:, 1:] - pred_slope[:, :-1]) ** 2)
+        concavity_violation = torch.relu(pred_slope[:, 1:] - pred_slope[:, :-1])
+        concavity_loss = torch.mean(concavity_violation**2)
+        return curve_loss + 0.50 * marginal_loss + 0.25 * scalar_loss + 0.02 * smoothness + float(concavity_penalty_weight) * concavity_loss
 
     for epoch in range(1, int(epochs) + 1):
         model.train()
@@ -871,6 +1077,9 @@ def fit_curve_prior_model(
             "truth_curve_type",
             "diagnostic_default_weight_target",
             "truth_default_curve_mae",
+            "curve_target_quality",
+            "curve_target_defaulted",
+            "curve_target_default_reason",
         ]
         if c in dataset.features.columns
     ]
@@ -907,6 +1116,7 @@ def fit_curve_prior_model(
             "curve_grid": CURVE_GRID.tolist(),
             "hidden_size": hidden_size,
             "dropout": dropout,
+            "concavity_penalty_weight": float(concavity_penalty_weight),
             "epochs_requested": int(epochs),
             "epochs_run": int(len(history)),
             "validation_fraction": validation_fraction,
@@ -917,6 +1127,7 @@ def fit_curve_prior_model(
             "feature_scale": x_scale.tolist(),
             "model_type": "monotone_neural_curve_prior_net",
             "architecture": "aggregate_mlp_plus_channel_tcn_plus_geo_tcn_plus_set_transformer",
+            "loss_notes": "curve and marginal losses are down-weighted for defaulted/low-quality curve targets; positive second differences are penalized as conservative concavity pressure",
             "channel_sequence_columns": dataset.channel_sequence_columns,
             "geo_sequence_columns": dataset.geo_sequence_columns,
             "set_feature_columns": dataset.set_feature_columns,
@@ -929,6 +1140,114 @@ def fit_curve_prior_model(
             "geo_sequence_columns": dataset.geo_sequence_columns,
             "set_feature_columns": dataset.set_feature_columns,
         },
+    )
+
+
+def predict_curve_prior_model(result: CurvePriorResult, dataset: CurvePriorDataset) -> CurvePriorResult:
+    """Score a new curve-prior dataset with a fitted model checkpoint."""
+    if not result.model_state or "state_dict" not in result.model_state:
+        raise ValueError("result.model_state with a fitted state_dict is required for prediction.")
+    torch, _, _ = _require_torch_nn()
+    feature_columns = list(result.model_state.get("feature_columns") or result.feature_columns)
+    missing_features = [c for c in feature_columns if c not in dataset.features.columns]
+    raw_x = dataset.features.reindex(columns=feature_columns, fill_value=0.0).to_numpy(float)
+    center = np.asarray(result.settings.get("feature_center", np.zeros(len(feature_columns))), dtype=float)
+    scale = np.asarray(result.settings.get("feature_scale", np.ones(len(feature_columns))), dtype=float)
+    if center.shape[0] != len(feature_columns) or scale.shape[0] != len(feature_columns):
+        raise ValueError("Stored feature center/scale do not match fitted feature columns.")
+    scale = np.where(scale > 1e-8, scale, 1.0)
+    x_np = (raw_x - center) / scale
+    channel_cols = list(result.model_state.get("channel_sequence_columns") or [])
+    geo_cols = list(result.model_state.get("geo_sequence_columns") or [])
+    set_cols = list(result.model_state.get("set_feature_columns") or [])
+    if dataset.channel_sequences is not None and dataset.channel_sequences.shape[-1] != len(channel_cols):
+        raise ValueError("Holdout channel sequence columns do not match the fitted model.")
+    if dataset.geo_sequences is not None and dataset.geo_sequences.shape[-1] != len(geo_cols):
+        raise ValueError("Holdout geo sequence columns do not match the fitted model.")
+    if dataset.set_features is not None and dataset.set_features.shape[-1] != len(set_cols):
+        raise ValueError("Holdout set-feature columns do not match the fitted model.")
+
+    device = torch.device("cpu")
+    model = build_monotone_curve_prior_net(
+        input_dim=len(feature_columns),
+        curve_points=dataset.curve_targets.shape[1],
+        hidden_size=int(result.settings.get("hidden_size", 96)),
+        dropout=float(result.settings.get("dropout", 0.05)),
+        channel_sequence_dim=len(channel_cols),
+        geo_sequence_dim=len(geo_cols),
+        set_feature_dim=len(set_cols),
+    ).to(device)
+    model.load_state_dict(result.model_state["state_dict"])
+    model.eval()
+    x = torch.tensor(x_np, dtype=torch.float32, device=device)
+    channel_sequence_t = (
+        torch.tensor(dataset.channel_sequences, dtype=torch.float32, device=device) if dataset.channel_sequences is not None else None
+    )
+    geo_sequence_t = torch.tensor(dataset.geo_sequences, dtype=torch.float32, device=device) if dataset.geo_sequences is not None else None
+    set_features_t = torch.tensor(dataset.set_features, dtype=torch.float32, device=device) if dataset.set_features is not None else None
+    set_channel_mask_t = torch.tensor(dataset.set_channel_mask, dtype=torch.float32, device=device) if dataset.set_channel_mask is not None else None
+    target_channel_index_t = (
+        torch.tensor(dataset.target_channel_index, dtype=torch.long, device=device) if dataset.target_channel_index is not None else None
+    )
+    with torch.no_grad():
+        out = model(
+            x,
+            channel_sequence=channel_sequence_t,
+            geo_sequence=geo_sequence_t,
+            set_features=set_features_t,
+            set_channel_mask=set_channel_mask_t,
+            target_channel_index=target_channel_index_t,
+        )
+    metadata_cols = [
+        c
+        for c in [
+            "panel_id",
+            "split_group",
+            "data_scenario",
+            "geo_regime",
+            "measurement_regime",
+            "kpi_variant",
+            "channel",
+            "truth_curve_type",
+            "diagnostic_default_weight_target",
+            "truth_default_curve_mae",
+            "curve_target_quality",
+            "curve_target_defaulted",
+            "curve_target_default_reason",
+        ]
+        if c in dataset.features.columns
+    ]
+    pred = dataset.features[metadata_cols].copy()
+    pred["split_role"] = "holdout_prediction"
+    curve_pred = np.asarray(out["curve"].detach().cpu().tolist(), dtype=float)
+    fallback_pred = np.asarray(out["fallback_weight"].detach().cpu().tolist(), dtype=float)
+    default_curve = _default_curve_grid(CURVE_GRID)
+    blended_curve = (1.0 - fallback_pred.reshape(-1, 1)) * curve_pred + fallback_pred.reshape(-1, 1) * default_curve.reshape(1, -1)
+    for i, pct in enumerate(CURVE_GRID):
+        pred[f"curve_prior_p{int(round(pct * 100)):03d}"] = curve_pred[:, i]
+        pred[f"default_curve_p{int(round(pct * 100)):03d}"] = default_curve[i]
+        pred[f"conservative_blend_curve_p{int(round(pct * 100)):03d}"] = blended_curve[:, i]
+    pred["adstock_decay_prior_mean"] = np.asarray(out["adstock_decay"].detach().cpu().tolist(), dtype=float)
+    pred["saturation_score_prior_mean"] = np.asarray(out["saturation_score"].detach().cpu().tolist(), dtype=float)
+    pred["confidence_score"] = np.asarray(out["confidence"].detach().cpu().tolist(), dtype=float)
+    pred["fallback_default_weight"] = fallback_pred
+    pred["uncertainty_width"] = np.asarray(out["uncertainty_width"].detach().cpu().tolist(), dtype=float)
+    pred["true_adstock_decay"] = dataset.adstock_targets
+    pred["true_saturation_score"] = dataset.saturation_targets
+    pred["true_confidence_score"] = dataset.confidence_targets
+    pred["true_fallback_default_weight"] = dataset.fallback_targets
+    pred["true_uncertainty_width"] = dataset.uncertainty_targets
+    for i, pct in enumerate(CURVE_GRID):
+        pred[f"true_curve_p{int(round(pct * 100)):03d}"] = dataset.curve_targets[:, i]
+    settings = dict(result.settings)
+    settings["prediction_missing_feature_columns"] = missing_features
+    settings["prediction_row_n"] = int(len(pred))
+    return CurvePriorResult(
+        predictions=pred,
+        training_history=result.training_history.copy(),
+        feature_columns=feature_columns,
+        settings=settings,
+        model_state=result.model_state,
     )
 
 
@@ -945,6 +1264,8 @@ def evaluate_curve_prior_predictions(result: CurvePriorResult) -> pd.DataFrame:
         est = sub[est_cols].to_numpy(float)
         truth = sub[true_cols].to_numpy(float)
         mae = np.mean(np.abs(est - truth), axis=1)
+        marginal_slope = np.diff(est, axis=1) / np.maximum(np.diff(CURVE_GRID).reshape(1, -1), 1e-8)
+        concavity = np.diff(marginal_slope, axis=1)
         corr = []
         for e, t in zip(est, truth):
             corr.append(np.corrcoef(e, t)[0, 1] if np.std(e) > 1e-10 and np.std(t) > 1e-10 else np.nan)
@@ -954,6 +1275,7 @@ def evaluate_curve_prior_predictions(result: CurvePriorResult) -> pd.DataFrame:
                 {"scope": scope, "metric": f"{prefix}_curve_grid_mae_median", "value": float(np.nanmedian(mae))},
                 {"scope": scope, "metric": f"{prefix}_curve_shape_corr_median", "value": float(np.nanmedian(corr))},
                 {"scope": scope, "metric": f"{prefix}_curve_monotonic_violation_share", "value": float(np.mean(np.diff(est, axis=1) < -1e-8))},
+                {"scope": scope, "metric": f"{prefix}_curve_concavity_violation_share", "value": float(np.mean(concavity > 1e-8))},
             ]
         )
 
