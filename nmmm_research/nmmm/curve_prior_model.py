@@ -199,6 +199,14 @@ def _date_geo_matrix(panel: pd.DataFrame, col: str, dates: pd.DatetimeIndex, gro
     return pivot.reindex(dates).to_numpy(float)
 
 
+def _per_population_matrix(panel: pd.DataFrame, value_col: str, dates: pd.DatetimeIndex, group_col: str = "geo_id") -> np.ndarray:
+    value = _date_geo_matrix(panel, value_col, dates, group_col=group_col)
+    population = _date_geo_matrix(panel, "population", dates, group_col=group_col)
+    if value.shape != population.shape:
+        return np.full_like(value, np.nan, dtype=float)
+    return value / np.maximum(population, 1.0)
+
+
 def _geo_matrix_features(mat: np.ndarray, prefix: str) -> tuple[List[np.ndarray], List[str]]:
     arr = np.asarray(mat, dtype=float)
     finite = np.isfinite(arr)
@@ -247,10 +255,14 @@ def _build_geo_time_sequence(panel: pd.DataFrame, channel: str, dates: pd.Dateti
     blocks: List[np.ndarray] = []
     cols: List[str] = []
     for feature in ["support", "spend"]:
-        mat = _date_geo_matrix(panel, f"{channel}_{feature}", dates)
-        feat_blocks, feat_cols = _geo_matrix_features(mat, feature)
-        blocks.extend(feat_blocks)
-        cols.extend(feat_cols)
+        value_col = f"{channel}_{feature}"
+        for mat, prefix in [
+            (_date_geo_matrix(panel, value_col, dates), feature),
+            (_per_population_matrix(panel, value_col, dates), f"{feature}_per_population"),
+        ]:
+            feat_blocks, feat_cols = _geo_matrix_features(mat, prefix)
+            blocks.extend(feat_blocks)
+            cols.extend(feat_cols)
     kpi_blocks, kpi_cols = _geo_matrix_features(_date_geo_matrix(panel, "kpi", dates), "kpi")
     blocks.extend(kpi_blocks[:4])
     cols.extend(kpi_cols[:4])
@@ -374,7 +386,7 @@ def _target_saturation(response_curves: pd.DataFrame, channel: str) -> float:
     return float(np.clip(pd.to_numeric(row["true_saturation"], errors="coerce").iloc[0], 0.0, 1.0))
 
 
-def _difficulty_targets(row: pd.Series) -> tuple[float, float, float]:
+def _diagnostic_fallback_targets(row: pd.Series) -> tuple[float, float, float]:
     learnability = float(row.get("learnability_score_0_100", 50.0)) / 100.0
     high_collinear = bool(row.get("high_collinearity_flag", False))
     national = bool(row.get("national_repeated_media_flag", False))
@@ -389,6 +401,28 @@ def _difficulty_targets(row: pd.Series) -> tuple[float, float, float]:
     confidence = float(np.clip(1.0 - fallback, 0.05, 0.95))
     uncertainty = float(np.clip(0.04 + 0.30 * fallback, 0.05, 0.35))
     return confidence, fallback, uncertainty
+
+
+def _truth_calibrated_fallback_targets(
+    curve_target: np.ndarray,
+    diagnostic_fallback: float,
+    grid: np.ndarray = CURVE_GRID,
+) -> tuple[float, float, float, float]:
+    """Blend weak-data diagnostics with known-truth default-curve adequacy.
+
+    This is synthetic-training-only. It lets the fallback head learn when a
+    conservative default is actually close to truth, while still raising fallback
+    weight when the observed data are weak or confounded.
+    """
+    default_curve = _default_curve_grid(grid)
+    default_mae = float(np.mean(np.abs(np.asarray(curve_target, dtype=float) - default_curve)))
+    default_adequacy = float(np.clip(1.0 - default_mae / 0.18, 0.0, 1.0))
+    diagnostic_fallback = float(np.clip(diagnostic_fallback, 0.05, 0.95))
+    fallback = 1.0 - (1.0 - diagnostic_fallback) * (1.0 - 0.75 * default_adequacy)
+    fallback = float(np.clip(fallback, 0.05, 0.95))
+    confidence = float(np.clip(1.0 - fallback, 0.05, 0.95))
+    uncertainty = float(np.clip(0.04 + 0.24 * diagnostic_fallback + 0.35 * default_mae, 0.05, 0.40))
+    return confidence, fallback, uncertainty, default_mae
 
 
 def _default_curve_grid(grid: np.ndarray = CURVE_GRID, anchor_saturation: float = 0.50) -> np.ndarray:
@@ -435,6 +469,7 @@ def build_curve_prior_dataset(
         data_scenario = getattr(synth, "curve_prior_scenario", "unknown")
         geo_regime = getattr(synth, "curve_prior_geo_regime", "unknown")
         measurement_regime = getattr(synth, "curve_prior_measurement_regime", "unknown")
+        kpi_variant = getattr(synth, "curve_prior_kpi_variant", "unknown")
         channels = sorted(synth.truth_params["channel"].astype(str).unique())
         local_controls = controls or [c for c in ["promo", "holiday", "price_index", "competitor_index", "macro_index", "category_trend"] if c in panel.columns]
         validation = validate_nmmm_training_data(
@@ -477,6 +512,7 @@ def build_curve_prior_dataset(
                 "data_scenario": str(data_scenario),
                 "geo_regime": str(geo_regime),
                 "measurement_regime": str(measurement_regime),
+                "kpi_variant": str(kpi_variant),
                 "channel": ch,
                 "truth_curve_type": str(params["curve_type"].iloc[0]) if not params.empty and "curve_type" in params.columns else "unknown",
                 "n_weeks": float(panel["date"].nunique()),
@@ -499,6 +535,7 @@ def build_curve_prior_dataset(
                     other_corrs.append(abs(_safe_corr(support, other_support)))
             feature_row["max_abs_other_channel_support_corr"] = float(np.nanmax(other_corrs)) if other_corrs else 0.0
             feature_row["mean_abs_other_channel_support_corr"] = float(np.nanmean(other_corrs)) if other_corrs else 0.0
+            curve_target = _curve_target(synth.response_curves, ch, grid=grid)
             if ch in learn.index:
                 for col, val in learn.loc[ch].items():
                     if isinstance(val, (bool, np.bool_)):
@@ -507,16 +544,23 @@ def build_curve_prior_dataset(
                         continue
                     else:
                         feature_row[col] = float(val) if pd.notna(val) else 0.0
-                conf, fallback, uncertainty = _difficulty_targets(learn.loc[ch])
+                _, diagnostic_fallback, _ = _diagnostic_fallback_targets(learn.loc[ch])
             else:
-                conf, fallback, uncertainty = 0.50, 0.50, 0.19
+                diagnostic_fallback = 0.50
+            conf, fallback, uncertainty, default_curve_mae = _truth_calibrated_fallback_targets(
+                curve_target,
+                diagnostic_fallback=diagnostic_fallback,
+                grid=grid,
+            )
+            feature_row["diagnostic_default_weight_target"] = diagnostic_fallback
+            feature_row["truth_default_curve_mae"] = default_curve_mae
             adstock = float(params["decay"].iloc[0]) if not params.empty and "decay" in params.columns else 0.30
             rows.append(feature_row)
             channel_sequences.append(channel_seq)
             geo_sequences.append(geo_seq)
             set_matrices.append(set_matrix)
             target_channel_indices.append(target_index)
-            curve_targets.append(_curve_target(synth.response_curves, ch, grid=grid))
+            curve_targets.append(curve_target)
             adstock_targets.append(float(np.clip(adstock, 0.0, 0.95)))
             saturation_targets.append(_target_saturation(synth.response_curves, ch))
             confidence_targets.append(conf)
@@ -530,8 +574,11 @@ def build_curve_prior_dataset(
         "data_scenario",
         "geo_regime",
         "measurement_regime",
+        "kpi_variant",
         "channel",
         "truth_curve_type",
+        "diagnostic_default_weight_target",
+        "truth_default_curve_mae",
     }
     feature_columns = [c for c in features.columns if c not in excluded and pd.api.types.is_numeric_dtype(features[c])]
     features[feature_columns] = features[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
@@ -819,8 +866,11 @@ def fit_curve_prior_model(
             "data_scenario",
             "geo_regime",
             "measurement_regime",
+            "kpi_variant",
             "channel",
             "truth_curve_type",
+            "diagnostic_default_weight_target",
+            "truth_default_curve_mae",
         ]
         if c in dataset.features.columns
     ]
@@ -933,6 +983,14 @@ def evaluate_curve_prior_predictions(result: CurvePriorResult) -> pd.DataFrame:
     if "data_scenario" in pred.columns:
         for scenario, sub in pred.groupby("data_scenario", dropna=False):
             add_metrics(sub, f"scenario:{scenario}")
+    for group_col, label in [
+        ("geo_regime", "geo_regime"),
+        ("measurement_regime", "measurement_regime"),
+        ("kpi_variant", "kpi_variant"),
+    ]:
+        if group_col in pred.columns:
+            for value, sub in pred.groupby(group_col, dropna=False):
+                add_metrics(sub, f"{label}:{value}")
 
     return pd.DataFrame(rows)
 

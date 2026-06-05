@@ -26,8 +26,9 @@ always the best point estimate.
 - Aggregate diagnostics MLP for stable summary features.
 - Per-channel temporal TCN stem over support, spend, impressions, clicks, GRPs,
   reach, frequency, missingness masks, and optional residualized KPI signal.
-- Geo-time TCN stem over target-channel geo variation, national movement,
-  staggered-ramp heterogeneity, concentration, and KPI geo-shock diagnostics.
+- Geo-time TCN stem over target-channel geo variation, population-scaled geo
+  support/spend where population exists, national movement, staggered-ramp
+  heterogeneity, concentration, and KPI geo-shock diagnostics.
 - Cross-channel Set Transformer over all channels with a target-channel marker,
   so collinearity, co-movement, and conditional identifiability can be learned.
 - Shared output heads for monotone curve grid, adstock decay, saturation score,
@@ -61,9 +62,30 @@ This model should remain a prior/diagnostic layer until it proves it improves
 Stan or optimizer decisions on held-out known-truth simulations. Promotion
 should be based on curve/adstock/decision recovery, not only R2.
 
+## Low-Data Suite
+
+`run_curve_prior_low_data_suite.py` now tests agency-practical data regimes:
+
+- geo KPI + geo support/spend + population
+- geo KPI + geo support/spend without population
+- geo KPI + spend only + population
+- geo KPI + support only + population
+- geo KPI + national repeated media + population
+- national-only support/spend
+- richer geo media as an upper benchmark
+
+It also rotates KPI scales/noise for sales-like, subscriptions-like, and
+leads-like outcomes. The saved outputs include predictions, metrics, training
+features, training history, and a reusable Torch checkpoint.
+
+The fallback/default target is synthetic-truth calibrated: diagnostics say how
+weak or confounded the observed evidence is, and known-truth training labels say
+when the conservative default curve is actually close enough to truth to lean on
+more heavily. On real data, truth is absent, so the model can only infer this
+behavior from diagnostics learned during synthetic pretraining.
+
 ## Next Hardening
 
-- add direct sequence and geo-variation encoders
 - add quasi-geo / ramp evidence features when available
 - benchmark against Meridian-style default anchors
 - test downstream impact on Stan priors and optimizer scenarios

@@ -156,6 +156,54 @@ This is a pre-training gate, not a model score. It addresses whether a channel
 has enough variation, geo signal, nonzero weeks, and independent movement to
 support causal/economic interpretation.
 
+## Neural Curve-Prior Lane
+
+The neural response-curve prior model is now separate from the full NMMM/TFT
+work. It predicts a monotone response-curve grid, adstock prior, saturation
+score, confidence score, fallback/default weight, and uncertainty width. It does
+not force the output to be Hill or Weibull; those are only part of the synthetic
+truth family rotation.
+
+The latest architecture uses:
+
+- aggregate channel diagnostics
+- per-channel temporal encoder over support, spend, rich media signals,
+  missingness masks, and optional residualized KPI signal
+- geo-time encoder with population-scaled support/spend features when available
+- cross-channel Set Transformer for collinearity and co-movement context
+- conservative default-curve blending for weak evidence
+
+Medium low-data suite, 84 panels / 504 channel examples, 80 epochs:
+
+```text
+all curve grid MAE mean:            0.060
+validation curve grid MAE mean:     0.069
+validation curve shape corr median: 0.989
+monotonic violations:               0.000
+adstock decay MAE:                  0.100
+saturation score MAE:               0.092
+fallback weight MAE:                0.116
+```
+
+By agency-practical regime, curve MAE was tightly clustered around 0.060 in
+this medium run:
+
+```text
+geo support/spend + population:     0.060
+geo support/spend, no population:   0.060
+geo spend + population:             0.060
+geo support + population:           0.060
+geo KPI + national repeated media:  0.060
+national-only support/spend:        0.060
+rich geo media + population:        0.060
+```
+
+Interpretation: the curve-shape head is promising, especially because no curve
+family label leaks into the model features. The fallback/default head is
+directionally learning weak-data diagnostics, but it still needs calibration
+against downstream Stan and optimizer decisions before using it automatically on
+client data.
+
 First quick TFT grid before baseline isolation, 8 runs across
 standard/messy-realistic panels:
 
