@@ -284,6 +284,7 @@ Current neural response-curve prior lane:
 truth generators: Hill, Weibull, Gompertz, concave, threshold,
                   linear-plateau, near-linear
 model output:     flexible monotone response grid, not named curve params
+architecture:     aggregate MLP + channel TCN + geo TCN + Set Transformer
 scope:            curve/adstock prior and identifiability diagnostics
 not scope:        final causal ROI/contribution estimator
 ```
@@ -293,13 +294,13 @@ Latest grouped-validation mixed-family curve-prior smoke:
 ```text
 training examples:               1,440 channel examples
 validation split:                held-out synthetic panel groups
-model curve grid MAE mean:       0.0647 all / 0.0580 validation
-model curve grid MAE median:     0.0535 all / 0.0569 validation
-median curve-shape correlation:  0.9928 all / 0.9926 validation
+model curve grid MAE mean:       0.0656 all / 0.0584 validation
+model curve grid MAE median:     0.0543 all / 0.0555 validation
+median curve-shape correlation:  0.9925 all / 0.9924 validation
 monotonic violation share:       0.0000
-adstock decay MAE:               0.0904 all / 0.1210 validation
-saturation score MAE:            0.1071 all / 0.1175 validation
-fallback weight MAE:             0.0191 all / 0.0202 validation
+adstock decay MAE:               0.0905 all / 0.1205 validation
+saturation score MAE:            0.1082 all / 0.1152 validation
+fallback weight MAE:             0.0181 all / 0.0203 validation
 weakest curve family:            threshold / sharp S-curve
 ```
 

@@ -21,6 +21,18 @@ The primary model curve is the learned monotone grid. The conservative blend is
 reported separately because it can be safer for weak evidence, but it is not
 always the best point estimate.
 
+## Current Architecture
+
+- Aggregate diagnostics MLP for stable summary features.
+- Per-channel temporal TCN stem over support, spend, impressions, clicks, GRPs,
+  reach, frequency, missingness masks, and optional residualized KPI signal.
+- Geo-time TCN stem over target-channel geo variation, national movement,
+  staggered-ramp heterogeneity, concentration, and KPI geo-shock diagnostics.
+- Cross-channel Set Transformer over all channels with a target-channel marker,
+  so collinearity, co-movement, and conditional identifiability can be learned.
+- Shared output heads for monotone curve grid, adstock decay, saturation score,
+  confidence, fallback/default weight, and uncertainty width.
+
 ## Why This Shape
 
 Saturation is weakly identified from observational MMM data without clean

@@ -29,12 +29,20 @@ CURVE_GRID = np.array([0.0, 0.10, 0.25, 0.50, 0.75, 0.90, 1.0, 1.25, 1.50, 2.0],
 class CurvePriorDataset:
     features: pd.DataFrame
     feature_columns: List[str]
+    channel_sequence_columns: List[str]
+    geo_sequence_columns: List[str]
+    set_feature_columns: List[str]
     curve_targets: np.ndarray
     adstock_targets: np.ndarray
     saturation_targets: np.ndarray
     confidence_targets: np.ndarray
     fallback_targets: np.ndarray
     uncertainty_targets: np.ndarray
+    channel_sequences: Optional[np.ndarray] = None
+    geo_sequences: Optional[np.ndarray] = None
+    set_features: Optional[np.ndarray] = None
+    set_channel_mask: Optional[np.ndarray] = None
+    target_channel_index: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -92,6 +100,163 @@ def _safe_corr(x: Iterable[object], y: Iterable[object]) -> float:
     return float(np.corrcoef(x_arr[ok], y_arr[ok])[0, 1])
 
 
+def _ordered_dates(panel: pd.DataFrame, sequence_length: int) -> pd.DatetimeIndex:
+    dates = pd.DatetimeIndex(pd.to_datetime(panel["date"]).dropna().sort_values().unique())
+    if sequence_length and len(dates) > sequence_length:
+        dates = dates[-int(sequence_length) :]
+    return dates
+
+
+def _pad_sequence_matrix(matrix: np.ndarray, sequence_length: int) -> np.ndarray:
+    arr = np.asarray(matrix, dtype=float)
+    if not sequence_length or arr.shape[0] == sequence_length:
+        return arr
+    if arr.shape[0] > sequence_length:
+        return arr[-int(sequence_length) :, :]
+    pad = np.zeros((int(sequence_length) - arr.shape[0], arr.shape[1]), dtype=float)
+    return np.vstack([pad, arr])
+
+
+def _date_series(panel: pd.DataFrame, col: str, dates: pd.DatetimeIndex, agg: str = "sum") -> np.ndarray:
+    if col not in panel.columns:
+        return np.full(len(dates), np.nan, dtype=float)
+    tmp = panel[["date", col]].copy()
+    tmp["date"] = pd.to_datetime(tmp["date"])
+    tmp[col] = pd.to_numeric(tmp[col], errors="coerce")
+    if agg == "mean":
+        grouped = tmp.groupby("date")[col].mean()
+    else:
+        grouped = tmp.groupby("date")[col].sum(min_count=1)
+    return grouped.reindex(dates).to_numpy(float)
+
+
+def _robust_z(values: Iterable[object], log_positive: bool = False) -> np.ndarray:
+    arr = pd.to_numeric(pd.Series(values), errors="coerce").to_numpy(float)
+    if log_positive:
+        arr = np.where(np.isfinite(arr), np.log1p(np.maximum(arr, 0.0)), np.nan)
+    finite = np.isfinite(arr)
+    out = np.zeros_like(arr, dtype=float)
+    if finite.sum() < 3:
+        return out
+    med = float(np.nanmedian(arr[finite]))
+    iqr = float(np.nanpercentile(arr[finite], 75) - np.nanpercentile(arr[finite], 25))
+    scale = iqr / 1.349 if iqr > 1e-8 else float(np.nanstd(arr[finite]))
+    scale = scale if scale > 1e-8 else 1.0
+    out[finite] = (arr[finite] - med) / scale
+    return np.clip(out, -8.0, 8.0)
+
+
+def _value_and_missing(values: Iterable[object], log_positive: bool = True) -> tuple[np.ndarray, np.ndarray]:
+    arr = pd.to_numeric(pd.Series(values), errors="coerce").to_numpy(float)
+    missing = (~np.isfinite(arr)).astype(float)
+    return _robust_z(arr, log_positive=log_positive), missing
+
+
+def _residualized_kpi_signal(panel: pd.DataFrame, dates: pd.DatetimeIndex, controls: List[str]) -> np.ndarray:
+    y = _date_series(panel, "kpi", dates, agg="sum")
+    t = np.linspace(-1.0, 1.0, len(dates))
+    design = [np.ones(len(dates)), t, np.sin(2 * np.pi * np.arange(len(dates)) / 52.0), np.cos(2 * np.pi * np.arange(len(dates)) / 52.0)]
+    for control in controls:
+        if control in panel.columns:
+            design.append(_robust_z(_date_series(panel, control, dates, agg="mean"), log_positive=False))
+    x = np.column_stack(design)
+    ok = np.isfinite(y) & np.all(np.isfinite(x), axis=1)
+    if ok.sum() < x.shape[1] + 3:
+        return _robust_z(y, log_positive=False)
+    beta, *_ = np.linalg.lstsq(x[ok], y[ok], rcond=None)
+    resid = y - x @ beta
+    return _robust_z(resid, log_positive=False)
+
+
+def _build_channel_sequence(
+    panel: pd.DataFrame,
+    channel: str,
+    dates: pd.DatetimeIndex,
+    media_feature_inputs: List[str],
+    controls: List[str],
+    include_residualized_kpi_signal: bool,
+) -> tuple[np.ndarray, List[str]]:
+    cols: List[str] = []
+    blocks: List[np.ndarray] = []
+    for feature in media_feature_inputs:
+        values = _date_series(panel, f"{channel}_{feature}", dates, agg="sum")
+        value_z, missing = _value_and_missing(values, log_positive=True)
+        blocks.extend([value_z, missing])
+        cols.extend([f"{feature}_value_z", f"{feature}_missing_mask"])
+    if include_residualized_kpi_signal:
+        blocks.append(_residualized_kpi_signal(panel, dates, controls))
+        cols.append("residualized_kpi_signal")
+    return np.column_stack(blocks).astype(float), cols
+
+
+def _date_geo_matrix(panel: pd.DataFrame, col: str, dates: pd.DatetimeIndex, group_col: str = "geo_id") -> np.ndarray:
+    if col not in panel.columns or group_col not in panel.columns:
+        return np.full((len(dates), 1), np.nan, dtype=float)
+    tmp = panel[["date", group_col, col]].copy()
+    tmp["date"] = pd.to_datetime(tmp["date"])
+    tmp[col] = pd.to_numeric(tmp[col], errors="coerce")
+    pivot = tmp.pivot_table(index="date", columns=group_col, values=col, aggfunc="sum")
+    return pivot.reindex(dates).to_numpy(float)
+
+
+def _geo_matrix_features(mat: np.ndarray, prefix: str) -> tuple[List[np.ndarray], List[str]]:
+    arr = np.asarray(mat, dtype=float)
+    finite = np.isfinite(arr)
+    finite_count = np.sum(finite, axis=1)
+    valid_any = finite_count > 0
+    filled = np.where(finite, arr, 0.0)
+    total = np.sum(filled, axis=1)
+    mean = np.divide(total, np.maximum(finite_count, 1), out=np.zeros_like(total), where=finite_count > 0)
+    centered = np.where(finite, arr - mean.reshape(-1, 1), 0.0)
+    sd = np.sqrt(np.divide(np.sum(centered**2, axis=1), np.maximum(finite_count, 1), out=np.zeros_like(total), where=finite_count > 0))
+    cv = sd / np.maximum(np.abs(mean), 1e-8)
+    zero_share = np.divide(
+        np.sum((filled <= 0) & finite, axis=1),
+        np.maximum(finite_count, 1),
+        out=np.ones_like(total),
+        where=finite_count > 0,
+    )
+    positive = np.maximum(filled, 0.0)
+    row_sum = np.maximum(np.sum(positive, axis=1), 1e-8)
+    top_share = np.max(positive, axis=1) / row_sum
+    top_share = np.where(valid_any, top_share, 1.0)
+    log_total = np.log1p(np.maximum(total, 0.0))
+    change = np.r_[0.0, np.diff(log_total)]
+    pct = np.diff(np.log1p(positive), axis=0)
+    ramp_heterogeneity = np.r_[0.0, np.std(pct, axis=1)] if pct.size else np.zeros(arr.shape[0])
+    features = [
+        _robust_z(total, log_positive=True),
+        np.nan_to_num(cv, nan=0.0, posinf=0.0, neginf=0.0),
+        np.nan_to_num(zero_share, nan=1.0),
+        np.nan_to_num(top_share, nan=1.0),
+        _robust_z(change, log_positive=False),
+        np.nan_to_num(ramp_heterogeneity, nan=0.0, posinf=0.0, neginf=0.0),
+    ]
+    cols = [
+        f"{prefix}_total_z",
+        f"{prefix}_geo_cv",
+        f"{prefix}_geo_zero_share",
+        f"{prefix}_top_geo_share",
+        f"{prefix}_national_change_z",
+        f"{prefix}_geo_ramp_heterogeneity",
+    ]
+    return features, cols
+
+
+def _build_geo_time_sequence(panel: pd.DataFrame, channel: str, dates: pd.DatetimeIndex) -> tuple[np.ndarray, List[str]]:
+    blocks: List[np.ndarray] = []
+    cols: List[str] = []
+    for feature in ["support", "spend"]:
+        mat = _date_geo_matrix(panel, f"{channel}_{feature}", dates)
+        feat_blocks, feat_cols = _geo_matrix_features(mat, feature)
+        blocks.extend(feat_blocks)
+        cols.extend(feat_cols)
+    kpi_blocks, kpi_cols = _geo_matrix_features(_date_geo_matrix(panel, "kpi", dates), "kpi")
+    blocks.extend(kpi_blocks[:4])
+    cols.extend(kpi_cols[:4])
+    return np.column_stack(blocks).astype(float), cols
+
+
 def _global_channel_series(panel: pd.DataFrame, channel: str, suffix: str) -> pd.Series:
     col = f"{channel}{suffix}"
     if col not in panel.columns:
@@ -116,6 +281,67 @@ def _geo_variation(panel: pd.DataFrame, channel: str, suffix: str, group_col: st
     if np.isfinite(arr).sum() < 6:
         return 0.0
     return float(np.nanmean(np.nanvar(arr, axis=1)) / max(np.nanvar(arr), 1e-12))
+
+
+def _positive_share(values: Iterable[object]) -> float:
+    arr = pd.to_numeric(pd.Series(values), errors="coerce").to_numpy(float)
+    finite = arr[np.isfinite(arr)]
+    return float(np.mean(finite > 0)) if finite.size else 0.0
+
+
+def _cv_positive(values: Iterable[object]) -> float:
+    arr = pd.to_numeric(pd.Series(values), errors="coerce").to_numpy(float)
+    pos = arr[np.isfinite(arr) & (arr > 0)]
+    if pos.size < 3:
+        return 0.0
+    return float(np.std(pos) / max(abs(np.mean(pos)), 1e-12))
+
+
+def _build_set_feature_matrix(
+    panel: pd.DataFrame,
+    channels: List[str],
+    target_channel: str,
+    support_series: Dict[str, pd.Series],
+    spend_series: Dict[str, pd.Series],
+    y: pd.Series,
+) -> tuple[np.ndarray, List[str], int]:
+    target_support = support_series.get(target_channel, pd.Series(dtype=float))
+    rows: List[List[float]] = []
+    target_index = 0
+    for i, ch in enumerate(channels):
+        if ch == target_channel:
+            target_index = i
+        support = support_series.get(ch, pd.Series(dtype=float))
+        spend = spend_series.get(ch, pd.Series(dtype=float))
+        rows.append(
+            [
+                float(ch == target_channel),
+                _positive_share(support),
+                _cv_positive(support),
+                _positive_share(spend),
+                _cv_positive(spend),
+                _safe_corr(support, spend),
+                _safe_corr(support, y),
+                _geo_variation(panel, ch, "_support"),
+                _geo_variation(panel, ch, "_spend"),
+                _safe_corr(support, target_support),
+                abs(_safe_corr(support, target_support)),
+            ]
+        )
+    cols = [
+        "is_target_channel",
+        "support_positive_share",
+        "support_cv_positive",
+        "spend_positive_share",
+        "spend_cv_positive",
+        "support_spend_corr",
+        "support_kpi_corr",
+        "geo_support_variation",
+        "geo_spend_variation",
+        "corr_with_target_support",
+        "abs_corr_with_target_support",
+    ]
+    return np.asarray(rows, dtype=float), cols, int(target_index)
 
 
 def _curve_target(response_curves: pd.DataFrame, channel: str, grid: np.ndarray = CURVE_GRID) -> np.ndarray:
@@ -182,10 +408,19 @@ def build_curve_prior_dataset(
     media_feature_inputs: Optional[List[str]] = None,
     controls: Optional[List[str]] = None,
     grid: np.ndarray = CURVE_GRID,
+    sequence_length: int = 104,
+    include_residualized_kpi_signal: bool = True,
 ) -> CurvePriorDataset:
     """Create per-channel curve-prior training examples from synthetic panels."""
     media_feature_inputs = media_feature_inputs or ["support", "spend"]
     rows: List[Dict[str, Any]] = []
+    channel_sequences: List[np.ndarray] = []
+    geo_sequences: List[np.ndarray] = []
+    set_matrices: List[np.ndarray] = []
+    target_channel_indices: List[int] = []
+    channel_sequence_columns: List[str] = []
+    geo_sequence_columns: List[str] = []
+    set_feature_columns: List[str] = []
     curve_targets: List[np.ndarray] = []
     adstock_targets: List[float] = []
     saturation_targets: List[float] = []
@@ -195,6 +430,7 @@ def build_curve_prior_dataset(
 
     for panel_id, synth in enumerate(panels):
         panel = synth.panel.copy()
+        dates = _ordered_dates(panel, sequence_length=sequence_length)
         split_group = getattr(synth, "curve_prior_split_group", panel_id)
         data_scenario = getattr(synth, "curve_prior_scenario", "unknown")
         geo_regime = getattr(synth, "curve_prior_geo_regime", "unknown")
@@ -217,6 +453,24 @@ def build_curve_prior_dataset(
             support = support_series[ch]
             spend = spend_series[ch]
             params = synth.truth_params.loc[synth.truth_params["channel"].astype(str).eq(ch)].head(1)
+            channel_seq, channel_cols = _build_channel_sequence(
+                panel,
+                ch,
+                dates,
+                media_feature_inputs=media_feature_inputs,
+                controls=local_controls,
+                include_residualized_kpi_signal=include_residualized_kpi_signal,
+            )
+            geo_seq, geo_cols = _build_geo_time_sequence(panel, ch, dates)
+            channel_seq = _pad_sequence_matrix(channel_seq, sequence_length)
+            geo_seq = _pad_sequence_matrix(geo_seq, sequence_length)
+            set_matrix, set_cols, target_index = _build_set_feature_matrix(panel, channels, ch, support_series, spend_series, y)
+            if not channel_sequence_columns:
+                channel_sequence_columns = channel_cols
+            if not geo_sequence_columns:
+                geo_sequence_columns = geo_cols
+            if not set_feature_columns:
+                set_feature_columns = set_cols
             feature_row: Dict[str, Any] = {
                 "panel_id": panel_id,
                 "split_group": str(split_group),
@@ -258,6 +512,10 @@ def build_curve_prior_dataset(
                 conf, fallback, uncertainty = 0.50, 0.50, 0.19
             adstock = float(params["decay"].iloc[0]) if not params.empty and "decay" in params.columns else 0.30
             rows.append(feature_row)
+            channel_sequences.append(channel_seq)
+            geo_sequences.append(geo_seq)
+            set_matrices.append(set_matrix)
+            target_channel_indices.append(target_index)
             curve_targets.append(_curve_target(synth.response_curves, ch, grid=grid))
             adstock_targets.append(float(np.clip(adstock, 0.0, 0.95)))
             saturation_targets.append(_target_saturation(synth.response_curves, ch))
@@ -277,31 +535,95 @@ def build_curve_prior_dataset(
     }
     feature_columns = [c for c in features.columns if c not in excluded and pd.api.types.is_numeric_dtype(features[c])]
     features[feature_columns] = features[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    max_channels = max((m.shape[0] for m in set_matrices), default=0)
+    set_tensor = np.zeros((len(set_matrices), max_channels, len(set_feature_columns)), dtype=float)
+    set_mask = np.zeros((len(set_matrices), max_channels), dtype=float)
+    for i, matrix in enumerate(set_matrices):
+        n_channels = matrix.shape[0]
+        set_tensor[i, :n_channels, :] = np.nan_to_num(matrix, nan=0.0, posinf=0.0, neginf=0.0)
+        set_mask[i, :n_channels] = 1.0
     return CurvePriorDataset(
         features=features,
         feature_columns=feature_columns,
+        channel_sequence_columns=channel_sequence_columns,
+        geo_sequence_columns=geo_sequence_columns,
+        set_feature_columns=set_feature_columns,
         curve_targets=np.vstack(curve_targets).astype(float),
         adstock_targets=np.asarray(adstock_targets, dtype=float),
         saturation_targets=np.asarray(saturation_targets, dtype=float),
         confidence_targets=np.asarray(confidence_targets, dtype=float),
         fallback_targets=np.asarray(fallback_targets, dtype=float),
         uncertainty_targets=np.asarray(uncertainty_targets, dtype=float),
+        channel_sequences=np.nan_to_num(np.stack(channel_sequences), nan=0.0, posinf=0.0, neginf=0.0) if channel_sequences else None,
+        geo_sequences=np.nan_to_num(np.stack(geo_sequences), nan=0.0, posinf=0.0, neginf=0.0) if geo_sequences else None,
+        set_features=set_tensor if len(set_matrices) else None,
+        set_channel_mask=set_mask if len(set_matrices) else None,
+        target_channel_index=np.asarray(target_channel_indices, dtype=int) if target_channel_indices else None,
     )
 
 
-def build_monotone_curve_prior_net(input_dim: int, curve_points: int = len(CURVE_GRID), hidden_size: int = 96, dropout: float = 0.05):
+def build_monotone_curve_prior_net(
+    input_dim: int,
+    curve_points: int = len(CURVE_GRID),
+    hidden_size: int = 96,
+    dropout: float = 0.05,
+    channel_sequence_dim: int = 0,
+    geo_sequence_dim: int = 0,
+    set_feature_dim: int = 0,
+):
     """Create the neural curve-prior model."""
     torch, nn, F = _require_torch_nn()
 
     class MonotoneCurvePriorNet(nn.Module):
         def __init__(self):
             super().__init__()
-            self.backbone = nn.Sequential(
+            self.latent_dim = max(16, hidden_size // 2)
+            self.has_channel_sequence = channel_sequence_dim > 0
+            self.has_geo_sequence = geo_sequence_dim > 0
+            self.has_set_features = set_feature_dim > 0
+            self.aggregate_backbone = nn.Sequential(
                 nn.Linear(input_dim, hidden_size),
                 nn.LayerNorm(hidden_size),
                 nn.SiLU(),
                 nn.Dropout(dropout),
                 nn.Linear(hidden_size, hidden_size),
+                nn.LayerNorm(hidden_size),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+            )
+            if self.has_channel_sequence:
+                self.channel_temporal_stem = nn.Sequential(
+                    nn.Conv1d(channel_sequence_dim, self.latent_dim, kernel_size=5, padding=2),
+                    nn.SiLU(),
+                    nn.Dropout(dropout),
+                    nn.Conv1d(self.latent_dim, self.latent_dim, kernel_size=3, padding=1),
+                    nn.SiLU(),
+                )
+            if self.has_geo_sequence:
+                self.geo_temporal_stem = nn.Sequential(
+                    nn.Conv1d(geo_sequence_dim, self.latent_dim, kernel_size=5, padding=2),
+                    nn.SiLU(),
+                    nn.Dropout(dropout),
+                    nn.Conv1d(self.latent_dim, self.latent_dim, kernel_size=3, padding=1),
+                    nn.SiLU(),
+                )
+            if self.has_set_features:
+                self.set_projection = nn.Linear(set_feature_dim, self.latent_dim)
+                encoder_layer = nn.TransformerEncoderLayer(
+                    d_model=self.latent_dim,
+                    nhead=4,
+                    dim_feedforward=max(hidden_size, self.latent_dim * 2),
+                    dropout=dropout,
+                    batch_first=True,
+                )
+                self.set_encoder = nn.TransformerEncoder(encoder_layer, num_layers=1)
+
+            fusion_dim = hidden_size
+            fusion_dim += self.latent_dim if self.has_channel_sequence else 0
+            fusion_dim += self.latent_dim if self.has_geo_sequence else 0
+            fusion_dim += self.latent_dim * 2 if self.has_set_features else 0
+            self.fusion = nn.Sequential(
+                nn.Linear(fusion_dim, hidden_size),
                 nn.LayerNorm(hidden_size),
                 nn.SiLU(),
                 nn.Dropout(dropout),
@@ -313,8 +635,34 @@ def build_monotone_curve_prior_net(input_dim: int, curve_points: int = len(CURVE
             self.fallback_head = nn.Linear(hidden_size, 1)
             self.uncertainty_head = nn.Linear(hidden_size, 1)
 
-        def forward(self, x):
-            h = self.backbone(x)
+        def _encode_temporal(self, stem, sequence):
+            encoded = stem(sequence.transpose(1, 2))
+            return encoded.mean(dim=-1)
+
+        def _encode_set(self, set_features, set_channel_mask, target_channel_index):
+            set_h = self.set_projection(set_features)
+            padding_mask = set_channel_mask <= 0 if set_channel_mask is not None else None
+            encoded = self.set_encoder(set_h, src_key_padding_mask=padding_mask)
+            if target_channel_index is None:
+                target_channel_index = torch.zeros(encoded.shape[0], dtype=torch.long, device=encoded.device)
+            gather_rows = torch.arange(encoded.shape[0], device=encoded.device)
+            target_h = encoded[gather_rows, target_channel_index]
+            if set_channel_mask is None:
+                pooled_h = encoded.mean(dim=1)
+            else:
+                weights = set_channel_mask.unsqueeze(-1).to(encoded.dtype)
+                pooled_h = torch.sum(encoded * weights, dim=1) / torch.clamp(torch.sum(weights, dim=1), min=1.0)
+            return torch.cat([target_h, pooled_h], dim=-1)
+
+        def forward(self, x, channel_sequence=None, geo_sequence=None, set_features=None, set_channel_mask=None, target_channel_index=None):
+            pieces = [self.aggregate_backbone(x)]
+            if self.has_channel_sequence and channel_sequence is not None:
+                pieces.append(self._encode_temporal(self.channel_temporal_stem, channel_sequence))
+            if self.has_geo_sequence and geo_sequence is not None:
+                pieces.append(self._encode_temporal(self.geo_temporal_stem, geo_sequence))
+            if self.has_set_features and set_features is not None:
+                pieces.append(self._encode_set(set_features, set_channel_mask, target_channel_index))
+            h = self.fusion(torch.cat(pieces, dim=-1))
             increments = F.softplus(self.increment_head(h)) + 1e-6
             curve_body = torch.cumsum(increments, dim=-1)
             curve_body = curve_body / torch.clamp(curve_body[:, -1:], min=1e-6)
@@ -380,9 +728,21 @@ def fit_curve_prior_model(
         curve_points=dataset.curve_targets.shape[1],
         hidden_size=hidden_size,
         dropout=dropout,
+        channel_sequence_dim=dataset.channel_sequences.shape[-1] if dataset.channel_sequences is not None else 0,
+        geo_sequence_dim=dataset.geo_sequences.shape[-1] if dataset.geo_sequences is not None else 0,
+        set_feature_dim=dataset.set_features.shape[-1] if dataset.set_features is not None else 0,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     x = torch.tensor(x_np, dtype=torch.float32, device=device)
+    channel_sequence_t = (
+        torch.tensor(dataset.channel_sequences, dtype=torch.float32, device=device) if dataset.channel_sequences is not None else None
+    )
+    geo_sequence_t = torch.tensor(dataset.geo_sequences, dtype=torch.float32, device=device) if dataset.geo_sequences is not None else None
+    set_features_t = torch.tensor(dataset.set_features, dtype=torch.float32, device=device) if dataset.set_features is not None else None
+    set_channel_mask_t = torch.tensor(dataset.set_channel_mask, dtype=torch.float32, device=device) if dataset.set_channel_mask is not None else None
+    target_channel_index_t = (
+        torch.tensor(dataset.target_channel_index, dtype=torch.long, device=device) if dataset.target_channel_index is not None else None
+    )
     curve_y = torch.tensor(dataset.curve_targets, dtype=torch.float32, device=device)
     adstock_y = torch.tensor(dataset.adstock_targets, dtype=torch.float32, device=device)
     saturation_y = torch.tensor(dataset.saturation_targets, dtype=torch.float32, device=device)
@@ -398,7 +758,14 @@ def fit_curve_prior_model(
     stale = 0
 
     def loss_for(indices):
-        out = model(x[indices])
+        out = model(
+            x[indices],
+            channel_sequence=channel_sequence_t[indices] if channel_sequence_t is not None else None,
+            geo_sequence=geo_sequence_t[indices] if geo_sequence_t is not None else None,
+            set_features=set_features_t[indices] if set_features_t is not None else None,
+            set_channel_mask=set_channel_mask_t[indices] if set_channel_mask_t is not None else None,
+            target_channel_index=target_channel_index_t[indices] if target_channel_index_t is not None else None,
+        )
         curve_loss = F.mse_loss(out["curve"], curve_y[indices])
         pred_marginal = out["curve"][:, 1:] - out["curve"][:, :-1]
         true_marginal = curve_y[indices][:, 1:] - curve_y[indices][:, :-1]
@@ -436,7 +803,14 @@ def fit_curve_prior_model(
 
     model.eval()
     with torch.no_grad():
-        out = model(x)
+        out = model(
+            x,
+            channel_sequence=channel_sequence_t,
+            geo_sequence=geo_sequence_t,
+            set_features=set_features_t,
+            set_channel_mask=set_channel_mask_t,
+            target_channel_index=target_channel_index_t,
+        )
     metadata_cols = [
         c
         for c in [
@@ -492,9 +866,19 @@ def fit_curve_prior_model(
             "feature_center": x_center.tolist(),
             "feature_scale": x_scale.tolist(),
             "model_type": "monotone_neural_curve_prior_net",
+            "architecture": "aggregate_mlp_plus_channel_tcn_plus_geo_tcn_plus_set_transformer",
+            "channel_sequence_columns": dataset.channel_sequence_columns,
+            "geo_sequence_columns": dataset.geo_sequence_columns,
+            "set_feature_columns": dataset.set_feature_columns,
             "scope": "curve/adstock prior builder, not final causal ROI model",
         },
-        model_state={"state_dict": model.state_dict(), "feature_columns": dataset.feature_columns},
+        model_state={
+            "state_dict": model.state_dict(),
+            "feature_columns": dataset.feature_columns,
+            "channel_sequence_columns": dataset.channel_sequence_columns,
+            "geo_sequence_columns": dataset.geo_sequence_columns,
+            "set_feature_columns": dataset.set_feature_columns,
+        },
     )
 
 
