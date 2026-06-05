@@ -31,6 +31,7 @@ table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showc
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_optimizer_group_rollup.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_optimizer_saturation_headroom.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_optimizer_response_curves.csv
+table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_optimizer_response_curve_uncertainty.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_optimizer_scenario_uncertainty_summary.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_optimizer_optimization_uncertainty_summary.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_optimizer_scenario_comparison.csv

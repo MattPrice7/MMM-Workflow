@@ -1157,6 +1157,50 @@ opsp_eval_draw_curve_variable <- function(draw_curves, draw_id, variable, multip
   )
 }
 
+opsp_build_response_curve_uncertainty <- function(draw_curves,
+                                                  step_pct = 0.01,
+                                                  value_per_kpi = NA_real_) {
+  dc <- opsp_normalize_response_curve_draws(draw_curves)
+  if (!nrow(dc)) return(data.table::data.table())
+  grid <- unique(dc[is.finite(spend_multiplier), .(.draw, variable, spend_multiplier)])
+  if (!nrow(grid)) return(data.table::data.table())
+  raw <- data.table::rbindlist(lapply(seq_len(nrow(grid)), function(i) {
+    opsp_eval_draw_curve_variable(
+      dc,
+      draw_id = grid$.draw[i],
+      variable = grid$variable[i],
+      multiplier = grid$spend_multiplier[i],
+      step_pct = step_pct,
+      value_per_kpi = value_per_kpi
+    )
+  }), use.names = TRUE, fill = TRUE)
+  if (!nrow(raw)) return(data.table::data.table())
+  raw[, .(
+    draw_n = data.table::uniqueN(.draw),
+    spend_q05 = opsp_quantile(spend, 0.05),
+    spend_q50 = opsp_quantile(spend, 0.50),
+    spend_q95 = opsp_quantile(spend, 0.95),
+    contribution_q05 = opsp_quantile(contribution, 0.05),
+    contribution_q50 = opsp_quantile(contribution, 0.50),
+    contribution_q95 = opsp_quantile(contribution, 0.95),
+    contribution_vs_current_q05 = opsp_quantile(contribution_vs_current, 0.05),
+    contribution_vs_current_q50 = opsp_quantile(contribution_vs_current, 0.50),
+    contribution_vs_current_q95 = opsp_quantile(contribution_vs_current, 0.95),
+    roi_q05 = opsp_quantile(roi, 0.05),
+    roi_q50 = opsp_quantile(roi, 0.50),
+    roi_q95 = opsp_quantile(roi, 0.95),
+    mroi_q05 = opsp_quantile(mroi, 0.05),
+    mroi_q50 = opsp_quantile(mroi, 0.50),
+    mroi_q95 = opsp_quantile(mroi, 0.95),
+    cost_per_kpi_q05 = opsp_quantile(cost_per_kpi, 0.05),
+    cost_per_kpi_q50 = opsp_quantile(cost_per_kpi, 0.50),
+    cost_per_kpi_q95 = opsp_quantile(cost_per_kpi, 0.95),
+    value_per_cost_q05 = opsp_quantile(value_per_cost, 0.05),
+    value_per_cost_q50 = opsp_quantile(value_per_cost, 0.50),
+    value_per_cost_q95 = opsp_quantile(value_per_cost, 0.95)
+  ), by = .(variable, spend_multiplier)][order(variable, spend_multiplier)]
+}
+
 opsp_build_uncertainty_tables <- function(draw_curves,
                                           vars,
                                           scenario_multipliers = c(0.8, 1, 1.2),
@@ -2530,6 +2574,7 @@ opsp_write_outputs <- function(out, output_dir = NULL, output_prefix = "") {
   }
   write_one(out$current_plan, "current_plan")
   write_one(out$response_curves, "response_curves")
+  write_one(out$response_curve_uncertainty, "response_curve_uncertainty")
   write_one(out$saturation_headroom, "saturation_headroom")
   write_one(out$scenario_summary, "scenario_summary")
   write_one(out$scenario_detail, "scenario_detail")
@@ -2780,6 +2825,11 @@ run_optimizer_scenario_planner <- function(fit_obj = NULL,
     value_per_kpi = value_per_kpi,
     uncertainty_quantile = uncertainty_quantile
   )
+  response_curve_uncertainty <- opsp_build_response_curve_uncertainty(
+    draw_curves = draw_curves,
+    step_pct = step_pct,
+    value_per_kpi = value_per_kpi
+  )
   diagnostics <- opsp_build_diagnostics(engine, current, opt, constraints = constraints)
   uncertainty_diagnostics <- data.table::data.table(
     uncertainty_mode = uncertainty_for_draws,
@@ -2825,6 +2875,7 @@ run_optimizer_scenario_planner <- function(fit_obj = NULL,
     ),
     current_plan = current[],
     response_curves = curves[],
+    response_curve_uncertainty = response_curve_uncertainty[],
     saturation_headroom = saturation_headroom[],
     scenario_summary = scenarios$summary[],
     scenario_detail = scenarios$detail[],
