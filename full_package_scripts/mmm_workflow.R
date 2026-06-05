@@ -36,6 +36,7 @@ mmm_source_bundle_file("mmm_deck_output_builder.R")
 mmm_source_bundle_file("quasi_experimental_dose_response_analysis.R")
 mmm_source_bundle_file("quasi_geo_test.R")
 mmm_source_bundle_file("hier_mmm.R")
+mmm_source_bundle_file("bau_response_curves.R")
 mmm_source_bundle_file("optimizer_scenario_planner.R")
 
 run_mmm_workflow <- run_mmm_prior_workflow
@@ -44,6 +45,7 @@ build_mmm_prior_metadata <- make_hier_metadata_from_prior_output
 run_mmm_quasi_geo_test <- run_quasi_geo_test
 run_mmm_dose_response_analysis <- run_quasi_experimental_dose_response_analysis
 run_mmm_reporting <- run_mmm_deck_output_builder
+run_mmm_bau_response_curves <- create_bau_response_curves
 run_mmm_optimizer_scenario_planner <- run_optimizer_scenario_planner
 run_mmm_dma_population <- function(script_file = "pull_dma_population.R", quiet = TRUE, ...) {
   path <- file.path(.mmm_workflow_base_dir, script_file)

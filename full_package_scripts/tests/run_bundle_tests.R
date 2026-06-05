@@ -27,6 +27,7 @@ tests <- file.path(test_dir, c(
   "test_quasi_geo_evidence_classes.R",
   "test_quasi_geo_to_stan_handoff.R",
   "test_prior_deck_hardening.R",
+  "test_bau_response_curves.R",
   "test_optimizer_scenario_planner.R"
 ))
 

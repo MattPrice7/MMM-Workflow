@@ -1,0 +1,11 @@
+test,status,detail
+main workflow exposes BAU response-curve helper,PASS,""
+BAU helper returns core tables,PASS,""
+BAU curves include total and group scopes,PASS,""
+channel anchor override is applied,PASS,""
+anchor saturation is reproduced by curve metadata,PASS,""
+population is used for group curves in auto support basis,PASS,""
+current multiplier is normalized to response index one,PASS,""
+business scale makes BAU curves optimizer-ready,PASS,""
+BAU curves can feed optimizer scenario planner,PASS,""
+BAU shape-only curves are clearly not optimizer-ready,PASS,""

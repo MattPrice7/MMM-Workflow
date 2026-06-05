@@ -57,6 +57,11 @@ Run `build_chart_builder_showcase.R` from that folder after chart-builder change
   - Includes target planning: minimum budget needed for a KPI target, and maximum budget that stays within target cost per KPI or ROI thresholds.
   - Current optimizer recommendation is point-estimate decision support unless a robust optimizer is selected. When draw-level response curves are supplied through `response_curve_draws`, `fit$response_curves_draws`, or `uncertainty = "draws"` with a Stan fit, the planner also outputs q05/q50/q95 and custom-quantile scenario and optimized-plan uncertainty tables. These include incremental contribution, incremental ROI, expected profit, q05/custom profit, probability profit is positive, and probability incremental contribution is positive. Profit fields require `value_per_kpi`; KPI-only workflows can still use contribution and cost-per-KPI uncertainty.
 
+- `bau_response_curves.R`
+  - Standalone BAU response-curve creator for pre-model planning, hand-built curves, or conservative defaults when a full MMM fit is not available.
+  - Uses historical support/spend flighting, optional group/model-ID rows, optional population scaling, Hill or Weibull curves, and channel-specific median saturation anchors. The default anchor is 50% saturation at median active support.
+  - Outputs optimizer-compatible response-curve rows when a business scale is supplied through current contribution, ROI-like outcome per cost, or cost-per-KPI. If no business scale is supplied, it still returns shape/audit curves but marks them `optimizer_ready = FALSE`.
+
 - `quasi_experimental_dose_response_analysis.R`
   - Standalone analyst-facing wrapper for observational quasi-experimental dose-response checks.
   - Uses the same ramp, pooled geo/segment, future-spend placebo, and spend-support logic as the prior builder.

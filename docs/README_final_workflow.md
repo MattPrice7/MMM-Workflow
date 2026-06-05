@@ -47,6 +47,11 @@ For maintenance, use `SCRIPT_ROADMAP.md` as the script-by-script backlog. It sep
   - Includes target planning: minimum budget needed for a KPI target, and maximum budget that stays within target cost per KPI or ROI thresholds.
   - Current version is point-estimate decision support. It preserves historical flighting by scaling channel support/spend and assumes constant cost per media/support unit unless the supplied response curve already encodes another cost assumption.
 
+- `bau_response_curves.R`
+  - Standalone BAU response-curve creator for pre-model planning, hand-built curves, or conservative defaults when a full MMM fit is not available.
+  - Uses historical support/spend flighting, optional group/model-ID rows, optional population scaling, Hill or Weibull curves, and channel-specific median saturation anchors. The default anchor is 50% saturation at median active support.
+  - Outputs optimizer-compatible response-curve rows when a business scale is supplied through current contribution, ROI-like outcome per cost, or cost-per-KPI. If no business scale is supplied, it still returns shape/audit curves but marks them `optimizer_ready = FALSE`.
+
 - `quasi_experimental_dose_response_analysis.R`
   - Standalone analyst-facing wrapper for observational quasi-experimental dose-response checks.
   - Uses the same ramp, pooled geo/segment, future-spend placebo, and spend-support logic as the prior builder.

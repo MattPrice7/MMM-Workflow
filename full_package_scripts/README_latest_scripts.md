@@ -10,6 +10,7 @@ Included:
 - Quasi geo and dose-response scripts
 - Hierarchical MMM R + Stan scripts
 - Optimizer / scenario planner
+- BAU response-curve helper
 - Deck/reporting helper
 - Validation scripts
 - DMA population helper copied from Downloads
@@ -30,5 +31,6 @@ Notes:
 - Business priors can be entered as `coef`, `roi`, `mroi`, `ikpc`, or `cpkpi` with explicit mean, SD/precision, and distribution audit fields either directly through `fit_hier_mmm(..., business_priors = ...)` or through the prior-workflow helper functions.
 - `hier_mmm.R` supports geometry sensitivity runs, model-readiness diagnostics, fixed-curve precomputation, optional Hill or Weibull media curves, and raw spend/support attachment to decomposition outputs.
 - `hier_mmm.R` can consume direct media metadata with or without `anchor_saturation`: no explicit curve-rate/anchor defaults to 50% saturation at median active support, and omitted `rrate` / `dvalue` default to no adstock and shape 1 unless overridden.
+- `bau_response_curves.R` creates deterministic BAU response curves from historical support/spend, optional groups, optional population scaling, and channel-specific median saturation anchors. It supports Hill and Weibull curves and only marks outputs optimizer-ready when a contribution, ROI-like, or cost-per-KPI business scale is supplied.
 - `optimizer_scenario_planner.R` is a standalone point-estimate scenario planner and greedy marginal-response budget optimizer. It always optimizes against response curves, preferably pulled from `fit$response_curves`, generated from a fitted Stan MMM object when needed, or supplied directly as a precomputed response-curve table. It includes fixed-budget, target-KPI, target cost-per-KPI/ROI planning modes, grid-based saturation/headroom diagnostics, and explicit spend/support preservation from response-curve sheets.
 - `synthetic_mmm_data_generators.R` contains reusable known-truth MMM, quasi-geo, and decomposition data generators for tests, demos, hostile validation, and future Neural MMM work.
