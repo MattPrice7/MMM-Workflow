@@ -211,6 +211,49 @@ add_result("normal likelihood and sampled dvalue flags propagate",
            sd3$likelihood_family == 1L && sd3$estimate_dvalue == 1L &&
              all(sd3$sample_curve_parameter == 1L))
 
+holiday_panel <- make_panel(groups = "G1", n = 18L)
+prep_holidays <- prepare_stan_data_hier_mmm(
+  data = holiday_panel,
+  metadata_input = make_meta("tv"),
+  dep_var_col = "y",
+  group_col = "geo",
+  time_col = "week",
+  entity_col = "entity",
+  intercept_type = "flat",
+  sample_curve_parameters = "never",
+  holiday_config = list(
+    calendar = "US_major",
+    windows = c("week_before", "week_of", "week_after"),
+    prefix = "us_holiday"
+  )
+)
+add_result("Stan prep can generate built-in holiday controls as extra regressors",
+           prep_holidays$stan_data$K_extra == 3L &&
+             nrow(prep_holidays$holiday_control_audit) == 3L &&
+             all(prep_holidays$holiday_control_audit$active_rows > 0) &&
+             all(prep_holidays$holiday_control_audit$generated_col %in% names(prep_holidays$data)))
+prep_custom_holiday <- prepare_stan_data_hier_mmm(
+  data = holiday_panel,
+  metadata_input = make_meta("tv"),
+  dep_var_col = "y",
+  group_col = "geo",
+  time_col = "week",
+  entity_col = "entity",
+  intercept_type = "flat",
+  sample_curve_parameters = "never",
+  holiday_config = list(
+    include_built_in = FALSE,
+    custom_holidays = data.table(holiday_name = "launch_week", holiday_date = as.Date("2024-02-04")),
+    windows = "week_of",
+    mode = "separate",
+    prefix = "custom_holiday"
+  )
+)
+add_result("Stan prep can generate custom holiday controls",
+           prep_custom_holiday$stan_data$K_extra == 1L &&
+             prep_custom_holiday$holiday_control_audit$holiday_name[1] == "launch_week" &&
+             prep_custom_holiday$holiday_control_audit$active_rows[1] == 1L)
+
 prep_multi_fixed_curve <- prepare_stan_data_hier_mmm(
   data = make_panel(groups = c("G1", "G2"), n = 18L),
   metadata_input = make_meta(c("tv", "national_tv")),
@@ -387,6 +430,8 @@ add_result("Stan business-prior conversion ignores perturbed holdout spend",
 
 add_result("fit_hier_mmm exposes direct business_priors front-door argument",
            all(c("business_priors", "kpi_value_per_outcome", "business_prior_default_relative_sd") %in% names(formals(fit_hier_mmm))))
+add_result("fit_hier_mmm exposes holiday_config front-door argument",
+           "holiday_config" %in% names(formals(fit_hier_mmm)))
 
 prep_national_media <- prepare_stan_data_hier_mmm(
   data = make_panel(groups = c("G1", "G2", "G3"), n = 20L),

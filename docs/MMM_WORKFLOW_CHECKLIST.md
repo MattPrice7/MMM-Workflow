@@ -58,11 +58,11 @@ Done:
 - [x] Direct business-prior inputs are available in the main Stan workflow wrapper through `fit_hier_mmm(..., business_priors = ...)`.
 - [x] Business-prior inputs accept `coef`, `roi`, `mroi`, `ikpc`, and `cpkpi` with SD or precision and convert to true inverse-variance coefficient precision on the Stan scale.
 - [x] Business-prior conversion uses training rows only when holdouts exist and writes a `business_prior_audit` table.
+- [x] Built-in holiday/control generation is available through `holiday_config` in `prepare_stan_data_hier_mmm()` and `fit_hier_mmm()`, with US major, EU major, global major, week-before/week-of/week-after windows, and custom holiday calendars.
 
 Active / Next:
 
 - [ ] Validate Hill and Weibull defaults against Meridian-style Hill-after-adstock behavior before changing the default curve family.
-- [ ] Add built-in holiday/control generation in the Stan workflow: selectable calendars, holiday week, week before, week after, and custom holiday calendars.
 - [ ] Make mROI / marginal CPKPI priors use true marginal-curve conversion, not average ROI conversion.
 - [ ] Add `kpi_value_per_outcome` to Stan output economics so revenue ROI can be computed when appropriate.
 - [ ] Add richer prior predictive simulation before sampling.

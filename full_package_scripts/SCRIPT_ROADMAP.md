@@ -8,7 +8,7 @@ This file is the working backlog for the script bundle. It separates production-
    - Keep as the top-priority production model layer.
    - Add channel-level median/half-saturation anchor overrides so each channel can use its own anchor, for example `median_anchor = 0.30` instead of a global 0.50 median non-zero support rule.
    - Revisit the default curve family. Meridian uses Hill + adstock as the standard media transform, with Hill applied after adstock by default. This bundle supports both `weibull` and `hill`; before changing the default, add tests that compare Weibull defaults to Hill slope-1 concave curves and verify response-curve/optimizer behavior.
-   - Add holiday-control generation inside the Stan workflow so analysts can request holiday dummies without hand-building columns. Options should include holiday week, week before, week after, country/region sets such as US major and EU major, and user-supplied holiday calendars.
+   - Done: add holiday-control generation inside the Stan workflow so analysts can request holiday dummies without hand-building columns. Options include holiday week, week before, week after, country/region sets such as US major and EU major, and user-supplied holiday calendars.
    - Keep UCM inside Stan for joint estimation with media. A separate pre-fit UCM helper can be added later for diagnostics or initialization, but it should not replace the joint model path.
    - Future cleanup: split internals into modules for metadata, validation, Stan data creation, transforms, UCM/baseline, execution, posterior extraction, decomposition, diagnostics, decisioning, and export.
 

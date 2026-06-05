@@ -442,6 +442,273 @@ build_fourier_matrix <- function(time_vec, period = 52L, harmonics = 2L) {
   out
 }
 
+parse_hier_mmm_dates <- function(x, label = "date") {
+  if (inherits(x, "Date")) return(as.Date(x))
+  if (inherits(x, "IDate")) return(as.Date(x))
+  if (inherits(x, "POSIXt")) return(as.Date(x))
+  if (is.numeric(x)) {
+    if (all(is.na(x))) return(as.Date(rep(NA, length(x))))
+    med <- stats::median(x, na.rm = TRUE)
+    if (is.finite(med) && med > 30000) return(as.Date(x, origin = "1899-12-30"))
+    if (is.finite(med) && med > 10000) return(as.Date(x, origin = "1970-01-01"))
+  }
+  out <- suppressWarnings(as.Date(x))
+  if (all(is.na(out)) && length(x)) {
+    stop("Could not parse ", label, " as dates for holiday control generation.", call. = FALSE)
+  }
+  out
+}
+
+hier_mmm_nth_weekday <- function(year, month, weekday, n) {
+  d0 <- as.Date(sprintf("%04d-%02d-01", as.integer(year), as.integer(month)))
+  w0 <- as.POSIXlt(d0)$wday
+  d <- d0 + ((weekday - w0) %% 7L) + 7L * (as.integer(n) - 1L)
+  as.Date(d)
+}
+
+hier_mmm_last_weekday <- function(year, month, weekday) {
+  first_next <- if (as.integer(month) == 12L) {
+    as.Date(sprintf("%04d-01-01", as.integer(year) + 1L))
+  } else {
+    as.Date(sprintf("%04d-%02d-01", as.integer(year), as.integer(month) + 1L))
+  }
+  d0 <- first_next - 1L
+  w0 <- as.POSIXlt(d0)$wday
+  as.Date(d0 - ((w0 - weekday) %% 7L))
+}
+
+hier_mmm_easter_date <- function(year) {
+  y <- as.integer(year)
+  a <- y %% 19L
+  b <- y %/% 100L
+  c <- y %% 100L
+  d <- b %/% 4L
+  e <- b %% 4L
+  f <- (b + 8L) %/% 25L
+  g <- (b - f + 1L) %/% 3L
+  h <- (19L * a + b - d - g + 15L) %% 30L
+  i <- c %/% 4L
+  k <- c %% 4L
+  l <- (32L + 2L * e + 2L * i - h - k) %% 7L
+  m <- (a + 11L * h + 22L * l) %/% 451L
+  month <- (h + l - 7L * m + 114L) %/% 31L
+  day <- ((h + l - 7L * m + 114L) %% 31L) + 1L
+  as.Date(sprintf("%04d-%02d-%02d", y, month, day))
+}
+
+hier_mmm_holiday_catalog <- function(calendars, years) {
+  calendars <- tolower(trimws(as.character(calendars %||% "us_major")))
+  calendars[is.na(calendars) | !nzchar(calendars)] <- "us_major"
+  calendars[calendars %in% c("us", "usa", "united_states", "us-major")] <- "us_major"
+  calendars[calendars %in% c("eu", "europe", "eu-major")] <- "eu_major"
+  calendars[calendars %in% c("global", "global-major", "major")] <- "global_major"
+  years <- sort(unique(as.integer(years[is.finite(years)])))
+  rows <- list()
+  for (cal in unique(calendars)) {
+    for (yy in years) {
+      if (identical(cal, "us_major")) {
+        rows[[length(rows) + 1L]] <- data.table(
+          calendar = cal,
+          holiday_name = c(
+            "new_years_day", "martin_luther_king_day", "memorial_day",
+            "independence_day", "labor_day", "thanksgiving_day", "christmas_day"
+          ),
+          holiday_date = as.Date(c(
+            sprintf("%04d-01-01", yy),
+            as.character(hier_mmm_nth_weekday(yy, 1L, 1L, 3L)),
+            as.character(hier_mmm_last_weekday(yy, 5L, 1L)),
+            sprintf("%04d-07-04", yy),
+            as.character(hier_mmm_nth_weekday(yy, 9L, 1L, 1L)),
+            as.character(hier_mmm_nth_weekday(yy, 11L, 4L, 4L)),
+            sprintf("%04d-12-25", yy)
+          ))
+        )
+      } else if (identical(cal, "eu_major")) {
+        easter <- hier_mmm_easter_date(yy)
+        rows[[length(rows) + 1L]] <- data.table(
+          calendar = cal,
+          holiday_name = c("new_years_day", "easter_monday", "may_day", "christmas_day", "boxing_day"),
+          holiday_date = as.Date(c(
+            sprintf("%04d-01-01", yy),
+            as.character(easter + 1L),
+            sprintf("%04d-05-01", yy),
+            sprintf("%04d-12-25", yy),
+            sprintf("%04d-12-26", yy)
+          ))
+        )
+      } else if (identical(cal, "global_major")) {
+        rows[[length(rows) + 1L]] <- data.table(
+          calendar = cal,
+          holiday_name = c("new_years_day", "christmas_day"),
+          holiday_date = as.Date(c(sprintf("%04d-01-01", yy), sprintf("%04d-12-25", yy)))
+        )
+      } else {
+        stop("Unsupported built-in holiday calendar: ", cal,
+             ". Use 'US_major', 'EU_major', 'global_major', or pass custom_holidays.", call. = FALSE)
+      }
+    }
+  }
+  if (!length(rows)) return(data.table(calendar = character(), holiday_name = character(), holiday_date = as.Date(character())))
+  unique(rbindlist(rows, fill = TRUE))
+}
+
+hier_mmm_custom_holidays <- function(custom_holidays = NULL) {
+  if (is.null(custom_holidays)) {
+    return(data.table(calendar = character(), holiday_name = character(), holiday_date = as.Date(character())))
+  }
+  if (inherits(custom_holidays, "Date") || is.character(custom_holidays) || is.numeric(custom_holidays)) {
+    dates <- parse_hier_mmm_dates(custom_holidays, label = "custom_holidays")
+    names_in <- names(custom_holidays)
+    return(data.table(
+      calendar = "custom",
+      holiday_name = if (!is.null(names_in) && length(names_in) == length(dates)) make.names(names_in) else paste0("custom_", seq_along(dates)),
+      holiday_date = dates
+    ))
+  }
+  ch <- as.data.table(copy(custom_holidays))
+  dcol <- intersect(c("holiday_date", "date", "period", "week", "ds"), names(ch))[1]
+  if (is.na(dcol)) stop("custom_holidays must include holiday_date/date/period/week/ds.", call. = FALSE)
+  ncol <- intersect(c("holiday_name", "holiday", "name", "event"), names(ch))[1]
+  ccol <- intersect(c("calendar", "region", "country"), names(ch))[1]
+  out <- data.table(
+    calendar = if (!is.na(ccol)) as.character(ch[[ccol]]) else "custom",
+    holiday_name = if (!is.na(ncol)) as.character(ch[[ncol]]) else paste0("custom_", seq_len(nrow(ch))),
+    holiday_date = parse_hier_mmm_dates(ch[[dcol]], label = "custom_holidays")
+  )
+  out[is.na(calendar) | !nzchar(calendar), calendar := "custom"]
+  out[is.na(holiday_name) | !nzchar(holiday_name), holiday_name := paste0("custom_", .I)]
+  unique(out[!is.na(holiday_date)])
+}
+
+normalize_holiday_config_hier_mmm <- function(holiday_config = NULL) {
+  if (is.null(holiday_config) || identical(holiday_config, FALSE)) {
+    return(list(enabled = FALSE))
+  }
+  if (identical(holiday_config, TRUE)) holiday_config <- list()
+  if (!is.list(holiday_config)) stop("holiday_config must be TRUE/FALSE or a list.", call. = FALSE)
+  calendars <- holiday_config$calendars %||% holiday_config$calendar %||% "US_major"
+  windows <- tolower(trimws(as.character(holiday_config$windows %||% holiday_config$window %||% "week_of")))
+  windows[windows %in% c("holiday", "current", "during", "week", "weekof", "same_week")] <- "week_of"
+  windows[windows %in% c("before", "pre", "lead", "previous", "prior", "week-before")] <- "week_before"
+  windows[windows %in% c("after", "post", "lag", "following", "next", "week-after")] <- "week_after"
+  bad <- setdiff(unique(windows), c("week_before", "week_of", "week_after"))
+  if (length(bad)) stop("Unsupported holiday windows: ", paste(bad, collapse = ", "),
+                        ". Use week_before, week_of, and/or week_after.", call. = FALSE)
+  mode <- tolower(trimws(as.character(holiday_config$mode %||% "aggregate")))[1]
+  if (!mode %in% c("aggregate", "separate")) stop("holiday_config$mode must be 'aggregate' or 'separate'.", call. = FALSE)
+  period_days <- suppressWarnings(as.integer(holiday_config$period_days %||% NA_integer_))[1]
+  if (!is.na(period_days) && (!is.finite(period_days) || period_days <= 0L)) stop("holiday_config$period_days must be a positive integer.", call. = FALSE)
+  list(
+    enabled = TRUE,
+    calendars = calendars,
+    custom_holidays = holiday_config$custom_holidays,
+    windows = unique(windows),
+    mode = mode,
+    prefix = as.character(holiday_config$prefix %||% "holiday")[1],
+    period_days = period_days,
+    include_built_in = isTRUE(holiday_config$include_built_in %||% TRUE)
+  )
+}
+
+add_holiday_controls_hier_mmm <- function(data, time_col, holiday_config = NULL, existing_extra_cols = NULL) {
+  cfg <- normalize_holiday_config_hier_mmm(holiday_config)
+  dt <- as.data.table(copy(data))
+  if (!isTRUE(cfg$enabled)) {
+    return(list(data = dt, extra_control_cols = existing_extra_cols %||% character(), audit = data.table()))
+  }
+  if (!(time_col %in% names(dt))) stop("time_col not found for holiday controls: ", time_col, call. = FALSE)
+  period_start <- parse_hier_mmm_dates(dt[[time_col]], label = time_col)
+  if (anyNA(period_start)) stop("time_col contains unparseable dates for holiday controls.", call. = FALSE)
+  unique_dates <- sort(unique(period_start))
+  inferred_days <- if (length(unique_dates) >= 2L) {
+    diffs <- as.integer(diff(unique_dates))
+    diffs <- diffs[is.finite(diffs) & diffs > 0L]
+    if (length(diffs)) as.integer(stats::median(diffs)) else 7L
+  } else {
+    7L
+  }
+  period_days <- cfg$period_days
+  if (!is.finite(period_days) || is.na(period_days) || period_days <= 0L) period_days <- inferred_days
+  period_end <- period_start + period_days - 1L
+  years <- seq(
+    as.integer(format(min(period_start, na.rm = TRUE) - period_days * 2L, "%Y")),
+    as.integer(format(max(period_end, na.rm = TRUE) + period_days * 2L, "%Y"))
+  )
+  holidays <- data.table()
+  if (isTRUE(cfg$include_built_in)) holidays <- hier_mmm_holiday_catalog(cfg$calendars, years)
+  holidays <- rbindlist(list(holidays, hier_mmm_custom_holidays(cfg$custom_holidays)), fill = TRUE)
+  holidays <- unique(holidays[!is.na(holiday_date)])
+  if (!nrow(holidays)) {
+    return(list(data = dt, extra_control_cols = existing_extra_cols %||% character(), audit = data.table()))
+  }
+  window_offsets <- c(week_before = -1L, week_of = 0L, week_after = 1L)
+  make_col <- function(parts) {
+    nm <- paste(parts[nzchar(parts)], collapse = "_")
+    nm <- gsub("[^A-Za-z0-9_]+", "_", nm)
+    nm <- gsub("_+", "_", nm)
+    nm <- gsub("^_|_$", "", nm)
+    if (!nzchar(nm)) nm <- "holiday_control"
+    nm
+  }
+  add_col_safe <- function(base) {
+    col <- base
+    ii <- 1L
+    while (col %in% names(dt)) {
+      ii <- ii + 1L
+      col <- paste0(base, "_", ii)
+    }
+    col
+  }
+  audit_rows <- list()
+  generated_cols <- character()
+  for (ww in cfg$windows) {
+    offset <- window_offsets[[ww]]
+    if (identical(cfg$mode, "aggregate")) {
+      col <- add_col_safe(make_col(c(cfg$prefix, ww)))
+      dt[, (col) := 0]
+      target_dates <- holidays$holiday_date + offset * period_days
+      flag <- vapply(seq_along(period_start), function(i) any(target_dates >= period_start[i] & target_dates <= period_end[i]), logical(1))
+      dt[, (col) := as.numeric(flag)]
+      generated_cols <- c(generated_cols, col)
+      audit_rows[[length(audit_rows) + 1L]] <- data.table(
+        generated_col = col,
+        mode = cfg$mode,
+        window = ww,
+        calendar = paste(sort(unique(holidays$calendar)), collapse = "|"),
+        holiday_name = "all",
+        holiday_count = length(unique(holidays$holiday_date)),
+        active_rows = sum(flag, na.rm = TRUE),
+        period_days = period_days
+      )
+    } else {
+      for (hh in seq_len(nrow(holidays))) {
+        hname <- tolower(make.names(holidays$holiday_name[hh]))
+        col <- add_col_safe(make_col(c(cfg$prefix, hname, ww)))
+        target_date <- holidays$holiday_date[hh] + offset * period_days
+        flag <- target_date >= period_start & target_date <= period_end
+        dt[, (col) := as.numeric(flag)]
+        generated_cols <- c(generated_cols, col)
+        audit_rows[[length(audit_rows) + 1L]] <- data.table(
+          generated_col = col,
+          mode = cfg$mode,
+          window = ww,
+          calendar = holidays$calendar[hh],
+          holiday_name = holidays$holiday_name[hh],
+          holiday_count = 1L,
+          active_rows = sum(flag, na.rm = TRUE),
+          period_days = period_days
+        )
+      }
+    }
+  }
+  audit <- rbindlist(audit_rows, fill = TRUE)
+  list(
+    data = dt,
+    extra_control_cols = unique(c(existing_extra_cols %||% character(), generated_cols)),
+    audit = audit
+  )
+}
+
 
 parse_model_intercept <- function(intercept_type = "fourier", ucm_spec = NULL) {
   itype <- tolower(trimws(as.character(intercept_type %||% "fourier")))
@@ -1519,6 +1786,7 @@ prepare_stan_data_hier_mmm <- function(data,
                                        time_col,
                                        entity_col,
                                        extra_control_cols = NULL,
+                                       holiday_config = NULL,
                                        mean_index = TRUE,
                                        dep_mean_index_scope = c("group", "global"),
                                        x_mean_index_scope = c("group", "global"),
@@ -1656,6 +1924,14 @@ prepare_stan_data_hier_mmm <- function(data,
   if (!is.null(holdout_col) && !(holdout_col %in% names(dt))) {
     stop("holdout_col not found in data: ", holdout_col)
   }
+  holiday_controls <- add_holiday_controls_hier_mmm(
+    data = dt,
+    time_col = time_col,
+    holiday_config = holiday_config,
+    existing_extra_cols = extra_control_cols
+  )
+  dt <- holiday_controls$data
+  extra_control_cols <- holiday_controls$extra_control_cols
   holdout_last_n <- as.integer(holdout_last_n %||% 0L)
   if (!is.finite(holdout_last_n) || is.na(holdout_last_n) || holdout_last_n < 0L) {
     stop("holdout_last_n must be a non-negative integer.")
@@ -2292,7 +2568,9 @@ prepare_stan_data_hier_mmm <- function(data,
     dep_mean_index_scope = dep_mean_index_scope,
     x_mean_index_scope = x_mean_index_scope,
     dep_scale_col = dep_scale_col,
-    coef_override_long = coef_overrides$long
+    coef_override_long = coef_overrides$long,
+    holiday_control_audit = holiday_controls$audit,
+    holiday_config = holiday_config
   )
 }
 
@@ -3670,6 +3948,7 @@ fit_hier_mmm_engine <- function(data,
                          time_col,
                          entity_col,
                          extra_control_cols = NULL,
+                         holiday_config = NULL,
                          mean_index = TRUE,
                          dep_mean_index_scope = c("group", "global"),
                          x_mean_index_scope = c("group", "global"),
@@ -3796,6 +4075,7 @@ fit_hier_mmm_engine <- function(data,
     time_col = time_col,
     entity_col = entity_col,
     extra_control_cols = extra_control_cols,
+    holiday_config = holiday_config,
     mean_index = mean_index,
     dep_mean_index_scope = dep_mean_index_scope,
     x_mean_index_scope = x_mean_index_scope,
@@ -4056,6 +4336,8 @@ fit_hier_mmm_engine <- function(data,
     hard_prior_precision_threshold = prep$hard_prior_precision_threshold,
     checkpoint_file = checkpoint_file,
     ucm_prior_controls = prep$ucm_prior_controls,
+    holiday_control_audit = prep$holiday_control_audit,
+    holiday_config = prep$holiday_config,
     ignored_data_cols = prep$ignored_data_cols,
     holdout_col = prep$holdout_col,
     holdout_last_n = prep$holdout_last_n,
@@ -5411,6 +5693,7 @@ fit_hier_mmm <- function(data,
                          time_col,
                          entity_col,
                          baseline_config = NULL,
+                         holiday_config = NULL,
                          spend_map = NULL,
                          business_priors = NULL,
                          kpi_value_per_outcome = 1,
@@ -5460,12 +5743,16 @@ fit_hier_mmm <- function(data,
     group_col = group_col,
     time_col = time_col,
     entity_col = entity_col,
+    holiday_config = holiday_config,
     output_dir = output_dir,
     output_prefix = output_prefix
   ))
 
   if (!is.null(baseline_config)) {
     bc <- baseline_config
+    if (is.null(holiday_config) && !is.null(bc$holiday_config)) {
+      engine_args$holiday_config <- bc$holiday_config
+    }
     if (!is.null(bc$type)) engine_args$intercept_type <- as.character(bc$type)
     ucm_names <- intersect(names(bc), c("level", "season", "cycle", "season_period", "season_harmonics", "cycle_period", "cycle_harmonics"))
     if (length(ucm_names)) {
