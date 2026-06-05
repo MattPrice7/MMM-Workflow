@@ -15,6 +15,7 @@ Included:
 - Validation scripts
 - DMA population helper copied from Downloads
 - `SCRIPT_ROADMAP.md`, which is the script-by-script production backlog and should be the first place to add new ideas before changing code.
+- `ANALYST_THOUGHTS_SCRATCHPAD.md`, `ANALYST_IDEA_BACKLOG.md`, and `analyst_note_reviews/` keep rough analyst ideas separated from cleaned implementation decisions.
 
 Notes:
 - Source `mmm_workflow.R` for the normal analyst workflow.

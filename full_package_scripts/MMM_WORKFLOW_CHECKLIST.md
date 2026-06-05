@@ -23,6 +23,8 @@ The package does include a Bayesian model. Documentation should not imply that t
 - [x] Keep a clean project folder: `MMM_Workflow/`.
 - [x] Core files must stand on their own: Stan, quasi-geo, optimizer, and chart builder should not require the prior-recovery workflow.
 - [x] Add explicit core standalone contract test covering Stan, quasi-geo, optimizer, deck builder, and workflow aliases.
+- [x] Add cleaned analyst idea workflow: raw scratchpad, dated review notes, and cleaned idea backlog.
+- [ ] Standardize optional variable metadata for reporting and planning rollups: `parent_channel`, `sub_channel`, `placement`, `creative`, `funnel_stage`, and `channel_family`.
 - [ ] Move to formal R package structure later: `DESCRIPTION`, `NAMESPACE`, `R/`, `inst/stan/`, `tests/testthat/`, examples, optional `renv.lock`.
 - [ ] Split large scripts only after core logic stabilizes. Preserve public analyst-facing function names.
 - [ ] Add one centralized config object/list for common workflow settings.
@@ -73,6 +75,9 @@ Active / Next:
 - [ ] Add diagnostics for baseline/UCM absorbing too much unexplained shock.
 - [ ] Validate brand-equity KPIs such as awareness, consideration, subscriptions, leads, or other non-revenue outcomes. Report KPI economics as cost per KPI / outcome per cost unless a value per KPI is supplied.
 - [ ] Add reach/frequency modeling when reach, frequency, impressions, or population are available.
+- [ ] Future / maybe: evaluate explicit interaction or effect-modifier helpers before adding time-varying coefficients. Examples include upper-funnel media modifying search response or seasonally varying channel effectiveness.
+- [ ] Future / maybe: evaluate highly regularized time-varying media coefficients only after simpler interactions, controls, and baseline diagnostics are mature.
+- [ ] Future / maybe: evaluate brand-equity or long-run media-stock states only when external signals exist, such as awareness, organic search, branded search, consideration, or other demand indicators.
 - [ ] Future / maybe: add optional `model_id_parts` metadata, e.g. `model_id`, `dimension_name`, `dimension_value`, so analysts can describe flexible model-cell pieces such as DMA, product, LOB, retailer, store type, segment, or platform. Keep the core model generic; use this only for rollups, diagnostics, optional hierarchy/shrinkage instructions, and future “pool across this dimension but not that one” settings.
 
 Important interpretation:
@@ -144,6 +149,8 @@ Done:
 - [x] Add custom conservative uncertainty quantiles plus incremental contribution, incremental ROI, expected profit, q05/custom profit, and probability-positive metrics for scenario and optimized-plan uncertainty outputs.
 - [x] Add robust optimizer objective support for expected profit, custom-quantile incremental contribution, custom-quantile incremental ROI, custom-quantile profit, probability profit positive, and probability incremental contribution positive.
 - [x] Add optimizer outputs into deck builder charts.
+- [ ] Add curve confidence/evidence labels into optimizer outputs when supplied by Stan response-curve draws, quasi-geo evidence, or analyst-provided curve metadata.
+- [ ] Add future flighting and cost assumptions to optimizer scenarios, so planning can distinguish scaling historical support, changing cost per support unit, and changing flight timing.
 
 ## 3.1 Meridian / Core Method Gaps
 
@@ -183,6 +190,12 @@ Done:
 Next:
 
 - [ ] Add client color palette/channel color inputs.
+- [ ] Add searchable dropdown slicers and more flexible chart filters.
+- [ ] Add period-change filters so analysts can compare selected periods, not only static totals.
+- [ ] Add channel/subchannel filters using optional variable metadata such as `parent_channel`, `sub_channel`, placement, creative, and funnel stage.
+- [ ] Add fair share index and bubble charts where axes can compare spend, contribution, ROI/cost-per-KPI, and bubble size can represent contribution or spend.
+- [ ] Add posterior/credible interval bands to contribution, response-curve, ROI, and mROI charts when draw-level outputs are available.
+- [ ] Add posterior diagnostic plots for coefficients, prior-vs-posterior shifts, and parameter uncertainty.
 - [ ] Add quasi-geo treated-vs-synthetic, media shock, donor weights, placebo distribution, and evidence-prior audit charts.
 
 Recommendation:

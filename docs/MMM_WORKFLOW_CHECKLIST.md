@@ -23,6 +23,8 @@ The package does include a Bayesian model. Documentation should not imply that t
 - [x] Keep a clean project folder: `MMM_Workflow/`.
 - [x] Core files must stand on their own: Stan, quasi-geo, optimizer, and chart builder should not require the prior-recovery workflow.
 - [x] Add explicit core standalone contract test covering Stan, quasi-geo, optimizer, deck builder, and workflow aliases.
+- [x] Add cleaned analyst idea workflow: raw scratchpad, dated review notes, and cleaned idea backlog.
+- [ ] Standardize optional variable metadata for reporting and planning rollups: `parent_channel`, `sub_channel`, `placement`, `creative`, `funnel_stage`, and `channel_family`.
 - [ ] Move to formal R package structure later: `DESCRIPTION`, `NAMESPACE`, `R/`, `inst/stan/`, `tests/testthat/`, examples, optional `renv.lock`.
 - [ ] Split large scripts only after core logic stabilizes. Preserve public analyst-facing function names.
 - [ ] Add one centralized config object/list for common workflow settings.
@@ -71,6 +73,9 @@ Active / Next:
 - [ ] Add diagnostics for baseline/UCM absorbing too much unexplained shock.
 - [ ] Validate brand-equity KPIs such as awareness, consideration, subscriptions, leads, or other non-revenue outcomes. Report KPI economics as cost per KPI / outcome per cost unless a value per KPI is supplied.
 - [ ] Add reach/frequency modeling when reach, frequency, impressions, or population are available.
+- [ ] Future / maybe: evaluate explicit interaction or effect-modifier helpers before adding time-varying coefficients. Examples include upper-funnel media modifying search response or seasonally varying channel effectiveness.
+- [ ] Future / maybe: evaluate highly regularized time-varying media coefficients only after simpler interactions, controls, and baseline diagnostics are mature.
+- [ ] Future / maybe: evaluate brand-equity or long-run media-stock states only when external signals exist, such as awareness, organic search, branded search, consideration, or other demand indicators.
 
 Important interpretation:
 
@@ -171,6 +176,7 @@ Next:
 - [ ] Add current vs optimized budget scenario charts.
 - [ ] Add quasi-geo treated-vs-synthetic, media shock, donor weights, placebo distribution, and evidence-prior audit charts.
 - [ ] Add standard chart registry fields: `chart_id`, `chart_name`, `audience`, `required_columns`, `skip_if_missing_columns`, `business_question_answered`, `recommended_slide_title`.
+- [ ] Add chart-builder usability improvements: searchable slicers, client palettes, period-change filters, channel/subchannel filters, fair-share and bubble charts, and posterior/credible interval bands where draw-level outputs exist.
 
 Recommendation:
 
