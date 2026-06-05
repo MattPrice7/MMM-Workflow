@@ -186,6 +186,8 @@ def make_synthetic_mmm_panel(
     randomize_channel_parameters: bool = False,
     permute_channel_roles: bool = False,
     volatile_media_measurement: bool = False,
+    evolving_media_costs: bool = False,
+    geo_media_pattern: str = "mixed",
     business_shocks: bool = False,
     control_availability: str = "standard",
     kpi_scale_multiplier: float = 1.0,
@@ -200,6 +202,7 @@ def make_synthetic_mmm_panel(
     rng = np.random.default_rng(seed)
     scenario = str(scenario).lower()
     curve_type = str(curve_type).lower()
+    geo_media_pattern = str(geo_media_pattern).lower()
     if scenario == "messy_realistic":
         national_media_share = max(national_media_share, 0.35)
         collinear_media_strength = max(collinear_media_strength, 0.35)
@@ -223,11 +226,22 @@ def make_synthetic_mmm_panel(
         raise ValueError("scenario must be one of: standard, messy_realistic, hostile_collinear, weak_geo")
     if curve_type != "mixed" and curve_type not in SUPPORTED_CURVE_TYPES:
         raise ValueError(f"curve_type must be 'mixed' or one of: {', '.join(SUPPORTED_CURVE_TYPES)}")
+    valid_geo_patterns = {
+        "mixed",
+        "all_channels_similar_geo_trends",
+        "some_channels_similar_geo_trends",
+        "some_channels_differentiated",
+        "one_channel_geo_differentiated",
+        "embedded_geo_lift_test",
+        "population_distributed_national",
+    }
+    if geo_media_pattern not in valid_geo_patterns:
+        raise ValueError(f"geo_media_pattern must be one of: {', '.join(sorted(valid_geo_patterns))}")
     collinear_media_strength = float(np.clip(collinear_media_strength, 0.0, 0.95))
     missing_media_rate = float(np.clip(missing_media_rate, 0.0, 0.50))
     control_availability = str(control_availability).lower()
-    if control_availability not in {"none", "partial", "standard", "rich", "noisy_proxy"}:
-        raise ValueError("control_availability must be one of: none, partial, standard, rich, noisy_proxy")
+    if control_availability not in {"none", "partial", "standard", "rich", "noisy_proxy", "public_macro"}:
+        raise ValueError("control_availability must be one of: none, partial, standard, rich, noisy_proxy, public_macro")
     kpi_scale_multiplier = max(float(kpi_scale_multiplier), 1e-6)
     channels = channels or ["tv", "search", "social", "display"]
     curve_type_by_channel: Dict[str, str] = {}
@@ -275,6 +289,8 @@ def make_synthetic_mmm_panel(
     geo_scale = geo_scale / geo_scale.mean()
     geo_base = pd.Series(rng.uniform(850, 1250, size=n_geos), index=geos) * geo_scale
     geo_population = (900000 * geo_scale * rng.lognormal(mean=0.0, sigma=0.12, size=n_geos)).round().astype(int)
+    geo_population_share = pd.Series(geo_population, index=geos) / max(float(np.sum(geo_population)), 1.0)
+    geo_population_index = geo_population_share / max(float(geo_population_share.mean()), 1e-12)
 
     rows = []
     media_store: Dict[str, Dict[str, np.ndarray]] = {ch: {} for ch in channels}
@@ -291,9 +307,21 @@ def make_synthetic_mmm_panel(
             zero_inflated=zero_inflated_media,
         )
     }
+    geo_lift_channel = channels[0] if channels else None
+    geo_lift_treated = set(rng.choice(geos, size=max(1, n_geos // 4), replace=False).tolist()) if geos else set()
+    geo_lift_start = int(rng.integers(18, max(19, n_weeks - 14))) if n_weeks >= 40 else max(0, n_weeks // 2)
+    geo_lift_len = int(rng.integers(5, 11)) if n_weeks >= 40 else max(2, n_weeks // 8)
+    geo_lift_multiplier = float(rng.uniform(1.75, 2.80))
+    similar_channel_cutoff = max(1, int(np.ceil(len(channels) * 0.60)))
 
     for ch_i, ch in enumerate(channels):
         is_national = rng.uniform() < national_media_share
+        if geo_media_pattern in {"all_channels_similar_geo_trends", "population_distributed_national"}:
+            is_national = True
+        elif geo_media_pattern in {"some_channels_similar_geo_trends", "some_channels_differentiated"} and ch_i < similar_channel_cutoff:
+            is_national = True
+        elif geo_media_pattern in {"one_channel_geo_differentiated", "embedded_geo_lift_test"} and ch == geo_lift_channel:
+            is_national = False
         national_flags[ch] = bool(is_national)
         national_support = _media_series(
             rng,
@@ -304,7 +332,9 @@ def make_synthetic_mmm_panel(
             zero_inflated=zero_inflated_media,
         )
         for geo in geos:
-            if is_national:
+            if geo_media_pattern == "population_distributed_national" or (is_national and rng.uniform() < 0.35 and geo_media_pattern != "mixed"):
+                support = national_support * float(geo_population_index[geo])
+            elif is_national:
                 support = national_support * float(geo_scale[geo])
             else:
                 support = _media_series(
@@ -315,11 +345,53 @@ def make_synthetic_mmm_panel(
                     ramp=True,
                     zero_inflated=zero_inflated_media,
                 )
+            if geo_media_pattern == "some_channels_differentiated" and ch_i >= similar_channel_cutoff:
+                local_wave = _media_series(
+                    rng,
+                    n_weeks,
+                    base=float(rng.uniform(25, 85)) * float(geo_scale[geo]),
+                    season_phase=float(rng.uniform(0, 2 * np.pi)),
+                    ramp=True,
+                    zero_inflated=zero_inflated_media,
+                )
+                support = 0.70 * support + 0.30 * local_wave
+            if geo_media_pattern == "one_channel_geo_differentiated" and ch == geo_lift_channel:
+                geo_pulse = np.ones(n_weeks)
+                if geo in geo_lift_treated:
+                    start = geo_lift_start
+                    end = min(n_weeks, start + geo_lift_len)
+                    geo_pulse[start:end] *= float(rng.uniform(1.45, 2.20))
+                support = support * geo_pulse
+            if geo_media_pattern == "embedded_geo_lift_test" and ch == geo_lift_channel:
+                geo_pulse = np.ones(n_weeks)
+                if geo in geo_lift_treated:
+                    start = geo_lift_start
+                    end = min(n_weeks, start + geo_lift_len)
+                    geo_pulse[start:end] *= geo_lift_multiplier
+                else:
+                    geo_pulse[geo_lift_start : min(n_weeks, geo_lift_start + geo_lift_len)] *= float(rng.uniform(0.85, 1.08))
+                support = support * geo_pulse
             if collinear_media_strength > 0:
                 shared = shared_signals["national"] * float(geo_scale[geo]) * float(rng.uniform(0.75, 1.25))
                 support = (1.0 - collinear_media_strength) * support + collinear_media_strength * shared
             cpm_volatility = 0.20 if volatile_media_measurement else 0.06
-            spend = support * channel_defaults[ch]["cpm"] * rng.lognormal(0.0, cpm_volatility, n_weeks)
+            base_cpm = channel_defaults[ch]["cpm"]
+            cost_noise = rng.lognormal(0.0, cpm_volatility, n_weeks)
+            if evolving_media_costs or volatile_media_measurement:
+                t_cost = np.arange(n_weeks)
+                inflation = np.exp(rng.normal(0.0008, 0.0015) * t_cost)
+                auction_season = 1.0 + float(rng.uniform(0.04, 0.16)) * np.sin(2 * np.pi * t_cost / 52.0 + rng.uniform(0, 2 * np.pi))
+                cost_shock = np.ones(n_weeks)
+                if n_weeks >= 52:
+                    for _ in range(int(rng.integers(1, 4))):
+                        start = int(rng.integers(0, max(1, n_weeks - 6)))
+                        length = int(rng.integers(3, min(12, max(4, n_weeks - start + 1))))
+                        cost_shock[start : min(n_weeks, start + length)] *= float(rng.uniform(0.75, 1.45))
+                geo_cost = float(rng.lognormal(0.0, 0.10 if volatile_media_measurement else 0.04))
+                cpm_path = base_cpm * geo_cost * inflation * auction_season * cost_shock * cost_noise
+            else:
+                cpm_path = base_cpm * cost_noise
+            spend = support * cpm_path
             media_store[ch][geo] = support
             spend_store[ch][geo] = spend
 
@@ -393,6 +465,10 @@ def make_synthetic_mmm_panel(
                         "true_coef": float(coef),
                         "geo_scale": float(geo_scale[geo]),
                         "national_repeated_media": bool(national_flags[ch]),
+                        "geo_media_pattern": geo_media_pattern,
+                        "embedded_geo_lift_treated": bool(ch == geo_lift_channel and geo in geo_lift_treated and geo_media_pattern == "embedded_geo_lift_test"),
+                        "embedded_geo_lift_start": int(geo_lift_start) if geo_media_pattern == "embedded_geo_lift_test" else np.nan,
+                        "embedded_geo_lift_len": int(geo_lift_len) if geo_media_pattern == "embedded_geo_lift_test" else np.nan,
                     }
                 )
         params_rows.append(
@@ -407,6 +483,8 @@ def make_synthetic_mmm_panel(
                 "anchor_saturation": float(anchor_sat),
                 "anchor_support": float(anchor),
                 "national_repeated_media": bool(national_flags[ch]),
+                "geo_media_pattern": geo_media_pattern,
+                "embedded_geo_lift_channel": bool(ch == geo_lift_channel and geo_media_pattern == "embedded_geo_lift_test"),
             }
         )
 
@@ -462,6 +540,8 @@ def make_synthetic_mmm_panel(
             if control_availability in {"partial", "standard", "rich", "noisy_proxy"}:
                 row["promo"] = float(promo[i])
                 row["holiday"] = float(holiday[i])
+            if control_availability == "public_macro":
+                row["holiday"] = float(holiday[i])
             if control_availability in {"standard", "rich", "noisy_proxy"}:
                 row["price_index"] = float(price_index[i])
             if control_availability in {"rich", "noisy_proxy"}:
@@ -469,6 +549,9 @@ def make_synthetic_mmm_panel(
                 row["competitor_index"] = float(competitor_index[i] + rng.normal(0.0, noise_level))
                 row["macro_index"] = float(macro_index[i] + rng.normal(0.0, noise_level / 2.0))
                 row["category_trend"] = float(category_trend[i] + rng.normal(0.0, 8.0 if control_availability == "noisy_proxy" else 0.0))
+            if control_availability == "public_macro":
+                row["macro_index"] = float(macro_index[i] + rng.normal(0.0, 0.02))
+                row["category_trend"] = float(category_trend[i] + rng.normal(0.0, 10.0))
             for ch in channels:
                 support_value = float(media_store[ch][geo][i])
                 spend_value = float(spend_store[ch][geo][i])

@@ -101,6 +101,22 @@ def _safe_corr(x: Iterable[object], y: Iterable[object]) -> float:
     return float(np.corrcoef(x_arr[ok], y_arr[ok])[0, 1])
 
 
+def _median_pairwise_geo_corr(mat: np.ndarray) -> float:
+    arr = np.asarray(mat, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] < 2:
+        return 1.0
+    transformed = np.where(np.isfinite(arr), np.log1p(np.maximum(arr, 0.0)), np.nan)
+    corrs: List[float] = []
+    for i in range(transformed.shape[1]):
+        for j in range(i + 1, transformed.shape[1]):
+            corr = _safe_corr(transformed[:, i], transformed[:, j])
+            if np.isfinite(corr):
+                corrs.append(corr)
+    if not corrs:
+        return 1.0
+    return float(np.clip(np.nanmedian(corrs), -1.0, 1.0))
+
+
 def _ordered_dates(panel: pd.DataFrame, sequence_length: int) -> pd.DatetimeIndex:
     dates = pd.DatetimeIndex(pd.to_datetime(panel["date"]).dropna().sort_values().unique())
     if sequence_length and len(dates) > sequence_length:
@@ -335,6 +351,7 @@ def _quasi_geo_lift_features(
             "median_abs_lift_to_kpi_sd",
             "other_media_contamination_mean",
             "donor_media_contamination_mean",
+            "national_common_trend_score",
             "identifiable_score",
         ]}
     media = _date_geo_matrix(panel, media_col, dates)
@@ -353,8 +370,10 @@ def _quasi_geo_lift_features(
             "median_abs_lift_to_kpi_sd",
             "other_media_contamination_mean",
             "donor_media_contamination_mean",
+            "national_common_trend_score",
             "identifiable_score",
         ]}
+    common_trend_score = max(0.0, _median_pairwise_geo_corr(media))
     finite_media = media[np.isfinite(media)]
     positive_media = finite_media[finite_media > 0]
     media_scale = float(np.nanmedian(positive_media)) if positive_media.size else 0.0
@@ -373,6 +392,7 @@ def _quasi_geo_lift_features(
             "median_abs_lift_to_kpi_sd",
             "other_media_contamination_mean",
             "donor_media_contamination_mean",
+            "national_common_trend_score",
             "identifiable_score",
         ]}
 
@@ -387,6 +407,7 @@ def _quasi_geo_lift_features(
         media_pre = _window_mean(media, t - pre_periods, t)
         media_post = _window_mean(media, t, t + post_periods)
         media_delta = media_post - media_pre
+        media_rel_delta = media_delta / np.maximum(np.abs(media_pre), media_scale)
         kpi_delta = _window_mean(kpi, t, t + post_periods) - _window_mean(kpi, t - pre_periods, t)
         for g in range(media.shape[1]):
             donor_idx = [i for i in range(media.shape[1]) if i != g]
@@ -394,8 +415,16 @@ def _quasi_geo_lift_features(
                 continue
             treated_delta = float(media_delta[g])
             donor_delta = float(np.nanmedian(media_delta[donor_idx]))
+            treated_rel_delta = float(media_rel_delta[g])
+            donor_rel_delta = float(np.nanmedian(media_rel_delta[donor_idx]))
             net_media_delta = treated_delta - donor_delta
-            if not np.isfinite(net_media_delta) or abs(net_media_delta) < material:
+            net_rel_delta = treated_rel_delta - donor_rel_delta
+            if (
+                not np.isfinite(net_media_delta)
+                or not np.isfinite(net_rel_delta)
+                or abs(net_media_delta) < material
+                or abs(net_rel_delta) < 0.25
+            ):
                 continue
             treated_kpi_delta = float(kpi_delta[g])
             donor_kpi_delta = float(np.nanmedian(kpi_delta[donor_idx]))
@@ -407,15 +436,21 @@ def _quasi_geo_lift_features(
                 if mat.shape != media.shape:
                     continue
                 other_delta = _window_mean(mat, t, t + post_periods) - _window_mean(mat, t - pre_periods, t)
+                other_pre = _window_mean(mat, t - pre_periods, t)
+                other_pos = mat[np.isfinite(mat) & (mat > 0)]
+                other_scale_abs = float(np.nanmedian(other_pos)) if other_pos.size else material
+                other_rel_delta = other_delta / np.maximum(np.abs(other_pre), other_scale_abs)
                 other_net = float(other_delta[g] - np.nanmedian(other_delta[donor_idx]))
+                other_rel_net = float(other_rel_delta[g] - np.nanmedian(other_rel_delta[donor_idx]))
                 if np.isfinite(other_net):
                     other_scale = max(float(np.nanmedian(np.abs(other_delta[np.isfinite(other_delta)]))), material)
-                    other_contam = max(other_contam, abs(other_net) / max(other_scale, 1e-8))
+                    rel_contam = abs(other_rel_net) if np.isfinite(other_rel_net) else 0.0
+                    other_contam = max(other_contam, abs(other_net) / max(other_scale, 1e-8), rel_contam)
             donor_contam = abs(donor_delta) / max(abs(treated_delta), media_scale, 1e-8)
             event_rows.append(
                 {
                     "net_media_delta": net_media_delta,
-                    "shock_strength": abs(net_media_delta) / max(media_scale, 1e-8),
+                    "shock_strength": max(abs(net_media_delta) / max(media_scale, 1e-8), abs(net_rel_delta)),
                     "lift": lift,
                     "signed_effect": 1.0 if np.sign(net_media_delta) * np.sign(lift) > 0 else 0.0,
                     "lift_to_kpi_sd": abs(lift) / max(kpi_sd, 1e-8),
@@ -437,6 +472,7 @@ def _quasi_geo_lift_features(
             f"{prefix}_median_abs_lift_to_kpi_sd": 0.0,
             f"{prefix}_other_media_contamination_mean": 0.0,
             f"{prefix}_donor_media_contamination_mean": 0.0,
+            f"{prefix}_national_common_trend_score": common_trend_score,
             f"{prefix}_identifiable_score": 0.0,
         }
     events = pd.DataFrame(event_rows).sort_values("shock_strength", ascending=False).head(int(max_events))
@@ -446,6 +482,7 @@ def _quasi_geo_lift_features(
     sign_share = float(events["signed_effect"].mean())
     strength = float(np.clip(events["shock_strength"].median() / 2.0, 0.0, 1.0))
     identifiable = float(np.clip(0.35 * clean_share + 0.35 * sign_share + 0.30 * strength, 0.0, 1.0))
+    identifiable = float(np.clip(identifiable * (1.0 - 0.65 * common_trend_score), 0.0, 1.0))
     return {
         f"{prefix}_available": 1.0,
         f"{prefix}_event_count": float(len(events)),
@@ -459,6 +496,7 @@ def _quasi_geo_lift_features(
         f"{prefix}_median_abs_lift_to_kpi_sd": float(events["lift_to_kpi_sd"].median()),
         f"{prefix}_other_media_contamination_mean": float(events["other_contam"].mean()),
         f"{prefix}_donor_media_contamination_mean": float(events["donor_contam"].mean()),
+        f"{prefix}_national_common_trend_score": common_trend_score,
         f"{prefix}_identifiable_score": identifiable,
     }
 
@@ -654,6 +692,8 @@ def build_curve_prior_dataset(
         geo_regime = getattr(synth, "curve_prior_geo_regime", "unknown")
         measurement_regime = getattr(synth, "curve_prior_measurement_regime", "unknown")
         kpi_variant = getattr(synth, "curve_prior_kpi_variant", "unknown")
+        geo_media_pattern = getattr(synth, "curve_prior_geo_media_pattern", "unknown")
+        harshness_profile = getattr(synth, "curve_prior_harshness_profile", "unknown")
         channels = sorted(synth.truth_params["channel"].astype(str).unique())
         local_controls = controls or [c for c in ["promo", "holiday", "price_index", "competitor_index", "macro_index", "category_trend"] if c in panel.columns]
         validation = validate_nmmm_training_data(
@@ -697,6 +737,8 @@ def build_curve_prior_dataset(
                 "geo_regime": str(geo_regime),
                 "measurement_regime": str(measurement_regime),
                 "kpi_variant": str(kpi_variant),
+                "geo_media_pattern": str(geo_media_pattern),
+                "harshness_profile": str(harshness_profile),
                 "channel": ch,
                 "truth_curve_type": str(params["curve_type"].iloc[0]) if not params.empty and "curve_type" in params.columns else "unknown",
                 "n_weeks": float(panel["date"].nunique()),
@@ -766,6 +808,8 @@ def build_curve_prior_dataset(
         "geo_regime",
         "measurement_regime",
         "kpi_variant",
+        "geo_media_pattern",
+        "harshness_profile",
         "channel",
         "truth_curve_type",
         "diagnostic_default_weight_target",
@@ -1073,6 +1117,8 @@ def fit_curve_prior_model(
             "geo_regime",
             "measurement_regime",
             "kpi_variant",
+            "geo_media_pattern",
+            "harshness_profile",
             "channel",
             "truth_curve_type",
             "diagnostic_default_weight_target",
@@ -1207,6 +1253,8 @@ def predict_curve_prior_model(result: CurvePriorResult, dataset: CurvePriorDatas
             "geo_regime",
             "measurement_regime",
             "kpi_variant",
+            "geo_media_pattern",
+            "harshness_profile",
             "channel",
             "truth_curve_type",
             "diagnostic_default_weight_target",
@@ -1309,6 +1357,8 @@ def evaluate_curve_prior_predictions(result: CurvePriorResult) -> pd.DataFrame:
         ("geo_regime", "geo_regime"),
         ("measurement_regime", "measurement_regime"),
         ("kpi_variant", "kpi_variant"),
+        ("geo_media_pattern", "geo_media_pattern"),
+        ("harshness_profile", "harshness_profile"),
     ]:
         if group_col in pred.columns:
             for value, sub in pred.groupby(group_col, dropna=False):

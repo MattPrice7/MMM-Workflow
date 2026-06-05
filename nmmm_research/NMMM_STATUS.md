@@ -173,7 +173,7 @@ The latest architecture uses:
 - cross-channel Set Transformer for collinearity and co-movement context
 - conservative default-curve blending for weak evidence
 - quasi-geo diagnostic features from signed geo media shocks and treated-vs-donor
-  KPI movement
+  KPI movement, including a national/common-trend score
 - interval-adjusted concavity penalty, so diminishing marginal response is the
   default pressure
 - low-quality/missing curve targets are down-weighted and mapped to conservative
@@ -228,6 +228,21 @@ like the safe output. The raw flexible curve can still show convex segments,
 especially in tiny quick runs and threshold-like truth families. That is why
 the conservative blend and fallback calibration should be evaluated separately
 before any promotion.
+
+Latest simulator realism additions:
+
+- explicit geo media patterns for all-similar, some-similar, some-differentiated,
+  one-channel-differentiated, embedded geo-lift-like shock, and
+  population-distributed national media
+- evolving CPM/CPP paths with inflation-like drift, auction seasonality, shocks,
+  geo cost differences, and volatility
+- minimum clean, minimum messy, public macro proxy, and richer noisy-control
+  harshness profiles
+- metrics now group by geo media pattern and harshness profile
+
+Targeted quasi-geo feature sanity check showed population-distributed national
+media receives high `national_common_trend_score` and lower identifiability,
+while embedded geo-lift-like patterns retain stronger geo-differentiated signal.
 
 First quick TFT grid before baseline isolation, 8 runs across
 standard/messy-realistic panels:

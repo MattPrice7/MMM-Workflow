@@ -78,9 +78,21 @@ should be based on curve/adstock/decision recovery, not only R2.
 - national-only support/spend
 - richer geo media as an upper benchmark
 
+Synthetic panels now rotate through explicit geo-identification patterns:
+
+- all channels follow similar geo trends
+- some channels follow similar geo trends
+- some channels are geo differentiated
+- one target channel has distinctive geo movement
+- an embedded geo-lift-like treated-market shock exists
+- national media is distributed to geos by population
+- mixed/random combinations
+
 It also rotates KPI scales/noise for sales-like, subscriptions-like, and
-leads-like outcomes. The saved outputs include predictions, metrics, training
-features, training history, and a reusable Torch checkpoint.
+leads-like outcomes, plus harshness profiles for minimum clean data, minimum
+messy data, public macro proxies, and richer noisy controls. The saved outputs
+include predictions, metrics, training features, training history, and a
+reusable Torch checkpoint.
 
 The fallback/default target is synthetic-truth calibrated: diagnostics say how
 weak or confounded the observed evidence is, and known-truth training labels say
@@ -109,6 +121,11 @@ national media repetition, stronger collinearity, media missingness blocks,
 business shocks, weak/no controls, and noisy KPI variants. Outputs include
 holdout predictions, holdout metrics, fallback calibration buckets, and a saved
 checkpoint.
+
+Quasi-geo features preserve event counts even for imperfect data, but they also
+report `national_common_trend_score` so population-scaled national media is not
+mistaken for clean geo identification just because larger markets have larger
+raw media deltas.
 
 ## Next Hardening
 

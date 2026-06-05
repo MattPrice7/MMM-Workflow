@@ -22,6 +22,8 @@ from nmmm.curve_prior_model import (
     save_curve_prior_model,
 )
 from run_curve_prior_low_data_suite import (
+    GEO_MEDIA_PATTERNS,
+    HARSHNESS_PROFILES,
     KPI_VARIANTS,
     LOW_DATA_REGIMES,
     _apply_low_data_regime,
@@ -45,6 +47,8 @@ def _make_panels(
     scenario_filter: list[str] | None = None,
     kpi_variant_filter: list[str] | None = None,
     regime_filter: set[str] | None = None,
+    geo_media_pattern_filter: list[str] | None = None,
+    harshness_profile_filter: list[str] | None = None,
 ) -> list:
     channels = [f"ch_{i + 1:02d}" for i in range(int(n_channels))]
     scenarios = ["standard", "messy_realistic", "hostile_collinear", "weak_geo"] if not holdout else ["messy_realistic", "weak_geo"]
@@ -66,56 +70,70 @@ def _make_panels(
     if regime_filter:
         regimes = [r for r in regimes if str(r["name"]) in regime_filter]
     kpi_items = [(k, v) for k, v in KPI_VARIANTS.items() if not kpi_variant_filter or k in set(kpi_variant_filter)]
+    geo_patterns = [p for p in GEO_MEDIA_PATTERNS if not geo_media_pattern_filter or p in set(geo_media_pattern_filter)]
+    profile_names = [
+        p
+        for p in HARSHNESS_PROFILES.keys()
+        if not harshness_profile_filter or p in set(harshness_profile_filter)
+    ]
     panels = []
     next_seed = int(seed)
     for scenario in scenarios:
         for kpi_variant, kpi_settings in kpi_items:
-            for repeat in range(int(repeats)):
-                split_group = f"{'holdout' if holdout else 'train'}_{scenario}_{kpi_variant}_{repeat:02d}"
-                harsh_kwargs = {}
-                if holdout:
-                    harsh_kwargs = {
-                        "national_media_share": 0.90 if scenario == "weak_geo" else 0.65,
-                        "collinear_media_strength": 0.88 if scenario == "weak_geo" else 0.78,
-                        "missing_media_rate": 0.08,
-                        "media_block_missing_rate": 0.16,
-                        "noise_sd": max(float(kpi_settings["noise_sd"]), 0.13),
-                        "control_availability": "none" if repeat % 2 == 0 else "noisy_proxy",
-                        "business_shocks": True,
-                    }
-                else:
-                    harsh_kwargs = {
-                        "missing_media_rate": 0.02 if scenario == "messy_realistic" else 0.0,
-                        "media_block_missing_rate": 0.08 if scenario == "messy_realistic" else 0.0,
-                        "control_availability": "noisy_proxy" if scenario == "messy_realistic" else "standard",
-                    }
-                base = make_synthetic_mmm_panel(
-                    n_weeks=int(n_weeks),
-                    n_geos=int(n_geos),
-                    channels=channels,
-                    curve_type="mixed",
-                    scenario=scenario,
-                    randomize_channel_parameters=True,
-                    permute_channel_roles=True,
-                    zero_inflated_media=True,
-                    volatile_media_measurement=True,
-                    seed=next_seed,
-                    kpi_scale_multiplier=float(kpi_settings["kpi_scale_multiplier"]),
-                    **harsh_kwargs,
-                )
-                next_seed += 1
-                for regime in regimes:
-                    panel = _apply_low_data_regime(base, regime)
-                    panels.append(
-                        _tag_low_data_panel(
-                            panel,
-                            split_group=split_group,
-                            scenario=f"{'harsh_' if holdout else ''}{scenario}",
-                            geo_regime=str(regime["geo"]),
-                            measurement_regime=str(regime["name"]),
-                            kpi_variant=str(kpi_variant),
+            for harshness_profile in profile_names:
+                profile = HARSHNESS_PROFILES[harshness_profile]
+                for geo_media_pattern in geo_patterns:
+                    for repeat in range(int(repeats)):
+                        split_group = f"{'holdout' if holdout else 'train'}_{scenario}_{kpi_variant}_{harshness_profile}_{geo_media_pattern}_{repeat:02d}"
+                        extra_kwargs = {
+                            "missing_media_rate": float(profile["missing_media_rate"]),
+                            "media_block_missing_rate": float(profile["media_block_missing_rate"]),
+                            "noise_sd": max(float(kpi_settings["noise_sd"]), float(profile["noise_floor"])),
+                            "control_availability": str(profile["control_availability"]),
+                            "business_shocks": bool(profile["business_shocks"]),
+                            "zero_inflated_media": bool(profile["zero_inflated_media"]),
+                            "volatile_media_measurement": bool(profile["volatile_media_measurement"]),
+                            "evolving_media_costs": bool(profile["evolving_media_costs"]),
+                        }
+                        if holdout:
+                            extra_kwargs.update(
+                                {
+                                    "national_media_share": 0.92 if scenario == "weak_geo" else 0.70,
+                                    "collinear_media_strength": 0.90 if scenario == "weak_geo" else 0.82,
+                                    "missing_media_rate": max(float(profile["missing_media_rate"]), 0.08),
+                                    "media_block_missing_rate": max(float(profile["media_block_missing_rate"]), 0.16),
+                                    "noise_sd": max(float(kpi_settings["noise_sd"]), float(profile["noise_floor"]), 0.13),
+                                    "business_shocks": True,
+                                }
+                            )
+                        base = make_synthetic_mmm_panel(
+                            n_weeks=int(n_weeks),
+                            n_geos=int(n_geos),
+                            channels=channels,
+                            curve_type="mixed",
+                            scenario=scenario,
+                            randomize_channel_parameters=True,
+                            permute_channel_roles=True,
+                            geo_media_pattern=str(geo_media_pattern),
+                            seed=next_seed,
+                            kpi_scale_multiplier=float(kpi_settings["kpi_scale_multiplier"]),
+                            **extra_kwargs,
                         )
-                    )
+                        next_seed += 1
+                        for regime in regimes:
+                            panel = _apply_low_data_regime(base, regime)
+                            panels.append(
+                                _tag_low_data_panel(
+                                    panel,
+                                    split_group=split_group,
+                                    scenario=f"{'harsh_' if holdout else ''}{scenario}",
+                                    geo_regime=str(regime["geo"]),
+                                    measurement_regime=str(regime["name"]),
+                                    kpi_variant=str(kpi_variant),
+                                    geo_media_pattern=str(geo_media_pattern),
+                                    harshness_profile=str(harshness_profile),
+                                )
+                            )
     return panels
 
 
@@ -192,11 +210,15 @@ def main() -> None:
         holdout_scenarios = ["weak_geo"]
         kpi_variants = ["sales_like"]
         regimes = {"geo_support_spend_population", "geo_sales_national_media_population", "national_only_support_spend"}
+        geo_patterns = ["embedded_geo_lift_test", "population_distributed_national"]
+        profiles = ["minimum_messy", "public_macro_proxy"]
     else:
         train_scenarios = None
         holdout_scenarios = None
         kpi_variants = None
         regimes = None
+        geo_patterns = None
+        profiles = None
     args.output_dir.mkdir(parents=True, exist_ok=True)
     train_panels = _make_panels(
         holdout=False,
@@ -208,6 +230,8 @@ def main() -> None:
         scenario_filter=train_scenarios,
         kpi_variant_filter=kpi_variants,
         regime_filter=regimes,
+        geo_media_pattern_filter=geo_patterns,
+        harshness_profile_filter=profiles,
     )
     holdout_panels = _make_panels(
         holdout=True,
@@ -219,6 +243,8 @@ def main() -> None:
         scenario_filter=holdout_scenarios,
         kpi_variant_filter=kpi_variants,
         regime_filter=regimes,
+        geo_media_pattern_filter=geo_patterns,
+        harshness_profile_filter=profiles,
     )
     media_inputs = _available_media_inputs(train_panels + holdout_panels)
     train_dataset = build_curve_prior_dataset(train_panels, media_feature_inputs=media_inputs)
@@ -251,6 +277,8 @@ def main() -> None:
             "holdout_example_count": int(len(holdout_dataset.features)),
             "media_inputs": media_inputs,
             "concavity_penalty_weight": args.concavity_penalty_weight,
+            "geo_media_patterns": geo_patterns or GEO_MEDIA_PATTERNS,
+            "harshness_profiles": profiles or list(HARSHNESS_PROFILES.keys()),
             "scope": "harsh holdout validation for neural curve-prior fallback calibration",
         },
     )

@@ -51,6 +51,59 @@ LOW_DATA_REGIMES = [
     {"name": "geo_rich_media_population", "geo": "full_geo", "measurement": "rich_media", "population": True},
 ]
 
+GEO_MEDIA_PATTERNS = [
+    "mixed",
+    "all_channels_similar_geo_trends",
+    "some_channels_similar_geo_trends",
+    "some_channels_differentiated",
+    "one_channel_geo_differentiated",
+    "embedded_geo_lift_test",
+    "population_distributed_national",
+]
+
+HARSHNESS_PROFILES = {
+    "minimum_clean": {
+        "control_availability": "none",
+        "missing_media_rate": 0.0,
+        "media_block_missing_rate": 0.0,
+        "volatile_media_measurement": False,
+        "business_shocks": False,
+        "zero_inflated_media": False,
+        "evolving_media_costs": True,
+        "noise_floor": 0.06,
+    },
+    "minimum_messy": {
+        "control_availability": "none",
+        "missing_media_rate": 0.04,
+        "media_block_missing_rate": 0.10,
+        "volatile_media_measurement": True,
+        "business_shocks": True,
+        "zero_inflated_media": True,
+        "evolving_media_costs": True,
+        "noise_floor": 0.10,
+    },
+    "public_macro_proxy": {
+        "control_availability": "public_macro",
+        "missing_media_rate": 0.025,
+        "media_block_missing_rate": 0.06,
+        "volatile_media_measurement": True,
+        "business_shocks": True,
+        "zero_inflated_media": True,
+        "evolving_media_costs": True,
+        "noise_floor": 0.085,
+    },
+    "rich_messy": {
+        "control_availability": "noisy_proxy",
+        "missing_media_rate": 0.02,
+        "media_block_missing_rate": 0.08,
+        "volatile_media_measurement": True,
+        "business_shocks": True,
+        "zero_inflated_media": True,
+        "evolving_media_costs": True,
+        "noise_floor": 0.075,
+    },
+}
+
 KPI_VARIANTS = {
     "sales_like": {"kpi_scale_multiplier": 1.0, "noise_sd": 0.06},
     "subscriptions_like": {"kpi_scale_multiplier": 0.04, "noise_sd": 0.09},
@@ -73,6 +126,8 @@ def _tag_low_data_panel(
     geo_regime: str,
     measurement_regime: str,
     kpi_variant: str,
+    geo_media_pattern: str = "unknown",
+    harshness_profile: str = "unknown",
 ):
     synth = _tag_panel(
         synth,
@@ -82,6 +137,8 @@ def _tag_low_data_panel(
         measurement_regime=measurement_regime,
     )
     setattr(synth, "curve_prior_kpi_variant", str(kpi_variant))
+    setattr(synth, "curve_prior_geo_media_pattern", str(geo_media_pattern))
+    setattr(synth, "curve_prior_harshness_profile", str(harshness_profile))
     return synth
 
 
@@ -101,6 +158,9 @@ def _make_low_data_panels(
     seed: int,
     scenarios: Iterable[str],
     kpi_variants: Iterable[str],
+    geo_media_patterns: Iterable[str],
+    harshness_profiles: Iterable[str],
+    regimes: Iterable[Dict[str, object]] = LOW_DATA_REGIMES,
 ) -> list:
     panels = []
     channels = [f"ch_{i + 1:02d}" for i in range(int(n_channels))]
@@ -108,37 +168,46 @@ def _make_low_data_panels(
     for scenario in scenarios:
         for kpi_variant in kpi_variants:
             kpi_settings = KPI_VARIANTS[str(kpi_variant)]
-            for repeat in range(int(repeats)):
-                split_group = f"{scenario}_{kpi_variant}_{repeat:02d}"
-                base = make_synthetic_mmm_panel(
-                    n_weeks=int(n_weeks),
-                    n_geos=int(n_geos),
-                    channels=channels,
-                    curve_type="mixed",
-                    scenario=str(scenario),
-                    randomize_channel_parameters=True,
-                    permute_channel_roles=True,
-                    zero_inflated_media=str(scenario) in {"messy_realistic", "weak_geo"},
-                    volatile_media_measurement=str(scenario) in {"messy_realistic", "hostile_collinear"},
-                    missing_media_rate=0.02 if str(scenario) == "messy_realistic" else 0.0,
-                    media_block_missing_rate=0.08 if str(scenario) == "messy_realistic" else 0.0,
-                    control_availability="noisy_proxy" if str(scenario) == "messy_realistic" else "standard",
-                    seed=next_seed,
-                    **kpi_settings,
-                )
-                next_seed += 1
-                for regime in LOW_DATA_REGIMES:
-                    panel = _apply_low_data_regime(base, regime)
-                    panels.append(
-                        _tag_low_data_panel(
-                            panel,
-                            split_group=split_group,
+            for harshness_profile in harshness_profiles:
+                profile = HARSHNESS_PROFILES[str(harshness_profile)]
+                for geo_media_pattern in geo_media_patterns:
+                    for repeat in range(int(repeats)):
+                        split_group = f"{scenario}_{kpi_variant}_{harshness_profile}_{geo_media_pattern}_{repeat:02d}"
+                        base = make_synthetic_mmm_panel(
+                            n_weeks=int(n_weeks),
+                            n_geos=int(n_geos),
+                            channels=channels,
+                            curve_type="mixed",
                             scenario=str(scenario),
-                            geo_regime=str(regime["geo"]),
-                            measurement_regime=str(regime["name"]),
-                            kpi_variant=str(kpi_variant),
+                            randomize_channel_parameters=True,
+                            permute_channel_roles=True,
+                            zero_inflated_media=bool(profile["zero_inflated_media"]),
+                            volatile_media_measurement=bool(profile["volatile_media_measurement"]),
+                            evolving_media_costs=bool(profile["evolving_media_costs"]),
+                            geo_media_pattern=str(geo_media_pattern),
+                            missing_media_rate=float(profile["missing_media_rate"]),
+                            media_block_missing_rate=float(profile["media_block_missing_rate"]),
+                            control_availability=str(profile["control_availability"]),
+                            business_shocks=bool(profile["business_shocks"]),
+                            noise_sd=max(float(kpi_settings["noise_sd"]), float(profile["noise_floor"])),
+                            seed=next_seed,
+                            kpi_scale_multiplier=float(kpi_settings["kpi_scale_multiplier"]),
                         )
-                    )
+                        next_seed += 1
+                        for regime in regimes:
+                            panel = _apply_low_data_regime(base, regime)
+                            panels.append(
+                                _tag_low_data_panel(
+                                    panel,
+                                    split_group=split_group,
+                                    scenario=str(scenario),
+                                    geo_regime=str(regime["geo"]),
+                                    measurement_regime=str(regime["name"]),
+                                    kpi_variant=str(kpi_variant),
+                                    geo_media_pattern=str(geo_media_pattern),
+                                    harshness_profile=str(harshness_profile),
+                                )
+                            )
     return panels
 
 
@@ -176,6 +245,8 @@ def parse_args() -> argparse.Namespace:
         default=["standard", "messy_realistic", "hostile_collinear", "weak_geo"],
     )
     parser.add_argument("--kpi-variants", nargs="+", default=list(KPI_VARIANTS.keys()))
+    parser.add_argument("--geo-media-patterns", nargs="+", default=GEO_MEDIA_PATTERNS)
+    parser.add_argument("--harshness-profiles", nargs="+", default=list(HARSHNESS_PROFILES.keys()))
     parser.add_argument("--sequence-length", type=int, default=104)
     parser.add_argument("--quick", action="store_true", help="Run a small compile/sanity version.")
     return parser.parse_args()
@@ -195,8 +266,17 @@ def main() -> None:
         args.channels = min(args.channels, 4)
         args.weeks = min(args.weeks, 72)
         args.geos = min(args.geos, 4)
-        args.scenarios = args.scenarios[:2]
+        args.scenarios = ["messy_realistic"]
         args.kpi_variants = args.kpi_variants[:1]
+        args.geo_media_patterns = ["embedded_geo_lift_test", "population_distributed_national"]
+        args.harshness_profiles = ["minimum_messy"]
+        selected_regimes = [
+            r
+            for r in LOW_DATA_REGIMES
+            if r["name"] in {"geo_support_spend_population", "geo_sales_national_media_population", "national_only_support_spend"}
+        ]
+    else:
+        selected_regimes = LOW_DATA_REGIMES
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     panels = _make_low_data_panels(
@@ -207,6 +287,9 @@ def main() -> None:
         seed=args.seed,
         scenarios=args.scenarios,
         kpi_variants=args.kpi_variants,
+        geo_media_patterns=args.geo_media_patterns,
+        harshness_profiles=args.harshness_profiles,
+        regimes=selected_regimes,
     )
     media_inputs = _available_media_inputs(panels)
     dataset = build_curve_prior_dataset(
@@ -235,8 +318,10 @@ def main() -> None:
             "training_example_count": int(len(dataset.features)),
             "media_inputs": media_inputs,
             "concavity_penalty_weight": args.concavity_penalty_weight,
-            "regimes": [dict(r) for r in LOW_DATA_REGIMES],
+            "regimes": [dict(r) for r in selected_regimes],
             "kpi_variants": args.kpi_variants,
+            "geo_media_patterns": args.geo_media_patterns,
+            "harshness_profiles": args.harshness_profiles,
             "scope": "low-data response-curve/adstock prior builder stress suite",
         },
     )
