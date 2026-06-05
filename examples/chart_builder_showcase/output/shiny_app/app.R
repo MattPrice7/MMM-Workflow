@@ -265,7 +265,8 @@ server <- function(input, output, session) {
   output$spend_scatter <- renderPlotly({
     dt <- selected_econ()[is.finite(spend) & is.finite(contribution)]
     validate(need(nrow(dt) > 0, "No spend and contribution rows available."))
-    p <- ggplot(dt, aes(x = spend, y = contribution, text = paste(variable, "<br>Spend:", fmt(spend), "<br>Contribution:", fmt(contribution)))) + geom_point(color = palette_values()[2], size = 3) + labs(title = "Spend vs KPI contribution", x = "Spend", y = "Contribution") + chart_theme()
+    dt[, bubble_size__ := pmax(abs(as.numeric(contribution)), 1e-8)]
+    p <- ggplot(dt, aes(x = spend, y = contribution, size = bubble_size__, color = fair_share_index, text = paste(variable, "<br>Spend:", fmt(spend), "<br>Contribution:", fmt(contribution), "<br>Fair-share index:", fmt(fair_share_index)))) + geom_point(alpha = 0.72) + scale_size_continuous(range = c(8, 28), guide = "none") + scale_color_gradient2(low = "#DC2626", mid = "#9CA3AF", high = "#16A34A", midpoint = 1, na.value = palette_values()[2]) + labs(title = "Spend vs KPI contribution bubble chart", x = "Spend", y = "Contribution", color = "Fair-share index") + chart_theme()
     ggplotly(p, tooltip = "text")
   })
   output$econ_rank_plot <- renderPlotly({

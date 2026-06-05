@@ -1,0 +1,8 @@
+variable,channel,rollup_path,rollup_level,rollup_node,rollup_node_path,is_reporting_channel,is_root_node,is_leaf_node
+baseline,Baseline,baseline,1,baseline,baseline,FALSE,FALSE,TRUE
+display,Display,display,1,display,display,FALSE,FALSE,TRUE
+paid_search,Paid Search,paid_search,1,paid_search,paid_search,FALSE,FALSE,TRUE
+paid_social,Paid Social,paid_social,1,paid_social,paid_social,FALSE,FALSE,TRUE
+promo,Promo,promo,1,promo,promo,FALSE,FALSE,TRUE
+retail_media,Retail Media,retail_media,1,retail_media,retail_media,FALSE,FALSE,TRUE
+tv,TV,tv,1,tv,tv,FALSE,FALSE,TRUE

@@ -2,8 +2,10 @@ artifact_type,path
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_executive_summary.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_contribution_by_variable.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_contribution_by_channel.csv
+table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_contribution_by_rollup_node.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_contribution_by_period_variable.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_contribution_by_period_channel.csv
+table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_contribution_by_period_rollup_node.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_period_kpi_change.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_period_due_to_variable.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_period_due_to_channel.csv
@@ -14,10 +16,13 @@ table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showc
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_funnel_summary.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_kpi_economics.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_kpi_economics_by_channel.csv
+table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_kpi_economics_by_rollup_node.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_kpi_economics_by_period.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_diagnostic_flags.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_period_slicer_index.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_spend_map.csv
+table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_variable_rollup_map.csv
+table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_channel_map_normalized.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_optimizer_current_plan.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_optimizer_scenario_summary.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_optimizer_scenario_detail.csv

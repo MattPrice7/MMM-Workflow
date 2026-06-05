@@ -6,7 +6,12 @@ script_dir <- tryCatch({
   frames <- sys.frames()
   ofiles <- vapply(frames, function(f) if (!is.null(f$ofile)) as.character(f$ofile)[1] else NA_character_, character(1))
   ofiles <- ofiles[!is.na(ofiles) & nzchar(ofiles)]
-  if (length(ofiles)) dirname(normalizePath(ofiles[length(ofiles)], mustWork = FALSE)) else getwd()
+  if (length(ofiles)) {
+    dirname(normalizePath(ofiles[length(ofiles)], mustWork = FALSE))
+  } else {
+    file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+    if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg[1]), mustWork = FALSE)) else getwd()
+  }
 }, error = function(e) getwd())
 
 workflow_dir <- normalizePath(file.path(script_dir, "..", ".."), mustWork = TRUE)
