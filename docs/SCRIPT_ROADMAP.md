@@ -28,6 +28,14 @@ This file is the working backlog for the script bundle. It separates production-
    - Add client color palettes and channel color overrides.
    - Add response-curve charts with current spend/support markers and spend percentage scenarios.
    - Add ROI, cost-per-KPI, mROI/mCPA, contribution, due-to bridge, funnel, saturation/headroom, and quasi-geo evidence charts.
+   - Interactive chart-builder UX backlog:
+     - Curves should default to all variables, allow multi-select, and show q05/q95 bands only when one variable is selected.
+     - Contribution trend should allow a one-variable filtered view with q05/q95 bands when draw-level decomposition columns are available.
+     - Add 2D posterior distribution views by variable, such as contribution vs ROI, contribution vs mROI, and ROI vs saturation/headroom, using posterior draws when present.
+     - Replace oversized spreadsheet-like tables with smaller chart-ready tables focused on ROI/cost-per-KPI, percent change, due-to, fair-share, and executive summary metrics.
+     - Add flexible period comparisons, for example Q1-Q3 2024 vs Q1-Q3 2025, quarter-over-quarter, year-over-year, and custom selected periods.
+     - Add chart-type switches where useful, for example stacked bar, grouped bar, line, waterfall, dot plot, scatter/bubble, or compact table.
+     - Simplify theme controls to Default light, Default dark, and Custom.
    - Prefer table outputs plus static HTML/PNG as the stable default. Excel is useful for consultant workflows; Shiny/Plotly are good optional interactive layers, not the only delivery path.
 
 4. `mmm_prior_workflow.R` / `semi_univariate_prior_builder_production_final.R` / `prior_recovery_builder.R`
