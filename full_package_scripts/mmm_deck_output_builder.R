@@ -239,6 +239,91 @@ mdo_assign_roles <- function(variables, media_variables = NULL, baseline_variabl
   )
 }
 
+mdo_split_rollup_path <- function(path) {
+  if (length(path) < 1L || is.na(path[1]) || !nzchar(as.character(path[1]))) return(character())
+  nodes <- trimws(strsplit(as.character(path[1]), ">", fixed = TRUE)[[1]])
+  nodes[nzchar(nodes)]
+}
+
+mdo_rollup_reporting_node <- function(path, variable = NA_character_) {
+  nodes <- mdo_split_rollup_path(path)
+  variable <- as.character(variable)[1]
+  if (!length(nodes)) return(variable)
+  root_aliases <- c("total", "total_media", "media", "paid_media", "all_media", "all")
+  first <- tolower(gsub("[^a-z0-9]+", "_", nodes[1]))
+  if (length(nodes) >= 2L && first %in% root_aliases) return(nodes[2])
+  nodes[1]
+}
+
+mdo_normalize_channel_map <- function(channel_map = NULL, variables) {
+  vars <- unique(as.character(variables))
+  out <- data.table::data.table(variable = vars, channel = vars, rollup_path = vars)
+  if (is.null(channel_map)) return(out[])
+  cmap <- data.table::as.data.table(data.table::copy(channel_map))
+  if (!"variable" %in% names(cmap)) stop("channel_map must contain variable.", call. = FALSE)
+  if (!"channel" %in% names(cmap) && !"rollup_path" %in% names(cmap)) {
+    stop("channel_map must contain channel or rollup_path.", call. = FALSE)
+  }
+  if (!"channel" %in% names(cmap)) cmap[, channel := NA_character_]
+  if (!"rollup_path" %in% names(cmap)) cmap[, rollup_path := NA_character_]
+  cmap[, `:=`(
+    variable = as.character(variable),
+    channel = as.character(channel),
+    rollup_path = as.character(rollup_path)
+  )]
+  cmap <- cmap[!is.na(variable) & nzchar(variable)]
+  dup <- cmap[duplicated(variable), unique(variable)]
+  if (length(dup)) stop("channel_map has duplicate variable rows: ", paste(dup, collapse = ", "), call. = FALSE)
+  cmap[is.na(rollup_path) | !nzchar(rollup_path), rollup_path := variable]
+  cmap[is.na(channel) | !nzchar(channel),
+       channel := mapply(mdo_rollup_reporting_node, rollup_path, variable, USE.NAMES = FALSE)]
+  out[cmap[, .(variable, channel, rollup_path)],
+      `:=`(channel = i.channel, rollup_path = i.rollup_path),
+      on = "variable"]
+  out[is.na(channel) | !nzchar(channel), channel := variable]
+  out[is.na(rollup_path) | !nzchar(rollup_path), rollup_path := variable]
+  out[]
+}
+
+mdo_expand_variable_rollup_map <- function(channel_map_normalized) {
+  cm <- mdo_as_dt(channel_map_normalized, "channel_map_normalized")
+  if (is.null(cm) || !nrow(cm)) {
+    return(data.table::data.table(
+      variable = character(),
+      channel = character(),
+      rollup_path = character(),
+      rollup_level = integer(),
+      rollup_node = character(),
+      rollup_node_path = character(),
+      is_reporting_channel = logical(),
+      is_root_node = logical(),
+      is_leaf_node = logical()
+    ))
+  }
+  root_aliases <- c("total", "total_media", "media", "paid_media", "all_media", "all")
+  rows <- lapply(seq_len(nrow(cm)), function(i) {
+    variable <- as.character(cm$variable[i])
+    channel <- as.character(cm$channel[i])
+    path <- as.character(cm$rollup_path[i])
+    nodes <- mdo_split_rollup_path(path)
+    if (!length(nodes)) nodes <- variable
+    if (!identical(nodes[length(nodes)], variable)) nodes <- c(nodes, variable)
+    node_key <- tolower(gsub("[^a-z0-9]+", "_", nodes))
+    data.table::data.table(
+      variable = variable,
+      channel = channel,
+      rollup_path = paste(nodes, collapse = " > "),
+      rollup_level = seq_along(nodes),
+      rollup_node = nodes,
+      rollup_node_path = vapply(seq_along(nodes), function(j) paste(nodes[seq_len(j)], collapse = " > "), character(1)),
+      is_reporting_channel = nodes == channel,
+      is_root_node = seq_along(nodes) == 1L & node_key %in% root_aliases,
+      is_leaf_node = seq_along(nodes) == length(nodes)
+    )
+  })
+  data.table::rbindlist(rows, use.names = TRUE, fill = TRUE)
+}
+
 mdo_fit_metrics <- function(dt, by_cols = character()) {
   req <- c("y_actual", "pred")
   if (!all(req %in% names(dt))) return(data.table::data.table())
@@ -648,16 +733,16 @@ build_mmm_deck_tables <- function(long_decomp,
   if (is.null(media_variables)) media_variables <- inferred_spend_map$variable
   media_variables <- unique(as.character(media_variables))
   long[, role := mdo_assign_roles(variable, media_variables = media_variables, baseline_variables = baseline_variables)]
+  channel_map_normalized <- mdo_normalize_channel_map(channel_map, all_variables)
+  variable_rollup_map <- mdo_expand_variable_rollup_map(channel_map_normalized)
   long[, channel := variable]
+  long[channel_map_normalized[, .(variable, channel)], channel := i.channel, on = "variable"]
+  long[is.na(channel) | !nzchar(channel), channel := variable]
   if (!is.null(channel_map)) {
     cmap <- data.table::as.data.table(data.table::copy(channel_map))
-    if (!all(c("variable", "channel") %in% names(cmap))) stop("channel_map must contain columns: variable, channel")
-    cmap[, variable := as.character(variable)]
-    cmap[, channel := as.character(channel)]
-    cmap <- unique(cmap[!is.na(variable) & nzchar(variable), .SD[1], by = variable])
-    long[cmap, channel := i.channel, on = "variable"]
     role_col <- intersect(c("role", "variable_role", "channel_role"), names(cmap))[1]
     if (!is.na(role_col)) {
+      cmap[, variable := as.character(variable)]
       role_override <- cmap[, .(variable, role_override__ = as.character(get(role_col)))]
       long[role_override[!is.na(role_override__) & nzchar(role_override__)],
            role := i.role_override__, on = "variable"]
@@ -699,6 +784,32 @@ build_mmm_deck_tables <- function(long_decomp,
   contribution_by_channel[, contribution_abs_sort__ := abs(contribution)]
   data.table::setorder(contribution_by_channel, -contribution_abs_sort__)
   contribution_by_channel[, contribution_abs_sort__ := NULL]
+
+  rollup_join <- long[variable_rollup_map[, .(
+    variable,
+    rollup_level,
+    rollup_node,
+    rollup_node_path,
+    is_reporting_channel,
+    is_root_node,
+    is_leaf_node
+  )], on = "variable", allow.cartesian = TRUE, nomatch = 0]
+  contribution_by_rollup_node <- data.table::data.table()
+  if (nrow(rollup_join)) {
+    contribution_by_rollup_node <- rollup_join[, .(
+      contribution = sum(contribution, na.rm = TRUE),
+      avg_row_contribution = mean(contribution, na.rm = TRUE),
+      n_variables = data.table::uniqueN(variable),
+      variables = paste(sort(unique(variable)), collapse = "|"),
+      n_rows = .N
+    ), by = .(rollup_level, rollup_node, rollup_node_path, is_reporting_channel, is_root_node, is_leaf_node, role)]
+    contribution_by_rollup_node[, `:=`(
+      share_of_model_contribution = contribution / data.table::fifelse(abs(modeled_total) > 1e-8, modeled_total, NA_real_),
+      share_of_absolute_contribution = abs(contribution) / data.table::fifelse(abs(abs_total) > 1e-8, abs_total, NA_real_),
+      share_of_actual_kpi = contribution / data.table::fifelse(abs(total_actual) > 1e-8, total_actual, NA_real_)
+    )]
+    data.table::setorderv(contribution_by_rollup_node, c("rollup_level", "rollup_node", "role"))
+  }
 
   contribution_by_period_variable <- long[, .(
     contribution = sum(contribution, na.rm = TRUE),
@@ -749,6 +860,19 @@ build_mmm_deck_tables <- function(long_decomp,
                         on = "period_label"]
   period_due_to_channel[, due_to_pct_of_actual_change := contribution_change / data.table::fifelse(abs(actual_change) > 1e-8, actual_change, NA_real_)]
 
+  contribution_by_period_rollup_node <- data.table::data.table()
+  if (nrow(rollup_join)) {
+    contribution_by_period_rollup_node <- rollup_join[, .(
+      contribution = sum(contribution, na.rm = TRUE),
+      n_variables = data.table::uniqueN(variable),
+      n_rows = .N
+    ), by = .(period_granularity, period_start, period_label, period_sort,
+              rollup_level, rollup_node, rollup_node_path, is_reporting_channel, is_root_node, is_leaf_node, role)]
+    contribution_by_period_rollup_node[period_totals, period_model_contribution := i.period_model_contribution, on = "period_label"]
+    contribution_by_period_rollup_node[, share_of_period_model_contribution := contribution / data.table::fifelse(abs(period_model_contribution) > 1e-8, period_model_contribution, NA_real_)]
+    data.table::setorderv(contribution_by_period_rollup_node, c("period_sort", "rollup_level", "rollup_node"))
+  }
+
   contribution_by_group_variable <- data.table::data.table()
   if (!is.na(group_col) && group_col %in% names(long)) {
     contribution_by_group_variable <- long[, .(
@@ -783,13 +907,8 @@ build_mmm_deck_tables <- function(long_decomp,
   if (nrow(kpi_economics)) {
     kpi_economics[contribution_by_variable, `:=`(contribution = i.contribution, role = i.role), on = "variable"]
     kpi_economics[, channel := variable]
-    if (!is.null(channel_map)) {
-      cmap <- data.table::as.data.table(data.table::copy(channel_map))
-      if (all(c("variable", "channel") %in% names(cmap))) {
-        cmap[, `:=`(variable = as.character(variable), channel = as.character(channel))]
-        kpi_economics[unique(cmap[, .(variable, channel)]), channel := i.channel, on = "variable"]
-      }
-    }
+    kpi_economics[channel_map_normalized[, .(variable, channel)], channel := i.channel, on = "variable"]
+    kpi_economics[is.na(channel) | !nzchar(channel), channel := variable]
     total_spend <- sum(kpi_economics$spend, na.rm = TRUE)
     total_media_contribution <- sum(kpi_economics$contribution, na.rm = TRUE)
     kpi_economics[, `:=`(
@@ -832,6 +951,39 @@ build_mmm_deck_tables <- function(long_decomp,
     kpi_economics_by_channel[, efficiency_index := contribution_share / data.table::fifelse(abs(spend_share) > 1e-8, spend_share, NA_real_)]
     kpi_economics_by_channel[, fair_share_index := efficiency_index]
     data.table::setorderv(kpi_economics_by_channel, c("signed_economics_flag", "cost_per_outcome"), order = c(1L, 1L))
+  }
+
+  kpi_economics_by_rollup_node <- data.table::data.table()
+  if (nrow(kpi_economics) && nrow(variable_rollup_map)) {
+    econ_rollup <- kpi_economics[variable_rollup_map[, .(
+      variable,
+      rollup_level,
+      rollup_node,
+      rollup_node_path,
+      is_reporting_channel,
+      is_root_node,
+      is_leaf_node
+    )], on = "variable", allow.cartesian = TRUE, nomatch = 0]
+    if (nrow(econ_rollup)) {
+      kpi_economics_by_rollup_node <- econ_rollup[, .(
+        spend = sum(spend, na.rm = TRUE),
+        contribution = sum(contribution, na.rm = TRUE),
+        n_variables = data.table::uniqueN(variable),
+        variables = paste(sort(unique(variable)), collapse = "|")
+      ), by = .(rollup_level, rollup_node, rollup_node_path, is_reporting_channel, is_root_node, is_leaf_node, role)]
+      total_rollup_spend <- kpi_economics_by_rollup_node[is_leaf_node == TRUE, sum(spend, na.rm = TRUE)]
+      total_rollup_contribution <- kpi_economics_by_rollup_node[is_leaf_node == TRUE, sum(contribution, na.rm = TRUE)]
+      kpi_economics_by_rollup_node[, `:=`(
+        outcome_per_cost = contribution / data.table::fifelse(abs(spend) > 1e-8, spend, NA_real_),
+        cost_per_outcome = spend / data.table::fifelse(contribution > 1e-8, contribution, NA_real_),
+        signed_economics_flag = data.table::fifelse(contribution > 1e-8, "positive_economics", data.table::fifelse(contribution < -1e-8, "negative_contribution_diagnostic", "zero_contribution_diagnostic")),
+        spend_share = spend / data.table::fifelse(abs(total_rollup_spend) > 1e-8, total_rollup_spend, NA_real_),
+        contribution_share = contribution / data.table::fifelse(abs(total_rollup_contribution) > 1e-8, total_rollup_contribution, NA_real_)
+      )]
+      kpi_economics_by_rollup_node[, efficiency_index := contribution_share / data.table::fifelse(abs(spend_share) > 1e-8, spend_share, NA_real_)]
+      kpi_economics_by_rollup_node[, fair_share_index := efficiency_index]
+      data.table::setorderv(kpi_economics_by_rollup_node, c("rollup_level", "rollup_node", "signed_economics_flag", "cost_per_outcome"), order = c(1L, 1L, 1L, 1L))
+    }
   }
 
   kpi_economics_by_period <- mdo_empty_kpi_economics(TRUE)
@@ -958,8 +1110,10 @@ build_mmm_deck_tables <- function(long_decomp,
     executive_summary = executive_summary[],
     contribution_by_variable = contribution_by_variable[],
     contribution_by_channel = contribution_by_channel[],
+    contribution_by_rollup_node = contribution_by_rollup_node[],
     contribution_by_period_variable = contribution_by_period_variable[],
     contribution_by_period_channel = contribution_by_period_channel[],
+    contribution_by_period_rollup_node = contribution_by_period_rollup_node[],
     period_kpi_change = period_kpi_change[],
     period_due_to_variable = period_due_to_variable[],
     period_due_to_channel = period_due_to_channel[],
@@ -970,10 +1124,13 @@ build_mmm_deck_tables <- function(long_decomp,
     funnel_summary = funnel_summary[],
     kpi_economics = kpi_economics[],
     kpi_economics_by_channel = kpi_economics_by_channel[],
+    kpi_economics_by_rollup_node = kpi_economics_by_rollup_node[],
     kpi_economics_by_period = kpi_economics_by_period[],
     diagnostic_flags = diagnostic_flags[],
     period_slicer_index = period_slicer_index[],
     spend_map = inferred_spend_map[],
+    variable_rollup_map = variable_rollup_map[],
+    channel_map_normalized = channel_map_normalized[],
     standardized_long = long[],
     standardized_wide = wide[]
   )

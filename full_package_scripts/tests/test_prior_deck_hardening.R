@@ -94,6 +94,46 @@ add_result("deck builder returns KPI decomposition funnel", is.data.table(tables
              all(c("stage", "metric_type", "value", "share_of_actual_kpi") %in% names(tables$funnel_summary)) &&
              all(c("Actual KPI", "Media contribution", "Media spend") %in% tables$funnel_summary$stage))
 
+roll_long <- data.table(
+  week = rep(as.Date("2024-01-07") + 7 * 0:1, each = 3),
+  variable = rep(c("meta_campaign_1", "meta_campaign_2", "tiktok_campaign_1"), times = 2),
+  contribution = c(10, 8, 5, 12, 9, 6),
+  y_actual = 120,
+  pred = 115,
+  residual = 5
+)
+roll_raw <- data.table(
+  week = as.Date("2024-01-07") + 7 * 0:1,
+  meta_campaign_1_spend = c(100, 110),
+  meta_campaign_2_spend = c(80, 90),
+  tiktok_campaign_1_spend = c(60, 70)
+)
+roll_channel_map <- data.table(
+  variable = c("meta_campaign_1", "meta_campaign_2", "tiktok_campaign_1"),
+  rollup_path = c(
+    "total_media > paid_social > meta > meta_campaign_1",
+    "total_media > paid_social > meta > meta_campaign_2",
+    "total_media > paid_social > tiktok > tiktok_campaign_1"
+  )
+)
+roll_tables <- build_mmm_deck_tables(
+  long_decomp = roll_long,
+  raw_data = roll_raw,
+  channel_map = roll_channel_map,
+  media_variables = roll_channel_map$variable,
+  time_col = "week",
+  period_granularity = "week"
+)
+add_result("deck builder infers channel from rollup_path without modeled parent variables",
+           nrow(roll_tables$contribution_by_channel[channel == "paid_social"]) == 1L &&
+             abs(roll_tables$contribution_by_channel[channel == "paid_social", contribution][1] - sum(roll_long$contribution)) < 1e-8 &&
+             !"paid_social" %in% roll_tables$contribution_by_variable$variable)
+add_result("deck builder exposes arbitrary-depth rollup-node contribution tables",
+           nrow(roll_tables$variable_rollup_map[rollup_node == "meta"]) == 2L &&
+             abs(roll_tables$contribution_by_rollup_node[rollup_node == "meta" & is_leaf_node == FALSE, contribution][1] - 39) < 1e-8 &&
+             abs(roll_tables$kpi_economics_by_rollup_node[rollup_node == "paid_social" & is_reporting_channel == TRUE, spend][1] -
+                   sum(as.matrix(roll_raw[, .(meta_campaign_1_spend, meta_campaign_2_spend, tiktok_campaign_1_spend)]))) < 1e-8)
+
 excel_week <- as.numeric(as.Date("2024-01-07") - as.Date("1899-12-30"))
 long_excel <- data.table(
   week = c(excel_week, excel_week + 7),
@@ -147,7 +187,7 @@ add_result("deck builder exposes chart registry with optimizer charts",
            is.data.table(tables_opt$chart_registry) &&
              any(tables_opt$chart_registry$chart_id == "optimizer_response_curves" & tables_opt$chart_registry$available))
 if (requireNamespace("ggplot2", quietly = TRUE)) {
-  deck_out_dir <- file.path(bundle_dir, "test_outputs", "deck_optimizer_outputs")
+  deck_out_dir <- file.path(tempdir(), "deck_optimizer_outputs")
   files_opt <- write_mmm_deck_outputs(
     report_tables = tables_opt,
     output_dir = deck_out_dir,

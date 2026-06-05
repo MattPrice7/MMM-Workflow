@@ -24,7 +24,8 @@ The package does include a Bayesian model. Documentation should not imply that t
 - [x] Core files must stand on their own: Stan, quasi-geo, optimizer, and chart builder should not require the prior-recovery workflow.
 - [x] Add explicit core standalone contract test covering Stan, quasi-geo, optimizer, deck builder, and workflow aliases.
 - [x] Add cleaned analyst idea workflow: raw scratchpad, dated review notes, and cleaned idea backlog.
-- [ ] Standardize optional variable metadata for reporting and planning rollups: `parent_channel`, `sub_channel`, `placement`, `creative`, `funnel_stage`, and `channel_family`.
+- [x] Add optional `rollup_path` metadata for reporting and planning rollups, e.g. `total_media > paid_social > meta > meta_campaign_1`, without modeling parent rows or double-counting parent variables.
+- [ ] Add optional semantic metadata columns later for richer slicers: `parent_channel`, `sub_channel`, `placement`, `creative`, `funnel_stage`, and `channel_family`.
 - [ ] Move to formal R package structure later: `DESCRIPTION`, `NAMESPACE`, `R/`, `inst/stan/`, `tests/testthat/`, examples, optional `renv.lock`.
 - [ ] Split large scripts only after core logic stabilizes. Preserve public analyst-facing function names.
 - [ ] Add one centralized config object/list for common workflow settings.
@@ -141,6 +142,7 @@ Done:
 - [x] Add `optimizer_method = "robust_grid"` to select plans using posterior/draw objectives such as q05 contribution, expected utility, probability of clearing a target, q05 ROI, or q95 cost per KPI.
 - [x] Add `optimizer_method = "robust_hybrid"` as a coarse robust-grid plus continuous local-refinement option.
 - [x] Add grouped/product-level constraints and rollups through `variable_group_map`, `group_constraints`, and `optimization_group_rollup`.
+- [x] Allow `variable_group_map$rollup_path` to infer planning groups from arbitrary-depth metadata when explicit `planning_group` is not supplied.
 - [x] Add optimizer tests for locked channels plus grouped/product-level cap and share constraints.
 - [x] Enforce channel min/max/fixed spend constraints against actual curve spend, not only multiplier-converted spend.
 - [x] Add response-curve tests for zero-current launch channels, nonlinear explicit spend curves, infeasible constraints, missing spend/current spend, and negative contribution diagnostics.
@@ -175,6 +177,7 @@ Done:
 - [x] KPI decomposition funnel table/chart.
 - [x] Cost per KPI / outcome per cost outputs.
 - [x] Channel rollups for split variables.
+- [x] Add arbitrary-depth `rollup_path` support through `channel_map`, with `variable_rollup_map`, contribution-by-rollup-node, period rollup, and KPI economics rollup tables.
 - [x] Static HTML/CSV/PNG outputs with optional Excel/Shiny paths.
 - [x] Add optimizer outputs into deck builder charts.
 - [x] Split chart metadata into client-facing, appendix, and internal QA chart registry.
@@ -192,7 +195,7 @@ Next:
 - [ ] Add client color palette/channel color inputs.
 - [ ] Add searchable dropdown slicers and more flexible chart filters.
 - [ ] Add period-change filters so analysts can compare selected periods, not only static totals.
-- [ ] Add channel/subchannel filters using optional variable metadata such as `parent_channel`, `sub_channel`, placement, creative, and funnel stage.
+- [ ] Add channel/subchannel filters using `rollup_path` plus optional metadata such as placement, creative, and funnel stage.
 - [ ] Add fair share index and bubble charts where axes can compare spend, contribution, ROI/cost-per-KPI, and bubble size can represent contribution or spend.
 - [ ] Add posterior/credible interval bands to contribution, response-curve, ROI, and mROI charts when draw-level outputs are available.
 - [ ] Add posterior diagnostic plots for coefficients, prior-vs-posterior shifts, and parameter uncertainty.

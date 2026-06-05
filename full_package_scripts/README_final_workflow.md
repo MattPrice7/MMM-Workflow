@@ -41,7 +41,8 @@ Run `build_chart_builder_showcase.R` from that folder after chart-builder change
 - `mmm_deck_output_builder.R`
   - Reporting layer for decomposition outputs.
   - Builds deck-ready CSV tables, PNG charts, a static HTML dashboard, optional Excel workbook output, and an optional Shiny/Plotly/DT app folder.
-  - Includes channel rollups, period-over-period change, due-to contribution movement, funnel summary, channel-level KPI economics, and variable/channel role mapping.
+  - Includes channel rollups, arbitrary-depth `rollup_path` reporting metadata, period-over-period change, due-to contribution movement, funnel summary, channel-level KPI economics, and variable/channel role mapping.
+  - `rollup_path` is metadata only. Parent nodes such as `paid_social` or `meta` are used for reporting/economics rollups and are not modeled unless they also appear as explicit modeled variables.
   - Can ingest `optimizer_output` from `run_optimizer_scenario_planner()` and export optimizer scenario comparison, recommended plan, group rollup, saturation/headroom, response-curve, and uncertainty tables.
   - Adds optimizer charts for current vs recommended spend, scenario incremental contribution, response curves, marginal response, and saturation/headroom when the required columns are available.
   - Includes a chart registry with audience tags (`client`, `appendix`, `internal_qa`), required tables/columns, availability, and recommended slide titles.
@@ -53,7 +54,7 @@ Run `build_chart_builder_showcase.R` from that folder after chart-builder change
   - Always optimizes against response curves. With a fitted Stan MMM object, it uses `fit$response_curves` when available; otherwise it can generate the same curve points from the fitted transform/coefficient path used by decomposition. It can also accept a precomputed response-curve table for hand-built curves, external models, or baseline planning before a full MMM fit exists.
   - Outputs current plan economics, response curves, grid-based saturation/headroom diagnostics, all-channel and custom scenarios, optimized spend plan, allocation history, ROI, mROI, cost per KPI, and diagnostics.
   - Preserves explicit spend/support points from supplied response-curve sheets, so CPM/CPP/support-based curves can be audited without forcing every row into a linear spend multiplier. When curves are supplied in support units such as impressions, GRPs, rating points, visits, clicks, or leads, `support_cost_map` can price those curves using CPM, CPP, cost per point, or cost per support unit. Scenario plans can also be entered as planned support units, and the planner converts them to the matching response-curve spend/multiplier path. Grid and hybrid optimizers enforce channel min/max/fixed spend constraints against the actual candidate spend on the curve, which also covers zero-current launch channels and nonlinear spend/support curves.
-  - Uses a transparent greedy marginal-response allocator by default. Optional search modes include `optimizer_method = "grid"` exhaustive grid search, `optimizer_method = "hybrid"` coarse grid plus continuous local refinement, `optimizer_method = "robust_grid"` posterior/draw-aware grid search, and `optimizer_method = "robust_hybrid"` robust grid plus continuous local refinement. Robust modes can optimize q05 contribution, expected utility, probability of clearing a target, q05 ROI, or q95 cost per KPI. All paths support min/max, locked channel, fixed spend, min spend, max spend, total budget, and budget-change constraints. Grid/hybrid modes also support `variable_group_map` plus `group_constraints` for portfolio, product, line-of-business, or channel-family caps/floors/share limits and emit `optimization_group_rollup`.
+  - Uses a transparent greedy marginal-response allocator by default. Optional search modes include `optimizer_method = "grid"` exhaustive grid search, `optimizer_method = "hybrid"` coarse grid plus continuous local refinement, `optimizer_method = "robust_grid"` posterior/draw-aware grid search, and `optimizer_method = "robust_hybrid"` robust grid plus continuous local refinement. Robust modes can optimize q05 contribution, expected utility, probability of clearing a target, q05 ROI, or q95 cost per KPI. All paths support min/max, locked channel, fixed spend, min spend, max spend, total budget, and budget-change constraints. Grid/hybrid modes also support `variable_group_map` plus `group_constraints` for portfolio, product, line-of-business, or channel-family caps/floors/share limits and emit `optimization_group_rollup`. If `variable_group_map` contains `rollup_path` but no explicit `planning_group`, the planner infers the first meaningful reporting node, e.g. `paid_social` from `total_media > paid_social > meta > meta_campaign_1`.
   - Includes target planning: minimum budget needed for a KPI target, and maximum budget that stays within target cost per KPI or ROI thresholds.
   - Current optimizer recommendation is point-estimate decision support unless a robust optimizer is selected. When draw-level response curves are supplied through `response_curve_draws`, `fit$response_curves_draws`, or `uncertainty = "draws"` with a Stan fit, the planner also outputs q05/q50/q95 and custom-quantile scenario and optimized-plan uncertainty tables. These include incremental contribution, incremental ROI, expected profit, q05/custom profit, probability profit is positive, and probability incremental contribution is positive. Profit fields require `value_per_kpi`; KPI-only workflows can still use contribution and cost-per-KPI uncertainty.
 
@@ -202,9 +203,13 @@ report <- run_mmm_deck_output_builder(
   wide_decomp = fit$wide_decomp,
   raw_data = modcut,                 # optional, but needed for cost-per-KPI metrics
   optimizer_output = planner,         # optional: adds optimizer/scenario tables and charts
-  channel_map = data.table(          # optional: combine splits into client-facing channels
-    variable = c("social_brand", "social_prospecting", "search"),
-    channel = c("Paid Social", "Paid Social", "Paid Search"),
+  channel_map = data.table(          # optional: combine splits into client-facing rollups
+    variable = c("meta_campaign_1", "meta_campaign_2", "search"),
+    rollup_path = c(
+      "total_media > paid_social > meta > meta_campaign_1",
+      "total_media > paid_social > meta > meta_campaign_2",
+      "total_media > paid_search > search"
+    ),
     role = c("media", "media", "media")
   ),
   output_dir = "mmm_deck_outputs",

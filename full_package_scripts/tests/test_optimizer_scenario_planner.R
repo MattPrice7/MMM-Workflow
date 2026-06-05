@@ -82,6 +82,37 @@ add_result("grid optimizer enforces planning-group max-spend constraint",
              nrow(out_group_cap$optimization_group_rollup[planning_group == "upper_funnel"]) == 1L &&
              isTRUE(out_group_cap$optimization_group_rollup[planning_group == "upper_funnel", group_constraint_ok][1]))
 
+rollup_curves <- rbindlist(list(
+  data.table(variable = "meta_campaign_1", spend_multiplier = m, current_spend = 50, contribution = 35 * (1 - exp(-1.0 * m))),
+  data.table(variable = "meta_campaign_2", spend_multiplier = m, current_spend = 50, contribution = 30 * (1 - exp(-0.9 * m))),
+  data.table(variable = "tiktok_campaign_1", spend_multiplier = m, current_spend = 50, contribution = 25 * (1 - exp(-0.8 * m)))
+))
+rollup_variable_map <- data.table(
+  variable = c("meta_campaign_1", "meta_campaign_2", "tiktok_campaign_1"),
+  rollup_path = c(
+    "total_media > paid_social > meta > meta_campaign_1",
+    "total_media > paid_social > meta > meta_campaign_2",
+    "total_media > paid_social > tiktok > tiktok_campaign_1"
+  )
+)
+out_rollup_group <- run_optimizer_scenario_planner(
+  response_curves = rollup_curves,
+  total_budget = 120,
+  variable_group_map = rollup_variable_map,
+  group_constraints = data.table(planning_group = "paid_social", max_spend = 120),
+  multiplier_grid = seq(0, 2, by = 0.25),
+  optimizer_method = "grid",
+  optimization_grid_step = 0.25,
+  max_grid_combinations = 1000L,
+  max_multiplier = 2,
+  scenario_multipliers = 1
+)
+add_result("optimizer infers planning groups from arbitrary-depth rollup_path metadata",
+           nrow(out_rollup_group$optimization_group_rollup) == 1L &&
+             out_rollup_group$optimization_group_rollup$planning_group[1] == "paid_social" &&
+             out_rollup_group$optimization_group_rollup$variable_count[1] == 3L &&
+             out_rollup_group$optimization_group_rollup$recommended_spend[1] <= 120 + 1e-8)
+
 out_group_share <- run_optimizer_scenario_planner(
   response_curves = response_curves,
   total_budget = 200,

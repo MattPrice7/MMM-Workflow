@@ -4,14 +4,6 @@ This is the cleaned, non-train-of-thought backlog promoted from the scratchpad. 
 
 ## Active To Do
 
-- Add variable metadata for rollups:
-  - `parent_channel`
-  - `sub_channel`
-  - `placement`
-  - `creative`
-  - `funnel_stage`
-  - optional `channel_family`
-- Use that metadata in chart-builder slicers, optimizer grouping, and channel/subchannel reporting.
 - Improve chart-builder usability:
   - searchable dropdown slicers
   - client color palettes and channel color overrides
@@ -28,6 +20,13 @@ This is the cleaned, non-train-of-thought backlog promoted from the scratchpad. 
 
 ## Future
 
+- Add optional semantic variable metadata for richer slicers:
+  - placement
+  - creative
+  - funnel stage
+  - channel family
+  - campaign or platform labels
+- Extend chart-builder slicers to use `rollup_path` plus optional semantic metadata.
 - Add optional `model_id_parts` metadata for flexible model-cell descriptions such as geo, product, line of business, retailer, store type, segment, platform, or any future modeling dimension.
 - Add hierarchy-family metadata for opt-in pooling across products, channels, or model ID parts.
 - Add explicit interaction/effect-modifier helpers for selected relationships, such as upper-funnel media modifying search response.
@@ -42,6 +41,8 @@ This is the cleaned, non-train-of-thought backlog promoted from the scratchpad. 
 - Neural MMM / TFT as a challenger model after hostile known-truth validation.
 
 ## Current Position
+
+`rollup_path` is now the default arbitrary-depth rollup mechanism for optimizer planning groups and deck reporting. Parent rollup nodes remain metadata, not modeled variables.
 
 The main production path should stay:
 

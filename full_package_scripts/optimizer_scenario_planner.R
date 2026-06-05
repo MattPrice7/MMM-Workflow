@@ -99,6 +99,22 @@ opsp_check_unique_variables <- function(x, label) {
   invisible(TRUE)
 }
 
+opsp_split_rollup_path <- function(path) {
+  if (length(path) < 1L || is.na(path[1]) || !nzchar(as.character(path[1]))) return(character())
+  nodes <- trimws(strsplit(as.character(path[1]), ">", fixed = TRUE)[[1]])
+  nodes[nzchar(nodes)]
+}
+
+opsp_rollup_reporting_node <- function(path, variable = NA_character_) {
+  nodes <- opsp_split_rollup_path(path)
+  variable <- as.character(variable)[1]
+  if (!length(nodes)) return(variable)
+  root_aliases <- c("total", "total_media", "media", "paid_media", "all_media", "all")
+  first <- tolower(gsub("[^a-z0-9]+", "_", nodes[1]))
+  if (length(nodes) >= 2L && first %in% root_aliases) return(nodes[2])
+  nodes[1]
+}
+
 opsp_infer_variables <- function(fit_obj = NULL, response_curves = NULL, variables = NULL) {
   if (!is.null(variables)) return(unique(as.character(variables)))
   if (!is.null(fit_obj) && !is.null(fit_obj$variable_lookup)) {
@@ -165,9 +181,16 @@ opsp_normalize_variable_group_map <- function(variables, variable_group_map = NU
   if (is.null(variable_group_map) || !nrow(opsp_as_dt(variable_group_map))) return(out[])
   gm <- opsp_as_dt(variable_group_map, "variable_group_map")
   if (!"variable" %in% names(gm)) stop("variable_group_map must include variable.", call. = FALSE)
-  gcol <- opsp_pick_col(gm, c("planning_group", "constraint_group", "group", "parent_channel", "channel_group", "product", "portfolio", "line_of_business", "lob"))
-  if (is.na(gcol)) stop("variable_group_map must include a group column such as planning_group, parent_channel, product, or line_of_business.", call. = FALSE)
-  gm <- gm[, .(variable = as.character(variable), planning_group = as.character(get(gcol)))]
+  gcol <- opsp_pick_col(gm, c("planning_group", "constraint_group", "group", "reporting_channel", "channel", "parent_channel", "channel_group", "product", "portfolio", "line_of_business", "lob"))
+  if (is.na(gcol) && !"rollup_path" %in% names(gm)) {
+    stop("variable_group_map must include a group column such as planning_group, channel, parent_channel, product, line_of_business, or rollup_path.", call. = FALSE)
+  }
+  if (!is.na(gcol)) {
+    gm <- gm[, .(variable = as.character(variable), planning_group = as.character(get(gcol)))]
+  } else {
+    gm <- gm[, .(variable = as.character(variable),
+                 planning_group = mapply(opsp_rollup_reporting_node, rollup_path, variable, USE.NAMES = FALSE))]
+  }
   gm <- gm[nzchar(variable)]
   dup <- gm[duplicated(variable), unique(variable)]
   if (length(dup)) stop("variable_group_map has duplicate variable rows: ", paste(dup, collapse = ", "), call. = FALSE)
