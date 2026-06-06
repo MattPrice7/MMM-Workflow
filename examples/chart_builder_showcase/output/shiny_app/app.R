@@ -33,8 +33,14 @@ if (nrow(period_index) && "quarter_label" %in% names(period_index)) {
 period_compare_choices <- if (nrow(period_index) && "quarter_label" %in% names(period_index)) unique(period_index[order(period_sort)]$quarter_label) else character()
 variable_choices <- sort(unique(c(choices_from("contribution_by_variable", "variable"), choices_from("kpi_economics", "variable"), choices_from("optimizer_response_curves", "variable"))))
 curve_choices <- choices_from("optimizer_response_curves", "variable")
-posterior_variable_choices <- choices_from("optimizer_scenario_uncertainty_draws_by_variable", "variable")
-if (!length(posterior_variable_choices)) posterior_variable_choices <- choices_from("optimizer_optimization_uncertainty_draws_by_variable", "variable")
+stan_posterior_variable_choices <- choices_from("stan_posterior_variable_draws", "variable")
+optimizer_posterior_variable_choices <- choices_from("optimizer_scenario_uncertainty_draws_by_variable", "variable")
+if (!length(optimizer_posterior_variable_choices)) optimizer_posterior_variable_choices <- choices_from("optimizer_optimization_uncertainty_draws_by_variable", "variable")
+posterior_source_choices <- character()
+if (length(stan_posterior_variable_choices)) posterior_source_choices <- c(posterior_source_choices, "Stan variable posterior" = "stan")
+if (length(optimizer_posterior_variable_choices)) posterior_source_choices <- c(posterior_source_choices, "Optimizer scenario posterior" = "optimizer")
+if (!length(posterior_source_choices)) posterior_source_choices <- c("No draw-level posterior tables" = "none")
+posterior_variable_choices <- if (length(stan_posterior_variable_choices)) stan_posterior_variable_choices else optimizer_posterior_variable_choices
 if (!length(posterior_variable_choices)) posterior_variable_choices <- curve_choices
 role_choices <- c("All roles" = "__all__", stats::setNames(sort(unique(as.character(table_or_empty("contribution_by_variable")$role))), sort(unique(as.character(table_or_empty("contribution_by_variable")$role)))))
 fit_overlay_choices <- c("None" = "__none__", stats::setNames(variable_choices, variable_choices))
@@ -74,7 +80,7 @@ ui <- fluidPage(
     tabPanel("Contribution", br(), div(class = "control-panel", fluidRow(column(4, actionButton("open_period_compare", "Compare periods")), column(8, uiOutput("period_compare_label")))), fluidRow(column(7, div(class = "panel", h4("Contribution over time"), plotlyOutput("contribution_trend_plot", height = "430px"))), column(5, div(class = "panel", h4("Period change due-to"), plotlyOutput("due_to_plot", height = "430px")))), div(class = "panel", h4("Selected period comparison"), plotlyOutput("period_compare_plot", height = "430px"))),
     tabPanel("KPI Economics", br(), div(class = "control-panel", selectInput("econ_metric", "Economics metric", choices = econ_metric_choices, selected = econ_metric_choices[1])), fluidRow(column(6, div(class = "panel", plotlyOutput("spend_scatter", height = "420px"))), column(6, div(class = "panel", plotlyOutput("econ_rank_plot", height = "420px"))))),
     tabPanel("Optimizer", br(), div(class = "control-panel", fluidRow(column(4, selectInput("scenario_metric", "Scenario metric", choices = scenario_metric_choices, selected = scenario_metric_choices[1])), column(8, plotlyOutput("optimizer_scenario_plot", height = "330px")))), fluidRow(column(6, div(class = "panel", plotlyOutput("optimizer_spend_plot", height = "420px"))), column(6, div(class = "panel", plotlyOutput("optimizer_saturation_plot", height = "420px"))))),
-    tabPanel("Posterior / Uncertainty", br(), div(class = "control-panel", fluidRow(column(3, selectInput("posterior_variable", "Variable", choices = posterior_variable_choices, selected = if (length(posterior_variable_choices)) posterior_variable_choices[1] else character())), column(3, selectInput("posterior_scenario", "Scenario", choices = c("Auto" = "__auto__"))), column(3, selectInput("posterior_x", "X metric", choices = c("ROI" = "roi", "Contribution" = "contribution", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi"), selected = "roi")), column(3, selectInput("posterior_y", "Y metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi"), selected = "contribution")))), fluidRow(column(6, div(class = "panel", h4("Scenario contribution uncertainty"), plotlyOutput("scenario_uncertainty_plot", height = "420px"))), column(6, div(class = "panel", h4("2D posterior draw distribution"), plotlyOutput("posterior_2d_plot", height = "420px"))))),
+    tabPanel("Posterior / Uncertainty", br(), div(class = "control-panel", fluidRow(column(3, selectInput("posterior_source", "Posterior source", choices = posterior_source_choices, selected = posterior_source_choices[1])), column(3, selectInput("posterior_variable", "Variable", choices = posterior_variable_choices, selected = if (length(posterior_variable_choices)) posterior_variable_choices[1] else character())), column(2, selectInput("posterior_scenario", "Scenario", choices = c("Auto" = "__auto__"))), column(2, selectInput("posterior_x", "X metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "contribution")), column(2, selectInput("posterior_y", "Y metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "roi")))), fluidRow(column(6, div(class = "panel", h4("Scenario contribution uncertainty"), plotlyOutput("scenario_uncertainty_plot", height = "420px"))), column(6, div(class = "panel", h4("2D posterior draw distribution"), plotlyOutput("posterior_2d_plot", height = "420px"))))),
     tabPanel("Diagnostics", br(), div(class = "panel", DTOutput("flags_table")), div(class = "panel", DTOutput("fit_table")), div(class = "panel", plotlyOutput("residual_plot", height = "380px")), div(class = "panel", h4("Chart registry"), DTOutput("chart_registry_table")))
   )
 )
@@ -511,22 +517,36 @@ server <- function(input, output, session) {
     p <- ggplot(out, aes(x = reorder(variable, change), y = change, fill = change >= 0, text = paste(variable, "<br>Base:", fmt(base_contribution), "<br>Comparison:", fmt(comparison_contribution), "<br>Change:", fmt(change), "<br>% change:", fmt(100 * pct_change), "%"))) + geom_hline(yintercept = 0, color = "#9CA3AF") + geom_col(width = 0.72, show.legend = FALSE) + coord_flip() + scale_fill_manual(values = c("TRUE" = "#16A34A", "FALSE" = "#DC2626")) + labs(title = "Contribution change: selected periods", x = NULL, y = "Contribution change") + chart_theme()
     ggplotly(p, tooltip = "text")
   })
-  posterior_draw_dt <- reactive({
+  stan_posterior_draw_dt <- reactive({ table_or_empty("stan_posterior_variable_draws") })
+  optimizer_posterior_draw_dt <- reactive({
     dt <- table_or_empty("optimizer_scenario_uncertainty_draws_by_variable")
     if (!nrow(dt)) dt <- table_or_empty("optimizer_optimization_uncertainty_draws_by_variable")
     dt
   })
+  posterior_draw_dt <- reactive({
+    src <- input$posterior_source %||% if (nrow(stan_posterior_draw_dt())) "stan" else "optimizer"
+    if (identical(src, "stan")) return(stan_posterior_draw_dt())
+    if (identical(src, "optimizer")) return(optimizer_posterior_draw_dt())
+    data.table()
+  })
   observe({
     dt <- posterior_draw_dt()
-    choices <- if (nrow(dt) && "scenario" %in% names(dt)) sort(unique(as.character(dt$scenario))) else character()
+    choices <- if (nrow(dt) && "variable" %in% names(dt)) sort(unique(as.character(dt$variable))) else character()
+    preferred <- intersect(choices, curve_choices)
+    selected <- if (length(preferred)) preferred[1] else if (length(choices)) choices[1] else character()
+    updateSelectInput(session, "posterior_variable", choices = stats::setNames(choices, choices), selected = selected)
+  })
+  observe({
+    dt <- posterior_draw_dt()
+    choices <- if (!identical(input$posterior_source, "stan") && nrow(dt) && "scenario" %in% names(dt)) sort(unique(as.character(dt$scenario))) else character()
     updateSelectInput(session, "posterior_scenario", choices = c("Auto" = "__auto__", stats::setNames(choices, choices)), selected = if (length(choices)) choices[1] else "__auto__")
   })
   output$posterior_2d_plot <- renderPlotly({
     dt <- posterior_draw_dt()
-    validate(need(nrow(dt) > 0, "No draw-level posterior scenario rows available. Run the optimizer with draw-level response curves to enable 2D posterior distributions."))
+    validate(need(nrow(dt) > 0, "No draw-level posterior rows available. Pass posterior_decomp_draws for Stan diagnostics or optimizer draw curves for scenario uncertainty."))
     vars <- input$posterior_variable %||% selected_vars()[1]
     dt <- dt[as.character(variable) == vars]
-    if (!is.null(input$posterior_scenario) && input$posterior_scenario != "__auto__" && "scenario" %in% names(dt)) dt <- dt[as.character(scenario) == input$posterior_scenario]
+    if (!identical(input$posterior_source, "stan") && !is.null(input$posterior_scenario) && input$posterior_scenario != "__auto__" && "scenario" %in% names(dt)) dt <- dt[as.character(scenario) == input$posterior_scenario]
     xmetric <- input$posterior_x %||% "roi"; ymetric <- input$posterior_y %||% "contribution"
     validate(need(nrow(dt) > 0 && xmetric %in% names(dt) && ymetric %in% names(dt), "No posterior draws available for the selected variable/scenario/metrics."))
     dt[, x__ := suppressWarnings(as.numeric(get(xmetric)))]
@@ -535,7 +555,8 @@ server <- function(input, output, session) {
     validate(need(nrow(dt) > 2, "Not enough finite posterior draws for a 2D distribution."))
     p <- plot_ly(dt, x = ~x__, y = ~y__, type = "scatter", mode = "markers", marker = list(color = palette_values()[1], size = 6, opacity = 0.35), hovertemplate = paste0(vars, "<br>", xmetric, ": %{x:,.4f}<br>", ymetric, ": %{y:,.2f}<extra></extra>"))
     if (nrow(dt) >= 20) p <- add_histogram2dcontour(p, data = dt, x = ~x__, y = ~y__, contours = list(coloring = "none"), line = list(color = "rgba(15,23,42,0.45)", width = 1), showscale = FALSE, hoverinfo = "skip")
-    plotly_theme(p, title = paste("Posterior draws:", vars), x_title = gsub("_", " ", xmetric), y_title = gsub("_", " ", ymetric))
+    title_prefix <- if (identical(input$posterior_source, "stan")) "Stan posterior variable shadow:" else "Optimizer scenario posterior:"
+    plotly_theme(p, title = paste(title_prefix, vars), x_title = gsub("_", " ", xmetric), y_title = gsub("_", " ", ymetric))
   })
   output$contribution_table <- renderDT(dt_widget(selected_contrib(), 20))
   output$trend_table <- renderDT(dt_widget(filter_role(filter_vars(table_or_empty("contribution_by_period_variable"))), 20))

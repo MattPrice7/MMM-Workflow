@@ -51,6 +51,13 @@ mdo_sum_or_na <- function(x) {
   sum(x, na.rm = TRUE)
 }
 
+mdo_quantile_or_na <- function(x, prob) {
+  x <- mdo_safe_num(x)
+  x <- x[is.finite(x)]
+  if (!length(x)) return(NA_real_)
+  as.numeric(stats::quantile(x, prob, na.rm = TRUE, names = FALSE))
+}
+
 mdo_as_dateish <- function(x) {
   if (inherits(x, "Date")) return(x)
   if (inherits(x, "IDate")) return(as.Date(x))
@@ -633,6 +640,109 @@ mdo_build_optimizer_deck_tables <- function(optimizer_output = NULL) {
   )
 }
 
+mdo_build_stan_posterior_tables <- function(posterior_decomp_draws = NULL,
+                                            standardized_long = NULL,
+                                            kpi_economics = NULL,
+                                            media_variables = NULL,
+                                            baseline_variables = NULL,
+                                            time_col = NULL,
+                                            period_granularity = "month") {
+  empty <- data.table::data.table()
+  src <- if (!is.null(posterior_decomp_draws)) {
+    mdo_as_dt(posterior_decomp_draws, "posterior_decomp_draws")
+  } else if (!is.null(standardized_long)) {
+    data.table::copy(standardized_long)
+  } else {
+    empty
+  }
+  if (!nrow(src)) {
+    return(list(
+      stan_posterior_variable_draws = empty,
+      stan_posterior_variable_summary = empty,
+      stan_posterior_period_variable_summary = empty
+    ))
+  }
+  time_col_found <- mdo_pick_col(src, c(time_col, "week", "date", "period", "month", "time", "ds"))
+  if (!is.na(time_col_found)) src <- mdo_add_period_fields(src, time_col_found, period_granularity)
+  draw_col <- mdo_pick_col(src, c(".draw", "draw", "posterior_draw", "iteration", "sample_id", "mcmc_draw"))
+  if (is.na(draw_col)) {
+    return(list(
+      stan_posterior_variable_draws = empty,
+      stan_posterior_variable_summary = empty,
+      stan_posterior_period_variable_summary = empty
+    ))
+  }
+  variable_col <- mdo_pick_col(src, c("variable", "var", "driver", "channel"))
+  contribution_col <- mdo_pick_col(src, c("contribution", "incremental_contribution", "effect", "value"))
+  if (is.na(variable_col) || is.na(contribution_col)) {
+    return(list(
+      stan_posterior_variable_draws = empty,
+      stan_posterior_variable_summary = empty,
+      stan_posterior_period_variable_summary = empty
+    ))
+  }
+  if (!identical(draw_col, ".draw")) data.table::setnames(src, draw_col, ".draw")
+  if (!identical(variable_col, "variable")) data.table::setnames(src, variable_col, "variable")
+  if (!identical(contribution_col, "contribution")) data.table::setnames(src, contribution_col, "contribution")
+  src[, `:=`(.draw = as.character(.draw), variable = as.character(variable), contribution = mdo_safe_num(contribution))]
+  src <- src[nzchar(.draw) & nzchar(variable) & is.finite(contribution)]
+  if (!nrow(src)) {
+    return(list(
+      stan_posterior_variable_draws = empty,
+      stan_posterior_variable_summary = empty,
+      stan_posterior_period_variable_summary = empty
+    ))
+  }
+  src[, role := mdo_assign_roles(variable, media_variables = media_variables, baseline_variables = baseline_variables)]
+  draws <- src[, .(
+    contribution = sum(contribution, na.rm = TRUE),
+    avg_row_contribution = mean(contribution, na.rm = TRUE),
+    row_n = .N
+  ), by = .(.draw, variable, role)]
+  if (!is.null(kpi_economics) && nrow(kpi_economics) && all(c("variable", "spend") %in% names(kpi_economics))) {
+    ke <- data.table::copy(kpi_economics)[, .(variable = as.character(variable), spend = mdo_safe_num(spend))]
+    draws[ke, spend := i.spend, on = "variable"]
+  } else {
+    draws[, spend := NA_real_]
+  }
+  draws[, `:=`(
+    roi = mdo_safe_num(contribution) / mdo_safe_num(spend),
+    cost_per_kpi = data.table::fifelse(abs(mdo_safe_num(contribution)) > 1e-8, mdo_safe_num(spend) / mdo_safe_num(contribution), NA_real_),
+    outcome_per_cost = data.table::fifelse(abs(mdo_safe_num(spend)) > 1e-8, mdo_safe_num(contribution) / mdo_safe_num(spend), NA_real_)
+  )]
+  summary <- draws[, .(
+    draw_n = data.table::uniqueN(.draw),
+    contribution_q05 = mdo_quantile_or_na(contribution, 0.05),
+    contribution_q50 = mdo_quantile_or_na(contribution, 0.50),
+    contribution_q95 = mdo_quantile_or_na(contribution, 0.95),
+    contribution_mean = mean(contribution, na.rm = TRUE),
+    roi_q05 = mdo_quantile_or_na(roi, 0.05),
+    roi_q50 = mdo_quantile_or_na(roi, 0.50),
+    roi_q95 = mdo_quantile_or_na(roi, 0.95),
+    cost_per_kpi_q50 = mdo_quantile_or_na(cost_per_kpi, 0.50),
+    probability_contribution_positive = mean(contribution > 0, na.rm = TRUE)
+  ), by = .(variable, role)][order(role, variable)]
+  period_summary <- empty
+  period_cols <- c("period_granularity", "period_start", "period_label", "period_sort")
+  if (all(period_cols %in% names(src))) {
+    period_draws <- src[, .(
+      contribution = sum(contribution, na.rm = TRUE)
+    ), by = c(".draw", period_cols, "variable", "role")]
+    period_summary <- period_draws[, .(
+      contribution_draw_n = data.table::uniqueN(.draw),
+      contribution_q05 = mdo_quantile_or_na(contribution, 0.05),
+      contribution_q50 = mdo_quantile_or_na(contribution, 0.50),
+      contribution_q95 = mdo_quantile_or_na(contribution, 0.95)
+    ), by = c(period_cols, "variable", "role")]
+    data.table::setorderv(period_summary, c("period_sort", "variable"))
+  }
+  list(
+    stan_posterior_variable_draws = draws[order(variable, .draw)][],
+    stan_posterior_variable_summary = summary[],
+    stan_posterior_period_variable_summary = period_summary[]
+  )
+}
+
 mdo_build_chart_registry <- function(report_tables) {
   specs <- data.table::data.table(
     chart_id = c(
@@ -692,6 +802,7 @@ build_mmm_deck_tables <- function(long_decomp,
                                   modcut = NULL,
                                   spend_map = NULL,
                                   optimizer_output = NULL,
+                                  posterior_decomp_draws = NULL,
                                   channel_map = NULL,
                                   media_variables = NULL,
                                   baseline_variables = NULL,
@@ -1036,6 +1147,28 @@ build_mmm_deck_tables <- function(long_decomp,
     data.table::setorder(kpi_economics_by_period, period_sort, variable)
   }
 
+  stan_posterior_tables <- mdo_build_stan_posterior_tables(
+    posterior_decomp_draws = posterior_decomp_draws,
+    standardized_long = long[],
+    kpi_economics = kpi_economics[],
+    media_variables = media_variables,
+    baseline_variables = baseline_variables,
+    time_col = time_col,
+    period_granularity = period_granularity
+  )
+  if (nrow(stan_posterior_tables$stan_posterior_period_variable_summary)) {
+    contribution_by_period_variable[
+      stan_posterior_tables$stan_posterior_period_variable_summary,
+      `:=`(
+        contribution_draw_n = i.contribution_draw_n,
+        contribution_q05 = i.contribution_q05,
+        contribution_q50 = i.contribution_q50,
+        contribution_q95 = i.contribution_q95
+      ),
+      on = c("period_granularity", "period_start", "period_label", "period_sort", "variable", "role")
+    ]
+  }
+
   diagnostic_flags <- data.table::data.table(
     check = character(),
     severity = character(),
@@ -1159,6 +1292,7 @@ build_mmm_deck_tables <- function(long_decomp,
     standardized_wide = wide[]
   )
   out <- c(out, optimizer_tables)
+  out <- c(out, stan_posterior_tables)
   out$chart_registry <- mdo_build_chart_registry(out)
   out
 }
@@ -1533,8 +1667,14 @@ write_mmm_deck_shiny_app <- function(report_tables,
     'period_compare_choices <- if (nrow(period_index) && "quarter_label" %in% names(period_index)) unique(period_index[order(period_sort)]$quarter_label) else character()',
     'variable_choices <- sort(unique(c(choices_from("contribution_by_variable", "variable"), choices_from("kpi_economics", "variable"), choices_from("optimizer_response_curves", "variable"))))',
     'curve_choices <- choices_from("optimizer_response_curves", "variable")',
-    'posterior_variable_choices <- choices_from("optimizer_scenario_uncertainty_draws_by_variable", "variable")',
-    'if (!length(posterior_variable_choices)) posterior_variable_choices <- choices_from("optimizer_optimization_uncertainty_draws_by_variable", "variable")',
+    'stan_posterior_variable_choices <- choices_from("stan_posterior_variable_draws", "variable")',
+    'optimizer_posterior_variable_choices <- choices_from("optimizer_scenario_uncertainty_draws_by_variable", "variable")',
+    'if (!length(optimizer_posterior_variable_choices)) optimizer_posterior_variable_choices <- choices_from("optimizer_optimization_uncertainty_draws_by_variable", "variable")',
+    'posterior_source_choices <- character()',
+    'if (length(stan_posterior_variable_choices)) posterior_source_choices <- c(posterior_source_choices, "Stan variable posterior" = "stan")',
+    'if (length(optimizer_posterior_variable_choices)) posterior_source_choices <- c(posterior_source_choices, "Optimizer scenario posterior" = "optimizer")',
+    'if (!length(posterior_source_choices)) posterior_source_choices <- c("No draw-level posterior tables" = "none")',
+    'posterior_variable_choices <- if (length(stan_posterior_variable_choices)) stan_posterior_variable_choices else optimizer_posterior_variable_choices',
     'if (!length(posterior_variable_choices)) posterior_variable_choices <- curve_choices',
     'role_choices <- c("All roles" = "__all__", stats::setNames(sort(unique(as.character(table_or_empty("contribution_by_variable")$role))), sort(unique(as.character(table_or_empty("contribution_by_variable")$role)))))',
     'fit_overlay_choices <- c("None" = "__none__", stats::setNames(variable_choices, variable_choices))',
@@ -1574,7 +1714,7 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '    tabPanel("Contribution", br(), div(class = "control-panel", fluidRow(column(4, actionButton("open_period_compare", "Compare periods")), column(8, uiOutput("period_compare_label")))), fluidRow(column(7, div(class = "panel", h4("Contribution over time"), plotlyOutput("contribution_trend_plot", height = "430px"))), column(5, div(class = "panel", h4("Period change due-to"), plotlyOutput("due_to_plot", height = "430px")))), div(class = "panel", h4("Selected period comparison"), plotlyOutput("period_compare_plot", height = "430px"))),',
     '    tabPanel("KPI Economics", br(), div(class = "control-panel", selectInput("econ_metric", "Economics metric", choices = econ_metric_choices, selected = econ_metric_choices[1])), fluidRow(column(6, div(class = "panel", plotlyOutput("spend_scatter", height = "420px"))), column(6, div(class = "panel", plotlyOutput("econ_rank_plot", height = "420px"))))),',
     '    tabPanel("Optimizer", br(), div(class = "control-panel", fluidRow(column(4, selectInput("scenario_metric", "Scenario metric", choices = scenario_metric_choices, selected = scenario_metric_choices[1])), column(8, plotlyOutput("optimizer_scenario_plot", height = "330px")))), fluidRow(column(6, div(class = "panel", plotlyOutput("optimizer_spend_plot", height = "420px"))), column(6, div(class = "panel", plotlyOutput("optimizer_saturation_plot", height = "420px"))))),',
-    '    tabPanel("Posterior / Uncertainty", br(), div(class = "control-panel", fluidRow(column(3, selectInput("posterior_variable", "Variable", choices = posterior_variable_choices, selected = if (length(posterior_variable_choices)) posterior_variable_choices[1] else character())), column(3, selectInput("posterior_scenario", "Scenario", choices = c("Auto" = "__auto__"))), column(3, selectInput("posterior_x", "X metric", choices = c("ROI" = "roi", "Contribution" = "contribution", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi"), selected = "roi")), column(3, selectInput("posterior_y", "Y metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi"), selected = "contribution")))), fluidRow(column(6, div(class = "panel", h4("Scenario contribution uncertainty"), plotlyOutput("scenario_uncertainty_plot", height = "420px"))), column(6, div(class = "panel", h4("2D posterior draw distribution"), plotlyOutput("posterior_2d_plot", height = "420px"))))),',
+    '    tabPanel("Posterior / Uncertainty", br(), div(class = "control-panel", fluidRow(column(3, selectInput("posterior_source", "Posterior source", choices = posterior_source_choices, selected = posterior_source_choices[1])), column(3, selectInput("posterior_variable", "Variable", choices = posterior_variable_choices, selected = if (length(posterior_variable_choices)) posterior_variable_choices[1] else character())), column(2, selectInput("posterior_scenario", "Scenario", choices = c("Auto" = "__auto__"))), column(2, selectInput("posterior_x", "X metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "contribution")), column(2, selectInput("posterior_y", "Y metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "roi")))), fluidRow(column(6, div(class = "panel", h4("Scenario contribution uncertainty"), plotlyOutput("scenario_uncertainty_plot", height = "420px"))), column(6, div(class = "panel", h4("2D posterior draw distribution"), plotlyOutput("posterior_2d_plot", height = "420px"))))),',
     '    tabPanel("Diagnostics", br(), div(class = "panel", DTOutput("flags_table")), div(class = "panel", DTOutput("fit_table")), div(class = "panel", plotlyOutput("residual_plot", height = "380px")), div(class = "panel", h4("Chart registry"), DTOutput("chart_registry_table")))',
     '  )',
     ')',
@@ -2011,22 +2151,36 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '    p <- ggplot(out, aes(x = reorder(variable, change), y = change, fill = change >= 0, text = paste(variable, "<br>Base:", fmt(base_contribution), "<br>Comparison:", fmt(comparison_contribution), "<br>Change:", fmt(change), "<br>% change:", fmt(100 * pct_change), "%"))) + geom_hline(yintercept = 0, color = "#9CA3AF") + geom_col(width = 0.72, show.legend = FALSE) + coord_flip() + scale_fill_manual(values = c("TRUE" = "#16A34A", "FALSE" = "#DC2626")) + labs(title = "Contribution change: selected periods", x = NULL, y = "Contribution change") + chart_theme()',
     '    ggplotly(p, tooltip = "text")',
     '  })',
-    '  posterior_draw_dt <- reactive({',
+    '  stan_posterior_draw_dt <- reactive({ table_or_empty("stan_posterior_variable_draws") })',
+    '  optimizer_posterior_draw_dt <- reactive({',
     '    dt <- table_or_empty("optimizer_scenario_uncertainty_draws_by_variable")',
     '    if (!nrow(dt)) dt <- table_or_empty("optimizer_optimization_uncertainty_draws_by_variable")',
     '    dt',
     '  })',
+    '  posterior_draw_dt <- reactive({',
+    '    src <- input$posterior_source %||% if (nrow(stan_posterior_draw_dt())) "stan" else "optimizer"',
+    '    if (identical(src, "stan")) return(stan_posterior_draw_dt())',
+    '    if (identical(src, "optimizer")) return(optimizer_posterior_draw_dt())',
+    '    data.table()',
+    '  })',
     '  observe({',
     '    dt <- posterior_draw_dt()',
-    '    choices <- if (nrow(dt) && "scenario" %in% names(dt)) sort(unique(as.character(dt$scenario))) else character()',
+    '    choices <- if (nrow(dt) && "variable" %in% names(dt)) sort(unique(as.character(dt$variable))) else character()',
+    '    preferred <- intersect(choices, curve_choices)',
+    '    selected <- if (length(preferred)) preferred[1] else if (length(choices)) choices[1] else character()',
+    '    updateSelectInput(session, "posterior_variable", choices = stats::setNames(choices, choices), selected = selected)',
+    '  })',
+    '  observe({',
+    '    dt <- posterior_draw_dt()',
+    '    choices <- if (!identical(input$posterior_source, "stan") && nrow(dt) && "scenario" %in% names(dt)) sort(unique(as.character(dt$scenario))) else character()',
     '    updateSelectInput(session, "posterior_scenario", choices = c("Auto" = "__auto__", stats::setNames(choices, choices)), selected = if (length(choices)) choices[1] else "__auto__")',
     '  })',
     '  output$posterior_2d_plot <- renderPlotly({',
     '    dt <- posterior_draw_dt()',
-    '    validate(need(nrow(dt) > 0, "No draw-level posterior scenario rows available. Run the optimizer with draw-level response curves to enable 2D posterior distributions."))',
+    '    validate(need(nrow(dt) > 0, "No draw-level posterior rows available. Pass posterior_decomp_draws for Stan diagnostics or optimizer draw curves for scenario uncertainty."))',
     '    vars <- input$posterior_variable %||% selected_vars()[1]',
     '    dt <- dt[as.character(variable) == vars]',
-    '    if (!is.null(input$posterior_scenario) && input$posterior_scenario != "__auto__" && "scenario" %in% names(dt)) dt <- dt[as.character(scenario) == input$posterior_scenario]',
+    '    if (!identical(input$posterior_source, "stan") && !is.null(input$posterior_scenario) && input$posterior_scenario != "__auto__" && "scenario" %in% names(dt)) dt <- dt[as.character(scenario) == input$posterior_scenario]',
     '    xmetric <- input$posterior_x %||% "roi"; ymetric <- input$posterior_y %||% "contribution"',
     '    validate(need(nrow(dt) > 0 && xmetric %in% names(dt) && ymetric %in% names(dt), "No posterior draws available for the selected variable/scenario/metrics."))',
     '    dt[, x__ := suppressWarnings(as.numeric(get(xmetric)))]',
@@ -2035,7 +2189,8 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '    validate(need(nrow(dt) > 2, "Not enough finite posterior draws for a 2D distribution."))',
     '    p <- plot_ly(dt, x = ~x__, y = ~y__, type = "scatter", mode = "markers", marker = list(color = palette_values()[1], size = 6, opacity = 0.35), hovertemplate = paste0(vars, "<br>", xmetric, ": %{x:,.4f}<br>", ymetric, ": %{y:,.2f}<extra></extra>"))',
     '    if (nrow(dt) >= 20) p <- add_histogram2dcontour(p, data = dt, x = ~x__, y = ~y__, contours = list(coloring = "none"), line = list(color = "rgba(15,23,42,0.45)", width = 1), showscale = FALSE, hoverinfo = "skip")',
-    '    plotly_theme(p, title = paste("Posterior draws:", vars), x_title = gsub("_", " ", xmetric), y_title = gsub("_", " ", ymetric))',
+    '    title_prefix <- if (identical(input$posterior_source, "stan")) "Stan posterior variable shadow:" else "Optimizer scenario posterior:"',
+    '    plotly_theme(p, title = paste(title_prefix, vars), x_title = gsub("_", " ", xmetric), y_title = gsub("_", " ", ymetric))',
     '  })',
     '  output$contribution_table <- renderDT(dt_widget(selected_contrib(), 20))',
     '  output$trend_table <- renderDT(dt_widget(filter_role(filter_vars(table_or_empty("contribution_by_period_variable"))), 20))',
@@ -2139,6 +2294,7 @@ run_mmm_deck_output_builder <- function(long_decomp,
                                         modcut = NULL,
                                         spend_map = NULL,
                                         optimizer_output = NULL,
+                                        posterior_decomp_draws = NULL,
                                         channel_map = NULL,
                                         output_dir,
                                         prefix = "",
@@ -2169,6 +2325,7 @@ run_mmm_deck_output_builder <- function(long_decomp,
     modcut = modcut,
     spend_map = spend_map,
     optimizer_output = optimizer_output,
+    posterior_decomp_draws = posterior_decomp_draws,
     channel_map = channel_map,
     media_variables = media_variables,
     baseline_variables = baseline_variables,

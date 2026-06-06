@@ -109,6 +109,17 @@ if (!file.exists(cache_path) || force_rebuild_data) {
     tmp[]
   }), fill = TRUE)
 
+  posterior_decomp_draws <- rbindlist(lapply(seq_len(80), function(draw_id) {
+    tmp <- copy(long_decomp)
+    tmp[, .draw := draw_id]
+    tmp[, contribution := contribution * rlnorm(
+      .N,
+      meanlog = 0,
+      sdlog = fifelse(variable %in% media_vars, 0.18, 0.06)
+    )]
+    tmp[]
+  }), fill = TRUE)
+
   optimizer_output <- run_optimizer_scenario_planner(
     response_curves = response_curves,
     response_curve_draws = draw_curves,
@@ -135,11 +146,26 @@ if (!file.exists(cache_path) || force_rebuild_data) {
     raw_data = raw_data,
     spend_map = spend_map,
     channel_map = channel_map,
+    posterior_decomp_draws = posterior_decomp_draws,
     optimizer_output = optimizer_output
   ), cache_path)
 } else {
   cached <- readRDS(cache_path)
   invisible(list2env(cached, envir = environment()))
+}
+
+if (!exists("posterior_decomp_draws", inherits = FALSE)) {
+  set.seed(20260604)
+  posterior_decomp_draws <- rbindlist(lapply(seq_len(80), function(draw_id) {
+    tmp <- copy(long_decomp)
+    tmp[, .draw := draw_id]
+    tmp[, contribution := contribution * rlnorm(
+      .N,
+      meanlog = 0,
+      sdlog = fifelse(variable %in% media_vars, 0.18, 0.06)
+    )]
+    tmp[]
+  }), fill = TRUE)
 }
 
 result <- run_mmm_deck_output_builder(
@@ -148,6 +174,7 @@ result <- run_mmm_deck_output_builder(
   raw_data = raw_data,
   spend_map = spend_map,
   optimizer_output = optimizer_output,
+  posterior_decomp_draws = posterior_decomp_draws,
   channel_map = channel_map,
   output_dir = output_dir,
   prefix = "showcase",

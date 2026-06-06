@@ -39,6 +39,9 @@ table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showc
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_optimizer_optimization_uncertainty_draws.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_optimizer_optimization_uncertainty_draws_by_variable.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_optimizer_scenario_comparison.csv
+table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_stan_posterior_variable_draws.csv
+table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_stan_posterior_variable_summary.csv
+table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_stan_posterior_period_variable_summary.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_chart_registry.csv
 chart,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/charts/contribution_by_variable.png
 chart,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/charts/contribution_trend.png
