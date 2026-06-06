@@ -1217,8 +1217,12 @@ opsp_build_uncertainty_tables <- function(draw_curves,
     return(list(
       scenario_summary = empty,
       scenario_by_variable = empty,
+      scenario_draws = empty,
+      scenario_draws_by_variable = empty,
       optimization_summary = empty,
-      optimization_by_variable = empty
+      optimization_by_variable = empty,
+      optimization_draws = empty,
+      optimization_draws_by_variable = empty
     ))
   }
   vars <- intersect(as.character(vars), unique(dc$variable))
@@ -1227,8 +1231,12 @@ opsp_build_uncertainty_tables <- function(draw_curves,
     return(list(
       scenario_summary = empty,
       scenario_by_variable = empty,
+      scenario_draws = empty,
+      scenario_draws_by_variable = empty,
       optimization_summary = empty,
-      optimization_by_variable = empty
+      optimization_by_variable = empty,
+      optimization_draws = empty,
+      optimization_draws_by_variable = empty
     ))
   }
   multiplier_sets <- opsp_make_multiplier_sets(
@@ -1243,8 +1251,12 @@ opsp_build_uncertainty_tables <- function(draw_curves,
     return(list(
       scenario_summary = empty,
       scenario_by_variable = empty,
+      scenario_draws = empty,
+      scenario_draws_by_variable = empty,
       optimization_summary = empty,
-      optimization_by_variable = empty
+      optimization_by_variable = empty,
+      optimization_draws = empty,
+      optimization_draws_by_variable = empty
     ))
   }
   draw_ids <- unique(dc$.draw)
@@ -1270,8 +1282,12 @@ opsp_build_uncertainty_tables <- function(draw_curves,
     return(list(
       scenario_summary = empty,
       scenario_by_variable = empty,
+      scenario_draws = empty,
+      scenario_draws_by_variable = empty,
       optimization_summary = empty,
-      optimization_by_variable = empty
+      optimization_by_variable = empty,
+      optimization_draws = empty,
+      optimization_draws_by_variable = empty
     ))
   }
   by_var <- raw[, .(
@@ -1384,8 +1400,12 @@ opsp_build_uncertainty_tables <- function(draw_curves,
   list(
     scenario_summary = summary[scenario_type == "scenario"][order(scenario)][],
     scenario_by_variable = by_var[scenario_type == "scenario"][order(scenario, variable)][],
+    scenario_draws = draw_summary[scenario_type == "scenario"][order(scenario, .draw)][],
+    scenario_draws_by_variable = raw[scenario_type == "scenario"][order(scenario, variable, .draw)][],
     optimization_summary = summary[scenario_type == "optimized"][order(scenario)][],
     optimization_by_variable = by_var[scenario_type == "optimized"][order(scenario, variable)][],
+    optimization_draws = draw_summary[scenario_type == "optimized"][order(scenario, .draw)][],
+    optimization_draws_by_variable = raw[scenario_type == "optimized"][order(scenario, variable, .draw)][],
     draw_count = uniqueN(raw$.draw)
   )
 }
@@ -2580,11 +2600,15 @@ opsp_write_outputs <- function(out, output_dir = NULL, output_prefix = "") {
   write_one(out$scenario_detail, "scenario_detail")
   write_one(out$scenario_uncertainty_summary, "scenario_uncertainty_summary")
   write_one(out$scenario_uncertainty_by_variable, "scenario_uncertainty_by_variable")
+  write_one(out$scenario_uncertainty_draws, "scenario_uncertainty_draws")
+  write_one(out$scenario_uncertainty_draws_by_variable, "scenario_uncertainty_draws_by_variable")
   write_one(out$optimization_summary, "optimization_summary")
   write_one(out$optimization_plan, "optimization_plan")
   write_one(out$optimization_group_rollup, "optimization_group_rollup")
   write_one(out$optimization_uncertainty_summary, "optimization_uncertainty_summary")
   write_one(out$optimization_uncertainty_by_variable, "optimization_uncertainty_by_variable")
+  write_one(out$optimization_uncertainty_draws, "optimization_uncertainty_draws")
+  write_one(out$optimization_uncertainty_draws_by_variable, "optimization_uncertainty_draws_by_variable")
   write_one(out$allocation_history, "allocation_history")
   write_one(out$target_plan_summary, "target_plan_summary")
   write_one(out$target_plan_detail, "target_plan_detail")
@@ -2881,11 +2905,15 @@ run_optimizer_scenario_planner <- function(fit_obj = NULL,
     scenario_detail = scenarios$detail[],
     scenario_uncertainty_summary = uncertainty_tables$scenario_summary[],
     scenario_uncertainty_by_variable = uncertainty_tables$scenario_by_variable[],
+    scenario_uncertainty_draws = uncertainty_tables$scenario_draws[],
+    scenario_uncertainty_draws_by_variable = uncertainty_tables$scenario_draws_by_variable[],
     optimization_summary = opt$summary[],
     optimization_plan = opt$plan[],
     optimization_group_rollup = optimization_group_rollup[],
     optimization_uncertainty_summary = uncertainty_tables$optimization_summary[],
     optimization_uncertainty_by_variable = uncertainty_tables$optimization_by_variable[],
+    optimization_uncertainty_draws = uncertainty_tables$optimization_draws[],
+    optimization_uncertainty_draws_by_variable = uncertainty_tables$optimization_draws_by_variable[],
     allocation_history = opt$allocation_history[],
     target_plan_summary = target_plan$summary[],
     target_plan_detail = target_plan$plan[],
