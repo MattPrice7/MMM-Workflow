@@ -80,7 +80,7 @@ ui <- fluidPage(
     tabPanel("Contribution", br(), div(class = "control-panel", fluidRow(column(4, actionButton("open_period_compare", "Compare periods")), column(8, uiOutput("period_compare_label")))), fluidRow(column(7, div(class = "panel", h4("Contribution over time"), plotlyOutput("contribution_trend_plot", height = "430px"))), column(5, div(class = "panel", h4("Period change due-to"), plotlyOutput("due_to_plot", height = "430px")))), div(class = "panel", h4("Selected period comparison"), plotlyOutput("period_compare_plot", height = "430px"))),
     tabPanel("KPI Economics", br(), div(class = "control-panel", selectInput("econ_metric", "Economics metric", choices = econ_metric_choices, selected = econ_metric_choices[1])), fluidRow(column(6, div(class = "panel", plotlyOutput("spend_scatter", height = "420px"))), column(6, div(class = "panel", plotlyOutput("econ_rank_plot", height = "420px"))))),
     tabPanel("Optimizer", br(), div(class = "control-panel", fluidRow(column(4, selectInput("scenario_metric", "Scenario metric", choices = scenario_metric_choices, selected = scenario_metric_choices[1])), column(8, plotlyOutput("optimizer_scenario_plot", height = "330px")))), fluidRow(column(6, div(class = "panel", plotlyOutput("optimizer_spend_plot", height = "420px"))), column(6, div(class = "panel", plotlyOutput("optimizer_saturation_plot", height = "420px"))))),
-    tabPanel("Posterior / Uncertainty", br(), div(class = "control-panel", fluidRow(column(3, selectInput("posterior_source", "Posterior source", choices = posterior_source_choices, selected = posterior_source_choices[1])), column(3, selectInput("posterior_variable", "Variable", choices = posterior_variable_choices, selected = if (length(posterior_variable_choices)) posterior_variable_choices[1] else character())), column(2, selectInput("posterior_scenario", "Scenario", choices = c("Auto" = "__auto__"))), column(2, selectInput("posterior_x", "X metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "contribution")), column(2, selectInput("posterior_y", "Y metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "roi")))), fluidRow(column(6, div(class = "panel", h4("Scenario contribution uncertainty"), plotlyOutput("scenario_uncertainty_plot", height = "420px"))), column(6, div(class = "panel", h4("2D posterior draw distribution"), plotlyOutput("posterior_2d_plot", height = "420px"))))),
+    tabPanel("Posterior / Uncertainty", br(), div(class = "control-panel", fluidRow(column(2, selectInput("posterior_source", "Posterior source", choices = posterior_source_choices, selected = posterior_source_choices[1])), column(2, selectInput("posterior_variable", "Variable", choices = posterior_variable_choices, selected = if (length(posterior_variable_choices)) posterior_variable_choices[1] else character())), column(2, selectInput("posterior_scenario", "Scenario", choices = c("Auto" = "__auto__"))), column(2, selectInput("posterior_density_metric", "Density metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "contribution")), column(2, selectInput("posterior_x", "X metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "contribution")), column(2, selectInput("posterior_y", "Y metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "roi")))), fluidRow(column(6, div(class = "panel", h4("Scenario contribution uncertainty"), plotlyOutput("scenario_uncertainty_plot", height = "420px"))), column(6, div(class = "panel", h4("Posterior density"), plotlyOutput("posterior_density_plot", height = "420px")))), fluidRow(column(12, div(class = "panel", h4("2D posterior draw distribution"), plotlyOutput("posterior_2d_plot", height = "470px"))))),
     tabPanel("Diagnostics", br(), div(class = "panel", DTOutput("flags_table")), div(class = "panel", DTOutput("fit_table")), div(class = "panel", plotlyOutput("residual_plot", height = "380px")), div(class = "panel", h4("Chart registry"), DTOutput("chart_registry_table")))
   )
 )
@@ -95,6 +95,12 @@ server <- function(input, output, session) {
     bits <- bits[nzchar(bits)]
     bits <- ifelse(substr(bits, 1, 1) == "#", bits, paste0("#", bits))
     bits[grepl("^#[0-9A-Fa-f]{6}$", bits)]
+  }
+  normalize_hex <- function(x, fallback) {
+    if (is.null(x) || !length(x) || is.na(x) || !nzchar(as.character(x)[1])) return(fallback)
+    val <- trimws(as.character(x)[1])
+    if (substr(val, 1, 1) != "#") val <- paste0("#", val)
+    if (grepl("^#[0-9A-Fa-f]{6}$", val)) toupper(val) else fallback
   }
   theme_state <- reactiveValues(
     preset = "Default light",
@@ -181,12 +187,23 @@ server <- function(input, output, session) {
     target <- paste(selection_state$compare_target %||% character(), collapse = ", ")
     tags$span(style = "color:#4B5563;", paste0("Comparing ", ifelse(nzchar(base), base, "base"), " vs ", ifelse(nzchar(target), target, "comparison")))
   })
+  hex_picker <- function(input_id, label, value, width = "128px") {
+    safe <- normalize_hex(value, "#2563EB")
+    js <- sprintf("var el=document.getElementById(\"%s\"); if(el){el.value=this.value.toUpperCase(); el.dispatchEvent(new Event(\"input\",{bubbles:true})); el.dispatchEvent(new Event(\"change\",{bubbles:true}));}", input_id)
+    tags$div(style = paste0("display:inline-block;margin:0 12px 10px 0;min-width:", width, ";"),
+      tags$label(label),
+      tags$div(style = "display:flex;align-items:center;gap:8px;",
+        tags$input(type = "color", value = safe, oninput = htmltools::HTML(js), style = "width:42px;height:34px;padding:2px;border:1px solid #d1d5db;border-radius:4px;background:white;"),
+        tags$input(id = input_id, type = "text", value = safe, class = "form-control", style = "width:100px;")
+      )
+    )
+  }
   output$theme_color_inputs_tmp <- renderUI({
     n <- input$theme_series_n_tmp %||% length(theme_state$series_colors)
     n <- max(3, min(10, as.integer(n)))
     vals <- palette_values()
     tagList(lapply(seq_len(n), function(i) {
-      tags$div(style = "display:inline-block;margin:0 12px 10px 0;min-width:94px;", tags$label(paste("Series", i)), tags$input(id = paste0("theme_series_", i, "_tmp"), type = "color", value = vals[((i - 1) %% length(vals)) + 1]))
+      hex_picker(paste0("theme_series_", i, "_tmp"), paste("Series", i), vals[((i - 1) %% length(vals)) + 1])
     }))
   })
   observeEvent(input$open_theme, {
@@ -200,15 +217,15 @@ server <- function(input, output, session) {
       ),
       tags$hr(),
       fluidRow(
-        column(4, tags$label("Page background"), tags$input(id = "theme_page_bg_tmp", type = "color", value = theme_state$page_bg)),
-        column(4, tags$label("Chart background"), tags$input(id = "theme_chart_bg_tmp", type = "color", value = theme_state$chart_bg)),
-        column(4, tags$label("Panel background"), tags$input(id = "theme_panel_bg_tmp", type = "color", value = theme_state$panel_bg))
+        column(4, hex_picker("theme_page_bg_tmp", "Page background", theme_state$page_bg, "100%")),
+        column(4, hex_picker("theme_chart_bg_tmp", "Chart background", theme_state$chart_bg, "100%")),
+        column(4, hex_picker("theme_panel_bg_tmp", "Panel background", theme_state$panel_bg, "100%"))
       ),
       fluidRow(
-        column(3, tags$label("Header color"), tags$input(id = "theme_header_color_tmp", type = "color", value = theme_state$header_color)),
-        column(3, tags$label("Font color"), tags$input(id = "theme_font_color_tmp", type = "color", value = theme_state$font_color)),
-        column(3, tags$label("Axis color"), tags$input(id = "theme_axis_color_tmp", type = "color", value = theme_state$axis_color)),
-        column(3, tags$label("Grid color"), tags$input(id = "theme_grid_color_tmp", type = "color", value = theme_state$grid_color))
+        column(3, hex_picker("theme_header_color_tmp", "Header color", theme_state$header_color, "100%")),
+        column(3, hex_picker("theme_font_color_tmp", "Font color", theme_state$font_color, "100%")),
+        column(3, hex_picker("theme_axis_color_tmp", "Axis color", theme_state$axis_color, "100%")),
+        column(3, hex_picker("theme_grid_color_tmp", "Grid color", theme_state$grid_color, "100%"))
       ),
       fluidRow(
         column(4, selectInput("theme_font_family_tmp", "Font family", choices = c("System" = "-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif", "Arial" = "Arial", "Helvetica" = "Helvetica", "Georgia" = "Georgia", "Courier" = "Courier New"), selected = theme_state$font_family)),
@@ -231,15 +248,15 @@ server <- function(input, output, session) {
   observeEvent(input$apply_theme, {
     preset <- "Custom"
     n <- max(3, min(10, as.integer(input$theme_series_n_tmp %||% length(theme_state$series_colors))))
-    cols <- vapply(seq_len(n), function(i) input[[paste0("theme_series_", i, "_tmp")]] %||% palette_values()[((i - 1) %% length(palette_values())) + 1], character(1))
+    cols <- vapply(seq_len(n), function(i) normalize_hex(input[[paste0("theme_series_", i, "_tmp")]], palette_values()[((i - 1) %% length(palette_values())) + 1]), character(1))
     if (identical(preset, "Custom")) {
-      theme_state$page_bg <- input$theme_page_bg_tmp %||% theme_state$page_bg
-      theme_state$panel_bg <- input$theme_panel_bg_tmp %||% theme_state$panel_bg
-      theme_state$chart_bg <- input$theme_chart_bg_tmp %||% theme_state$chart_bg
-      theme_state$header_color <- input$theme_header_color_tmp %||% theme_state$header_color
-      theme_state$font_color <- input$theme_font_color_tmp %||% theme_state$font_color
-      theme_state$axis_color <- input$theme_axis_color_tmp %||% theme_state$axis_color
-      theme_state$grid_color <- input$theme_grid_color_tmp %||% theme_state$grid_color
+      theme_state$page_bg <- normalize_hex(input$theme_page_bg_tmp, theme_state$page_bg)
+      theme_state$panel_bg <- normalize_hex(input$theme_panel_bg_tmp, theme_state$panel_bg)
+      theme_state$chart_bg <- normalize_hex(input$theme_chart_bg_tmp, theme_state$chart_bg)
+      theme_state$header_color <- normalize_hex(input$theme_header_color_tmp, theme_state$header_color)
+      theme_state$font_color <- normalize_hex(input$theme_font_color_tmp, theme_state$font_color)
+      theme_state$axis_color <- normalize_hex(input$theme_axis_color_tmp, theme_state$axis_color)
+      theme_state$grid_color <- normalize_hex(input$theme_grid_color_tmp, theme_state$grid_color)
     }
     apply_theme_preset(preset, cols)
     theme_state$font_family <- input$theme_font_family_tmp %||% theme_state$font_family
@@ -268,7 +285,7 @@ server <- function(input, output, session) {
   })
   observeEvent(input$apply_chart_colors, {
     n <- max(3, min(10, as.integer(input$theme_series_n_tmp %||% length(theme_state$series_colors))))
-    cols <- vapply(seq_len(n), function(i) input[[paste0("theme_series_", i, "_tmp")]] %||% palette_values()[((i - 1) %% length(palette_values())) + 1], character(1))
+    cols <- vapply(seq_len(n), function(i) normalize_hex(input[[paste0("theme_series_", i, "_tmp")]], palette_values()[((i - 1) %% length(palette_values())) + 1]), character(1))
     theme_state$series_colors <- cols[grepl("^#[0-9A-Fa-f]{6}$", cols)]
     theme_state$preset <- "Custom"
     removeModal()
@@ -470,6 +487,26 @@ server <- function(input, output, session) {
     p <- plot_ly(dt, x = ~contribution_q50, y = ~reorder(scenario, contribution_q50), type = "scatter", mode = "markers", marker = list(color = palette_values()[1], size = 9), error_x = list(type = "data", symmetric = FALSE, array = ~pmax(0, contribution_q95 - contribution_q50), arrayminus = ~pmax(0, contribution_q50 - contribution_q05), color = "rgba(37,99,235,0.35)", thickness = 1.5), hovertemplate = "%{y}<br>q50 contribution: %{x:,.2f}<extra></extra>")
     plotly_theme(p, title = "Scenario contribution uncertainty", x_title = "Contribution", y_title = "")
   })
+  output$posterior_density_plot <- renderPlotly({
+    dt <- posterior_draw_dt()
+    validate(need(nrow(dt) > 0, "No draw-level posterior rows available."))
+    vars <- input$posterior_variable %||% selected_vars()[1]
+    metric <- input$posterior_density_metric %||% "contribution"
+    dt <- dt[as.character(variable) == vars]
+    if (!identical(input$posterior_source, "stan") && !is.null(input$posterior_scenario) && input$posterior_scenario != "__auto__" && "scenario" %in% names(dt)) dt <- dt[as.character(scenario) == input$posterior_scenario]
+    validate(need(metric %in% names(dt), "Selected posterior density metric is unavailable."))
+    x <- suppressWarnings(as.numeric(dt[[metric]]))
+    x <- x[is.finite(x)]
+    validate(need(length(x) >= 3 && length(unique(x)) >= 2, "Not enough finite posterior draws for a density curve."))
+    den <- stats::density(x, na.rm = TRUE)
+    dens_dt <- data.table(value = den$x, density = den$y)
+    qs <- as.numeric(stats::quantile(x, c(0.05, 0.50, 0.95), na.rm = TRUE, names = FALSE))
+    ymax <- max(dens_dt$density, na.rm = TRUE)
+    p <- plot_ly(dens_dt, x = ~value, y = ~density, type = "scatter", mode = "lines", name = "Posterior", fill = "tozeroy", fillcolor = "rgba(37,99,235,0.18)", line = list(color = palette_values()[1], width = 2.5), hovertemplate = paste0(vars, "<br>", metric, ": %{x:,.4f}<br>Density: %{y:,.4f}<extra></extra>"))
+    q_dt <- data.table(q = c("q05", "q50", "q95"), value = qs, density = ymax * c(0.72, 0.98, 0.72))
+    p <- add_trace(p, data = q_dt, x = ~value, y = ~density, type = "scatter", mode = "markers+text", text = ~q, textposition = "top center", marker = list(color = c(palette_values()[2], palette_values()[3], palette_values()[2]), size = c(7, 9, 7)), name = "q05/q50/q95", hovertemplate = "%{text}<br>%{x:,.4f}<extra></extra>")
+    plotly_theme(p, title = paste("Posterior density:", vars, "/", gsub("_", " ", metric)), x_title = gsub("_", " ", metric), y_title = "Density")
+  })
   output$contribution_trend_plot <- renderPlotly({
     dt <- filter_role(filter_vars(table_or_empty("contribution_by_period_variable")))[role != "residual"]
     validate(need(nrow(dt) > 0, "No contribution trend rows available."))
@@ -554,7 +591,7 @@ server <- function(input, output, session) {
     dt <- dt[is.finite(x__) & is.finite(y__)]
     validate(need(nrow(dt) > 2, "Not enough finite posterior draws for a 2D distribution."))
     p <- plot_ly(dt, x = ~x__, y = ~y__, type = "scatter", mode = "markers", marker = list(color = palette_values()[1], size = 6, opacity = 0.35), hovertemplate = paste0(vars, "<br>", xmetric, ": %{x:,.4f}<br>", ymetric, ": %{y:,.2f}<extra></extra>"))
-    if (nrow(dt) >= 20) p <- add_histogram2dcontour(p, data = dt, x = ~x__, y = ~y__, contours = list(coloring = "none"), line = list(color = "rgba(15,23,42,0.45)", width = 1), showscale = FALSE, hoverinfo = "skip")
+    if (nrow(dt) >= 20) p <- add_histogram2dcontour(p, data = dt, x = ~x__, y = ~y__, inherit = FALSE, contours = list(coloring = "none"), line = list(color = "rgba(15,23,42,0.45)", width = 1), showscale = FALSE, hoverinfo = "skip")
     title_prefix <- if (identical(input$posterior_source, "stan")) "Stan posterior variable shadow:" else "Optimizer scenario posterior:"
     plotly_theme(p, title = paste(title_prefix, vars), x_title = gsub("_", " ", xmetric), y_title = gsub("_", " ", ymetric))
   })
