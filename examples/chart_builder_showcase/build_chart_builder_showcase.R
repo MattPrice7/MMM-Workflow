@@ -37,14 +37,15 @@ if (!file.exists(cache_path) || force_rebuild_data) {
                           fifelse(market == "South", 1.05,
                           fifelse(market == "Midwest", 0.92, 0.86)))]
 
-  media_vars <- c("tv", "paid_search", "paid_social", "retail_media", "display")
+  media_vars <- c("tv", "paid_search", "meta", "tiktok", "retail_media", "display")
   base[, tv := pmax(0, 85 + 35 * season + rnorm(.N, 0, 9)) * market_scale]
   base[, paid_search := pmax(0, 65 + 10 * trend + rnorm(.N, 0, 7)) * market_scale]
-  base[, paid_social := pmax(0, 55 + 25 * (week_index %% 13 %in% 1:5) + rnorm(.N, 0, 8)) * market_scale]
+  base[, meta := pmax(0, 40 + 18 * (week_index %% 13 %in% 1:5) + rnorm(.N, 0, 7)) * market_scale]
+  base[, tiktok := pmax(0, 24 + 16 * (week_index %% 13 %in% 3:8) + rnorm(.N, 0, 6)) * market_scale]
   base[, retail_media := pmax(0, 38 + 18 * (week_index %% 26 %in% 14:20) + rnorm(.N, 0, 5)) * market_scale]
   base[, display := pmax(0, 30 + 14 * (week_index %% 10 %in% 3:6) + rnorm(.N, 0, 5)) * market_scale]
 
-  spend_rates <- c(tv = 18, paid_search = 9, paid_social = 7, retail_media = 11, display = 4)
+  spend_rates <- c(tv = 18, paid_search = 9, meta = 7.5, tiktok = 6.2, retail_media = 11, display = 4)
   for (v in media_vars) {
     base[, (paste0(v, "_spend")) := get(v) * spend_rates[[v]]]
   }
@@ -53,12 +54,13 @@ if (!file.exists(cache_path) || force_rebuild_data) {
   base[, baseline := 620 * market_scale + 45 * season + 35 * trend]
   base[, tv_contribution := sat(tv, 120, 155)]
   base[, paid_search_contribution := sat(paid_search, 75, 125)]
-  base[, paid_social_contribution := sat(paid_social, 70, 92)]
+  base[, meta_contribution := sat(meta, 62, 70)]
+  base[, tiktok_contribution := sat(tiktok, 46, 48)]
   base[, retail_media_contribution := sat(retail_media, 55, 78)]
   base[, display_contribution := sat(display, 48, 42)]
   base[, promo_contribution := 25 * (week_index %% 13 %in% 10:12)]
   base[, residual := rnorm(.N, 0, 18)]
-  base[, y_actual := baseline + tv_contribution + paid_search_contribution + paid_social_contribution +
+  base[, y_actual := baseline + tv_contribution + paid_search_contribution + meta_contribution + tiktok_contribution +
          retail_media_contribution + display_contribution + promo_contribution + residual]
   base[, pred := y_actual - residual]
 
@@ -66,7 +68,8 @@ if (!file.exists(cache_path) || force_rebuild_data) {
     base[, .(week, market, variable = "baseline", contribution = baseline, y_actual, pred, residual)],
     base[, .(week, market, variable = "tv", contribution = tv_contribution, y_actual, pred, residual)],
     base[, .(week, market, variable = "paid_search", contribution = paid_search_contribution, y_actual, pred, residual)],
-    base[, .(week, market, variable = "paid_social", contribution = paid_social_contribution, y_actual, pred, residual)],
+    base[, .(week, market, variable = "meta", contribution = meta_contribution, y_actual, pred, residual)],
+    base[, .(week, market, variable = "tiktok", contribution = tiktok_contribution, y_actual, pred, residual)],
     base[, .(week, market, variable = "retail_media", contribution = retail_media_contribution, y_actual, pred, residual)],
     base[, .(week, market, variable = "display", contribution = display_contribution, y_actual, pred, residual)],
     base[, .(week, market, variable = "promo", contribution = promo_contribution, y_actual, pred, residual)]
@@ -77,12 +80,13 @@ if (!file.exists(cache_path) || force_rebuild_data) {
   spend_map <- data.table(variable = media_vars, spend_col = paste0(media_vars, "_spend"))
   channel_map <- data.table(
     variable = c(media_vars, "baseline", "promo"),
-    channel = c("TV", "Paid Search", "Paid Social", "Retail Media", "Display", "Baseline", "Promo"),
+    channel = c("TV", "Paid Search", "Paid Social", "Paid Social", "Retail Media", "Display", "Baseline", "Promo"),
     role = c(rep("media", length(media_vars)), "baseline_control", "baseline_control"),
     rollup_path = c(
       "Media/TV",
       "Media/Paid Search",
-      "Media/Paid Social",
+      "Media/Paid Social/Meta",
+      "Media/Paid Social/TikTok",
       "Media/Retail Media",
       "Media/Display",
       "Non Media/Baseline",
@@ -95,8 +99,8 @@ if (!file.exists(cache_path) || force_rebuild_data) {
   current_spend <- setNames(as.numeric(current_spend[1]), media_vars)
   curve_params <- data.table(
     variable = media_vars,
-    asymptote = c(52000, 43000, 33000, 28000, 16500),
-    rate = c(1.15, 0.75, 0.95, 0.85, 0.65)
+    asymptote = c(52000, 43000, 24000, 15000, 28000, 16500),
+    rate = c(1.15, 0.75, 0.90, 1.08, 0.85, 0.65)
   )
   response_curves <- rbindlist(lapply(media_vars, function(v) {
     p <- curve_params[variable == v]
@@ -131,8 +135,8 @@ if (!file.exists(cache_path) || force_rebuild_data) {
 
   coef_means <- data.table(
     variable = media_vars,
-    coef_mean = c(1.25, 1.55, 1.05, 0.95, 0.70),
-    coef_sd = c(0.16, 0.20, 0.18, 0.14, 0.12)
+    coef_mean = c(1.25, 1.55, 1.02, 0.88, 0.95, 0.70),
+    coef_sd = c(0.16, 0.20, 0.17, 0.16, 0.14, 0.12)
   )
   posterior_coef_draws <- rbindlist(lapply(seq_len(400), function(draw_id) {
     tmp <- copy(coef_means)
@@ -154,9 +158,9 @@ if (!file.exists(cache_path) || force_rebuild_data) {
     value_per_kpi = 30,
     scenario_multipliers = c(0.85, 1.00, 1.15, 1.30),
     scenario_plan = data.table(
-      scenario = c("search_social_push", "search_social_push", "tv_hold_efficiency_push", "tv_hold_efficiency_push"),
-      variable = c("paid_search", "paid_social", "tv", "paid_search"),
-      spend_multiplier = c(1.30, 1.25, 1.00, 1.35)
+      scenario = c("search_social_push", "search_social_push", "search_social_push", "tv_hold_efficiency_push", "tv_hold_efficiency_push"),
+      variable = c("paid_search", "meta", "tiktok", "tv", "paid_search"),
+      spend_multiplier = c(1.30, 1.20, 1.35, 1.00, 1.35)
     )
   )
 

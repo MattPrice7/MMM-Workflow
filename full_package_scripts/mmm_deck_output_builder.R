@@ -248,7 +248,7 @@ mdo_assign_roles <- function(variables, media_variables = NULL, baseline_variabl
 
 mdo_split_rollup_path <- function(path) {
   if (length(path) < 1L || is.na(path[1]) || !nzchar(as.character(path[1]))) return(character())
-  nodes <- trimws(strsplit(as.character(path[1]), ">", fixed = TRUE)[[1]])
+  nodes <- trimws(strsplit(as.character(path[1]), "\\s*(>|/)\\s*", perl = TRUE)[[1]])
   nodes[nzchar(nodes)]
 }
 
@@ -257,7 +257,7 @@ mdo_rollup_reporting_node <- function(path, variable = NA_character_) {
   variable <- as.character(variable)[1]
   if (!length(nodes)) return(variable)
   root_aliases <- c("total", "total_media", "media", "paid_media", "all_media", "all")
-  first <- tolower(gsub("[^a-z0-9]+", "_", nodes[1]))
+  first <- gsub("[^a-z0-9]+", "_", tolower(nodes[1]))
   if (length(nodes) >= 2L && first %in% root_aliases) return(nodes[2])
   nodes[1]
 }
@@ -314,8 +314,10 @@ mdo_expand_variable_rollup_map <- function(channel_map_normalized) {
     path <- as.character(cm$rollup_path[i])
     nodes <- mdo_split_rollup_path(path)
     if (!length(nodes)) nodes <- variable
-    if (!identical(nodes[length(nodes)], variable)) nodes <- c(nodes, variable)
-    node_key <- tolower(gsub("[^a-z0-9]+", "_", nodes))
+    last_key <- gsub("[^a-z0-9]+", "_", tolower(nodes[length(nodes)]))
+    variable_key <- gsub("[^a-z0-9]+", "_", tolower(variable))
+    if (!identical(last_key, variable_key)) nodes <- c(nodes, variable)
+    node_key <- gsub("[^a-z0-9]+", "_", tolower(nodes))
     data.table::data.table(
       variable = variable,
       channel = channel,
@@ -1121,8 +1123,35 @@ build_mmm_deck_tables <- function(long_decomp,
     }
   }
   rollup_performance_table <- data.table::data.table()
-  if (nrow(kpi_economics_by_rollup_node)) {
-    rollup_performance_table <- data.table::copy(kpi_economics_by_rollup_node)
+  if (nrow(contribution_by_rollup_node)) {
+    rollup_performance_table <- data.table::copy(contribution_by_rollup_node)
+    econ_rollup_cols <- intersect(
+      c(
+        "rollup_level", "rollup_node", "rollup_node_path", "role", "spend",
+        "outcome_per_cost", "cost_per_outcome", "signed_economics_flag",
+        "spend_share", "efficiency_index", "fair_share_index"
+      ),
+      names(kpi_economics_by_rollup_node)
+    )
+    if (length(econ_rollup_cols)) {
+      econ_rollup_lookup <- unique(kpi_economics_by_rollup_node[, ..econ_rollup_cols], by = c("rollup_node_path", "role"))
+      rollup_performance_table <- merge(
+        rollup_performance_table,
+        econ_rollup_lookup,
+        by = intersect(c("rollup_level", "rollup_node", "rollup_node_path", "role"), names(econ_rollup_lookup)),
+        all.x = TRUE,
+        sort = FALSE
+      )
+    }
+    if (!"spend" %in% names(rollup_performance_table)) rollup_performance_table[, spend := NA_real_]
+    if (!"outcome_per_cost" %in% names(rollup_performance_table)) rollup_performance_table[, outcome_per_cost := NA_real_]
+    if (!"cost_per_outcome" %in% names(rollup_performance_table)) rollup_performance_table[, cost_per_outcome := NA_real_]
+    if (!"signed_economics_flag" %in% names(rollup_performance_table)) rollup_performance_table[, signed_economics_flag := NA_character_]
+    if (!"spend_share" %in% names(rollup_performance_table)) rollup_performance_table[, spend_share := NA_real_]
+    if (!"efficiency_index" %in% names(rollup_performance_table)) rollup_performance_table[, efficiency_index := NA_real_]
+    if (!"fair_share_index" %in% names(rollup_performance_table)) rollup_performance_table[, fair_share_index := NA_real_]
+    total_rollup_abs_contribution <- rollup_performance_table[is_leaf_node == TRUE, sum(abs(contribution), na.rm = TRUE)]
+    rollup_performance_table[, contribution_share := contribution / data.table::fifelse(abs(total_rollup_abs_contribution) > 1e-8, total_rollup_abs_contribution, NA_real_)]
     kpi_value <- if (!is.null(kpi_value_per_outcome) && is.finite(as.numeric(kpi_value_per_outcome)[1])) as.numeric(kpi_value_per_outcome)[1] else NA_real_
     rollup_performance_table[, `:=`(
       display_name = paste0(strrep("  ", pmax(as.integer(rollup_level) - 1L, 0L)), rollup_node),
@@ -1698,8 +1727,6 @@ write_mmm_deck_shiny_app <- function(report_tables,
     'if (!length(posterior_variable_choices)) posterior_variable_choices <- curve_choices',
     'coef_posterior_choices <- choices_from("stan_posterior_coef_draws", "variable")',
     'if (!length(coef_posterior_choices)) coef_posterior_choices <- character()',
-    'rollup_levels <- sort(unique(as.character(table_or_empty("rollup_performance_table")$rollup_level)))',
-    'rollup_level_choices <- c("All levels" = "__all__", stats::setNames(rollup_levels, paste("Level", rollup_levels)))',
     'role_choices <- c("All roles" = "__all__", stats::setNames(sort(unique(as.character(table_or_empty("contribution_by_variable")$role))), sort(unique(as.character(table_or_empty("contribution_by_variable")$role)))))',
     'fit_overlay_choices <- c("None" = "__none__", stats::setNames(variable_choices, variable_choices))',
     'curve_metric_choices <- intersect(c("contribution", "contribution_vs_current", "roi", "mroi", "cost_per_kpi", "value_per_cost"), names(table_or_empty("optimizer_response_curves")))',
@@ -1721,6 +1748,8 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '    .control-panel { background:white; border:1px solid #e5e7eb; border-radius:8px; padding:14px 16px; margin-bottom:16px; }',
     '    .selectize-control { max-width:100%; }',
     '    .tab-content { padding-top:8px; }',
+    '    .rollup-node-cell { white-space:nowrap; }',
+    '    .rollup-toggle { display:inline-block; width:18px; color:#374151; font-weight:700; }',
     '  "))),',
     '  div(class = "title-row", h2("MMM Deck Output Dashboard"), p("Interactive review layer for decomposition, response curves, KPI economics, optimizer scenarios, and fit diagnostics.")),',
     '  uiOutput("theme_css"),',
@@ -1739,7 +1768,7 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '    tabPanel("KPI Economics", br(), div(class = "control-panel", selectInput("econ_metric", "Economics metric", choices = econ_metric_choices, selected = econ_metric_choices[1])), fluidRow(column(6, div(class = "panel", plotlyOutput("spend_scatter", height = "420px"))), column(6, div(class = "panel", plotlyOutput("econ_rank_plot", height = "420px"))))),',
     '    tabPanel("Optimizer", br(), div(class = "control-panel", fluidRow(column(4, selectInput("scenario_metric", "Scenario metric", choices = scenario_metric_choices, selected = scenario_metric_choices[1])), column(8, plotlyOutput("optimizer_scenario_plot", height = "330px")))), fluidRow(column(6, div(class = "panel", plotlyOutput("optimizer_spend_plot", height = "420px"))), column(6, div(class = "panel", plotlyOutput("optimizer_saturation_plot", height = "420px"))))),',
     '    tabPanel("Posterior / Uncertainty", br(), div(class = "control-panel", fluidRow(column(2, selectInput("posterior_source", "Posterior source", choices = posterior_source_choices, selected = posterior_source_choices[1])), column(2, selectInput("posterior_variable", "Variable", choices = posterior_variable_choices, selected = if (length(posterior_variable_choices)) posterior_variable_choices[1] else character())), column(2, selectInput("posterior_scenario", "Scenario", choices = c("Auto" = "__auto__"))), column(2, selectInput("posterior_density_metric", "Density metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "contribution")), column(2, selectInput("posterior_x", "X metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "contribution")), column(2, selectInput("posterior_y", "Y metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "roi")))), fluidRow(column(6, div(class = "panel", h4("Scenario contribution uncertainty"), plotlyOutput("scenario_uncertainty_plot", height = "420px"))), column(6, div(class = "panel", h4("Posterior density"), plotlyOutput("posterior_density_plot", height = "420px")))), fluidRow(column(12, div(class = "panel", h4("2D posterior draw distribution"), plotlyOutput("posterior_2d_plot", height = "470px"))))),',
-    '    tabPanel("Rollup", br(), div(class = "control-panel", fluidRow(column(4, selectInput("rollup_level_filter", "Rollup depth", choices = rollup_level_choices, selected = "__all__")), column(8, tags$span(style = "color:#4B5563;", "Uses rollup_path metadata; parent rows are reporting rollups, not separately modeled variables.")))), fluidRow(column(6, div(class = "panel", h4("Rollup contribution"), plotlyOutput("rollup_contribution_plot", height = "430px"))), column(6, div(class = "panel", h4("Rollup KPI economics"), DTOutput("rollup_performance_dt"))))),',
+    '    tabPanel("Rollup", br(), div(class = "panel", h4("Contribution and economics rollup"), DTOutput("rollup_tree_dt"))),',
     '    tabPanel("Diagnostics", br(), fluidRow(column(6, div(class = "panel", h4("Coefficient posterior density"), selectInput("coef_density_variable", "Coefficient", choices = coef_posterior_choices, selected = if (length(coef_posterior_choices)) coef_posterior_choices[1] else character()), plotlyOutput("coef_density_plot", height = "380px"))), column(6, div(class = "panel", h4("Residuals"), plotlyOutput("residual_plot", height = "380px")))), div(class = "panel", DTOutput("flags_table")), div(class = "panel", DTOutput("fit_table")))',
     '  )',
     ')',
@@ -1991,11 +2020,40 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '    label <- ifelse(is.finite(x), paste0(round(100 * x, 1), "%"), "")',
     "    sprintf('<div style=\"position:relative;min-width:92px;background:#f3f4f6;border-radius:3px;overflow:hidden;\"><div style=\"width:%s%%;height:18px;background:%s;opacity:.35;\"></div><span style=\"position:absolute;left:6px;top:1px;font-size:12px;color:#111827;\">%s</span></div>', pct, color, label)",
     '  }',
-    '  rollup_dt <- reactive({',
-    '    dt <- copy(table_or_empty("rollup_performance_table"))',
+    '  rollup_parent_path <- function(path) {',
+    '    path <- as.character(path)',
+    '    vapply(strsplit(path, " > ", fixed = TRUE), function(parts) {',
+    '      if (length(parts) <= 1L) "" else paste(parts[-length(parts)], collapse = " > ")',
+    '    }, character(1))',
+    '  }',
+    '  rollup_expanded <- reactiveVal(character())',
+    '  rollup_all_dt <- reactive({',
+    '    dt <- filter_role(copy(table_or_empty("rollup_performance_table")))',
     '    if (!nrow(dt)) return(dt)',
-    '    if (!is.null(input$rollup_level_filter) && input$rollup_level_filter != "__all__" && "rollup_level" %in% names(dt)) dt <- dt[as.character(rollup_level) == input$rollup_level_filter]',
-    '    filter_role(dt)',
+    '    dt[, row_key__ := as.character(rollup_node_path)]',
+    '    dt[, parent_key__ := rollup_parent_path(row_key__)]',
+    '    child_keys <- unique(dt$parent_key__[nzchar(dt$parent_key__)])',
+    '    dt[, has_children__ := row_key__ %in% child_keys]',
+    '    dt[, sort_key__ := row_key__]',
+    '    setorder(dt, sort_key__, role)',
+    '    dt',
+    '  })',
+    '  rollup_visible_dt <- reactive({',
+    '    dt <- copy(rollup_all_dt())',
+    '    if (!nrow(dt)) return(dt)',
+    '    expanded <- rollup_expanded()',
+    '    visible <- vapply(seq_len(nrow(dt)), function(i) {',
+    '      parent <- dt$parent_key__[i]',
+    '      if (!nzchar(parent)) return(TRUE)',
+    '      ancestors <- character()',
+    '      cur <- parent',
+    '      while (nzchar(cur)) {',
+    '        ancestors <- c(ancestors, cur)',
+    '        cur <- rollup_parent_path(cur)',
+    '      }',
+    '      all(ancestors %in% expanded)',
+    '    }, logical(1))',
+    '    dt[visible]',
     '  })',
     '  summary <- table_or_empty("executive_summary")[1]',
     '  output$metric_cards <- renderUI({',
@@ -2077,27 +2135,39 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '    p <- ggplot(dt, aes(x = reorder(variable, -metric_value__), y = metric_value__, text = paste(variable, "<br>", metric, ":", fmt(metric_value__)))) + geom_col(fill = palette_values()[2], width = 0.72) + coord_flip() + labs(title = paste("Ranked", gsub("_", " ", metric)), x = NULL, y = gsub("_", " ", metric)) + chart_theme()',
     '    ggplotly(p, tooltip = "text")',
     '  })',
-    '  output$rollup_contribution_plot <- renderPlotly({',
-    '    dt <- rollup_dt()[is.finite(as.numeric(contribution))]',
-    '    validate(need(nrow(dt) > 0, "No rollup contribution rows available. Add rollup_path/channel_map metadata to enable this view."))',
-    '    dt <- dt[order(-abs(as.numeric(contribution)))]',
-    '    dt <- head(dt, input$top_n)',
-    '    p <- ggplot(dt, aes(x = reorder(display_name, as.numeric(contribution)), y = as.numeric(contribution), fill = role, text = paste(rollup_node_path, "<br>Contribution:", fmt(contribution), "<br>Spend:", fmt(spend), "<br>Cost per KPI:", fmt(cost_per_kpi), "<br>ROI-like:", fmt(roi_like)))) + geom_hline(yintercept = 0, color = "#9CA3AF") + geom_col(width = 0.72) + coord_flip() + scale_fill_manual(values = color_map(unique(dt$role))) + labs(title = "Contribution by rollup node", x = NULL, y = "Contribution") + chart_theme() + theme(legend.position = "bottom")',
-    '    ggplotly(p, tooltip = "text")',
-    '  })',
-    '  output$rollup_performance_dt <- renderDT({',
-    '    dt <- copy(rollup_dt())',
-    '    validate(need(nrow(dt) > 0, "No rollup performance rows available."))',
-    '    dt[, `:=`(',
-    '      spend_share_bar = bar_cell(spend_share, palette_values()[1]),',
-    '      contribution_share_bar = bar_cell(contribution_bar_value, palette_values()[2])',
+    '  output$rollup_tree_dt <- renderDT({',
+    '    dt <- copy(rollup_visible_dt())',
+    '    validate(need(nrow(dt) > 0, "No rollup rows available. Add rollup_path/channel_map metadata to enable this view."))',
+    '    expanded <- rollup_expanded()',
+    '    dt[, indent__ := pmax(as.integer(rollup_level) - 1L, 0L)]',
+    '    dt[, toggle__ := ifelse(has_children__, ifelse(row_key__ %in% expanded, "▾", "▸"), "")]',
+    "    dt[, Driver := sprintf('<div class=\"rollup-node-cell\" style=\"padding-left:%spx;\"><span class=\"rollup-toggle\">%s</span>%s</div>', 18 * indent__, toggle__, rollup_node)]",
+    '    dt[, `Spend share` := bar_cell(spend_share, palette_values()[1])]',
+    '    dt[, `Contribution share` := bar_cell(contribution_bar_value, palette_values()[2])]',
+    '    view <- dt[, .(',
+    '      Driver,',
+    '      Role = role,',
+    '      Spend = fmt(spend),',
+    '      Contribution = fmt(incremental_kpi),',
+    '      `Cost per KPI` = fmt(cost_per_kpi),',
+    '      `ROI / outcome per cost` = fmt(roi_like),',
+    '      `Spend share`,',
+    '      `Contribution share`,',
+    '      Variables = variables',
     '    )]',
-    '    keep <- intersect(c("display_name", "role", "spend", "incremental_kpi", "incremental_value", "roi_like", "cost_per_kpi", "spend_share_bar", "contribution_share_bar", "variables"), names(dt))',
-    '    view <- dt[, ..keep]',
-    '    rename <- c(display_name = "Rollup node", role = "Role", spend = "Spend", incremental_kpi = "Incremental KPI", incremental_value = "Incremental value", roi_like = "ROI / outcome per cost", cost_per_kpi = "Cost per KPI", spend_share_bar = "Spend share", contribution_share_bar = "Contribution share", variables = "Modeled variables")',
-    '    data.table::setnames(view, intersect(names(rename), names(view)), unname(rename[intersect(names(rename), names(view))]))',
-    '    datatable(view, escape = FALSE, options = list(pageLength = 18, scrollX = TRUE), filter = "top", rownames = FALSE)',
+    '    datatable(view, escape = FALSE, selection = "single", rownames = FALSE, options = list(pageLength = 50, dom = "t", ordering = FALSE, scrollX = TRUE))',
     '  })',
+    '  observeEvent(input$rollup_tree_dt_rows_selected, {',
+    '    idx <- input$rollup_tree_dt_rows_selected',
+    '    if (!length(idx)) return(NULL)',
+    '    dt <- rollup_visible_dt()',
+    '    if (!nrow(dt) || idx > nrow(dt)) return(NULL)',
+    '    key <- dt$row_key__[idx]',
+    '    if (!isTRUE(dt$has_children__[idx])) return(NULL)',
+    '    expanded <- rollup_expanded()',
+    '    if (key %in% expanded) expanded <- setdiff(expanded, key) else expanded <- unique(c(expanded, key))',
+    '    rollup_expanded(expanded)',
+    '  }, ignoreInit = TRUE)',
     '  output$residual_plot <- renderPlotly({',
     '    dt <- copy(table_or_empty("fit_by_period"))',
     '    validate(need(nrow(dt) > 0 && "residual" %in% names(dt), "No residual rows available."))',
@@ -2121,6 +2191,9 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '    validate(need(nrow(dt) > 0, paste("No finite curve rows available for", metric)))',
     '    dt[, spend_multiplier__ := suppressWarnings(as.numeric(spend_multiplier))]',
     '    dt <- dt[is.finite(spend_multiplier__)]',
+    '    dt[, spend_at_multiplier__ := if ("spend" %in% names(dt)) suppressWarnings(as.numeric(spend)) else if ("current_spend" %in% names(dt)) suppressWarnings(as.numeric(current_spend)) * spend_multiplier__ else NA_real_]',
+    '    dt[, support_at_multiplier__ := if ("support" %in% names(dt)) suppressWarnings(as.numeric(support)) else if ("current_support" %in% names(dt)) suppressWarnings(as.numeric(current_support)) * spend_multiplier__ else NA_real_]',
+    '    dt[, hover_text__ := paste0(as.character(variable), "<br>Multiplier: ", sprintf("%.2f", spend_multiplier__), ifelse(is.finite(spend_at_multiplier__), paste0("<br>Spend: ", fmt(spend_at_multiplier__)), ""), ifelse(is.finite(support_at_multiplier__), paste0("<br>Support: ", fmt(support_at_multiplier__)), ""), "<br>", metric, ": ", fmt(y_metric__))]',
     '    data.table::setorder(dt, variable, spend_multiplier__)',
     '    vars <- unique(as.character(dt$variable))',
     '    cols <- color_map(vars)',
@@ -2137,9 +2210,9 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '    }',
     '    for (v in vars) {',
     '      sub <- dt[as.character(variable) == v]',
-    '      p <- add_trace(p, data = sub, x = ~spend_multiplier__, y = ~y_metric__, type = "scatter", mode = "lines", name = v, line = list(color = unname(cols[[v]]), width = 2.3), hovertemplate = paste0(v, "<br>Multiplier: %{x:.2f}<br>", metric, ": %{y:,.2f}<extra></extra>"))',
+    '      p <- add_trace(p, data = sub, x = ~spend_multiplier__, y = ~y_metric__, text = ~hover_text__, type = "scatter", mode = "lines", name = v, line = list(color = unname(cols[[v]]), width = 2.3), hovertemplate = "%{text}<extra></extra>")',
     '      cur <- sub[which.min(abs(spend_multiplier__ - 1))]',
-    '      if (nrow(cur)) p <- add_trace(p, data = cur, x = ~spend_multiplier__, y = ~y_metric__, type = "scatter", mode = "markers", name = paste(v, "current"), showlegend = FALSE, marker = list(color = unname(cols[[v]]), size = 8, symbol = "circle"), hovertemplate = paste0(v, " current<br>Multiplier: %{x:.2f}<br>", metric, ": %{y:,.2f}<extra></extra>"))',
+    '      if (nrow(cur)) p <- add_trace(p, data = cur, x = ~spend_multiplier__, y = ~y_metric__, text = ~paste0(hover_text__, "<br>Current point"), type = "scatter", mode = "markers", name = paste(v, "current"), showlegend = FALSE, marker = list(color = unname(cols[[v]]), size = 8, symbol = "circle"), hovertemplate = "%{text}<extra></extra>")',
     '    }',
     '    plotly_theme(p, title = title, x_title = "Spend/support multiplier", y_title = gsub("_", " ", metric))',
     '  }',

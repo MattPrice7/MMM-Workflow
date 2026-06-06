@@ -1,15 +1,19 @@
 variable,channel,rollup_path,rollup_level,rollup_node,rollup_node_path,is_reporting_channel,is_root_node,is_leaf_node
-baseline,Baseline,Non Media/Baseline > baseline,1,Non Media/Baseline,Non Media/Baseline,FALSE,FALSE,FALSE
-baseline,Baseline,Non Media/Baseline > baseline,2,baseline,Non Media/Baseline > baseline,FALSE,FALSE,TRUE
-display,Display,Media/Display > display,1,Media/Display,Media/Display,FALSE,FALSE,FALSE
-display,Display,Media/Display > display,2,display,Media/Display > display,FALSE,FALSE,TRUE
-paid_search,Paid Search,Media/Paid Search > paid_search,1,Media/Paid Search,Media/Paid Search,FALSE,FALSE,FALSE
-paid_search,Paid Search,Media/Paid Search > paid_search,2,paid_search,Media/Paid Search > paid_search,FALSE,FALSE,TRUE
-paid_social,Paid Social,Media/Paid Social > paid_social,1,Media/Paid Social,Media/Paid Social,FALSE,FALSE,FALSE
-paid_social,Paid Social,Media/Paid Social > paid_social,2,paid_social,Media/Paid Social > paid_social,FALSE,FALSE,TRUE
-promo,Promo,Non Media/Promo > promo,1,Non Media/Promo,Non Media/Promo,FALSE,FALSE,FALSE
-promo,Promo,Non Media/Promo > promo,2,promo,Non Media/Promo > promo,FALSE,FALSE,TRUE
-retail_media,Retail Media,Media/Retail Media > retail_media,1,Media/Retail Media,Media/Retail Media,FALSE,FALSE,FALSE
-retail_media,Retail Media,Media/Retail Media > retail_media,2,retail_media,Media/Retail Media > retail_media,FALSE,FALSE,TRUE
-tv,TV,Media/TV > tv,1,Media/TV,Media/TV,FALSE,FALSE,FALSE
-tv,TV,Media/TV > tv,2,tv,Media/TV > tv,FALSE,FALSE,TRUE
+baseline,Baseline,Non Media > Baseline,1,Non Media,Non Media,FALSE,FALSE,FALSE
+baseline,Baseline,Non Media > Baseline,2,Baseline,Non Media > Baseline,TRUE,FALSE,TRUE
+display,Display,Media > Display,1,Media,Media,FALSE,TRUE,FALSE
+display,Display,Media > Display,2,Display,Media > Display,TRUE,FALSE,TRUE
+meta,Paid Social,Media > Paid Social > Meta,1,Media,Media,FALSE,TRUE,FALSE
+meta,Paid Social,Media > Paid Social > Meta,2,Paid Social,Media > Paid Social,TRUE,FALSE,FALSE
+meta,Paid Social,Media > Paid Social > Meta,3,Meta,Media > Paid Social > Meta,FALSE,FALSE,TRUE
+paid_search,Paid Search,Media > Paid Search,1,Media,Media,FALSE,TRUE,FALSE
+paid_search,Paid Search,Media > Paid Search,2,Paid Search,Media > Paid Search,TRUE,FALSE,TRUE
+promo,Promo,Non Media > Promo,1,Non Media,Non Media,FALSE,FALSE,FALSE
+promo,Promo,Non Media > Promo,2,Promo,Non Media > Promo,TRUE,FALSE,TRUE
+retail_media,Retail Media,Media > Retail Media,1,Media,Media,FALSE,TRUE,FALSE
+retail_media,Retail Media,Media > Retail Media,2,Retail Media,Media > Retail Media,TRUE,FALSE,TRUE
+tiktok,Paid Social,Media > Paid Social > TikTok,1,Media,Media,FALSE,TRUE,FALSE
+tiktok,Paid Social,Media > Paid Social > TikTok,2,Paid Social,Media > Paid Social,TRUE,FALSE,FALSE
+tiktok,Paid Social,Media > Paid Social > TikTok,3,TikTok,Media > Paid Social > TikTok,FALSE,FALSE,TRUE
+tv,TV,Media > TV,1,Media,Media,FALSE,TRUE,FALSE
+tv,TV,Media > TV,2,TV,Media > TV,TRUE,FALSE,TRUE

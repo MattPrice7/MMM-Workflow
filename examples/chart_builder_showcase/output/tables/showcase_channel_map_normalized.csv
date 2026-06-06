@@ -1,8 +1,9 @@
 variable,channel,rollup_path
 baseline,Baseline,Non Media/Baseline
 display,Display,Media/Display
+meta,Paid Social,Media/Paid Social/Meta
 paid_search,Paid Search,Media/Paid Search
-paid_social,Paid Social,Media/Paid Social
 promo,Promo,Non Media/Promo
 retail_media,Retail Media,Media/Retail Media
+tiktok,Paid Social,Media/Paid Social/TikTok
 tv,TV,Media/TV

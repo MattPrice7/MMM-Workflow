@@ -1,9 +1,9 @@
 stage_order,stage,metric_type,value,share_of_actual_kpi,metric_note
-1,Actual KPI,kpi,287630.055737761,1,KPI-unit stage used for model/decomposition funnel.
-2,Fitted KPI,kpi,288060.880220605,1.0014978423647,KPI-unit stage used for model/decomposition funnel.
-3,Modeled contribution,kpi,288060.880220605,1.0014978423647,KPI-unit stage used for model/decomposition funnel.
-4,Baseline/control contribution,kpi,202778.55473771,0.704997793841781,KPI-unit stage used for model/decomposition funnel.
-5,Media contribution,kpi,85282.3254828951,0.296500048522916,KPI-unit stage used for model/decomposition funnel.
+1,Actual KPI,kpi,289937.426063288,1,KPI-unit stage used for model/decomposition funnel.
+2,Fitted KPI,kpi,289608.616946095,0.998865930757345,KPI-unit stage used for model/decomposition funnel.
+3,Modeled contribution,kpi,289608.616946095,0.998865930757345,KPI-unit stage used for model/decomposition funnel.
+4,Baseline/control contribution,kpi,202778.55473771,0.699387303981403,KPI-unit stage used for model/decomposition funnel.
+5,Media contribution,kpi,86830.0622083847,0.299478626775942,KPI-unit stage used for model/decomposition funnel.
 6,Other modeled contribution,kpi,0,0,KPI-unit stage used for model/decomposition funnel.
-7,Residual,kpi,-430.824482844181,-0.00149784236469701,KPI-unit stage used for model/decomposition funnel.
-8,Media spend,cost,1042616.93422454,,Cost metric; not additive to KPI stages.
+7,Residual,kpi,328.809117192847,0.0011340692426547,KPI-unit stage used for model/decomposition funnel.
+8,Media spend,cost,1070896.84843533,,Cost metric; not additive to KPI stages.

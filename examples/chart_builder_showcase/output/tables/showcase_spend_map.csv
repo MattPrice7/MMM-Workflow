@@ -1,6 +1,7 @@
 variable,spend_col
 tv,tv_spend
 paid_search,paid_search_spend
-paid_social,paid_social_spend
+meta,meta_spend
+tiktok,tiktok_spend
 retail_media,retail_media_spend
 display,display_spend
