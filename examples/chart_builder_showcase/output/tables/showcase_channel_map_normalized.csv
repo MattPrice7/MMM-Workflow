@@ -1,8 +1,8 @@
 variable,channel,rollup_path
-baseline,Baseline,baseline
-display,Display,display
-paid_search,Paid Search,paid_search
-paid_social,Paid Social,paid_social
-promo,Promo,promo
-retail_media,Retail Media,retail_media
-tv,TV,tv
+baseline,Baseline,Non Media/Baseline
+display,Display,Media/Display
+paid_search,Paid Search,Media/Paid Search
+paid_social,Paid Social,Media/Paid Social
+promo,Promo,Non Media/Promo
+retail_media,Retail Media,Media/Retail Media
+tv,TV,Media/TV

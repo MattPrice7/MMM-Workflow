@@ -1,8 +1,15 @@
 variable,channel,rollup_path,rollup_level,rollup_node,rollup_node_path,is_reporting_channel,is_root_node,is_leaf_node
-baseline,Baseline,baseline,1,baseline,baseline,FALSE,FALSE,TRUE
-display,Display,display,1,display,display,FALSE,FALSE,TRUE
-paid_search,Paid Search,paid_search,1,paid_search,paid_search,FALSE,FALSE,TRUE
-paid_social,Paid Social,paid_social,1,paid_social,paid_social,FALSE,FALSE,TRUE
-promo,Promo,promo,1,promo,promo,FALSE,FALSE,TRUE
-retail_media,Retail Media,retail_media,1,retail_media,retail_media,FALSE,FALSE,TRUE
-tv,TV,tv,1,tv,tv,FALSE,FALSE,TRUE
+baseline,Baseline,Non Media/Baseline > baseline,1,Non Media/Baseline,Non Media/Baseline,FALSE,FALSE,FALSE
+baseline,Baseline,Non Media/Baseline > baseline,2,baseline,Non Media/Baseline > baseline,FALSE,FALSE,TRUE
+display,Display,Media/Display > display,1,Media/Display,Media/Display,FALSE,FALSE,FALSE
+display,Display,Media/Display > display,2,display,Media/Display > display,FALSE,FALSE,TRUE
+paid_search,Paid Search,Media/Paid Search > paid_search,1,Media/Paid Search,Media/Paid Search,FALSE,FALSE,FALSE
+paid_search,Paid Search,Media/Paid Search > paid_search,2,paid_search,Media/Paid Search > paid_search,FALSE,FALSE,TRUE
+paid_social,Paid Social,Media/Paid Social > paid_social,1,Media/Paid Social,Media/Paid Social,FALSE,FALSE,FALSE
+paid_social,Paid Social,Media/Paid Social > paid_social,2,paid_social,Media/Paid Social > paid_social,FALSE,FALSE,TRUE
+promo,Promo,Non Media/Promo > promo,1,Non Media/Promo,Non Media/Promo,FALSE,FALSE,FALSE
+promo,Promo,Non Media/Promo > promo,2,promo,Non Media/Promo > promo,FALSE,FALSE,TRUE
+retail_media,Retail Media,Media/Retail Media > retail_media,1,Media/Retail Media,Media/Retail Media,FALSE,FALSE,FALSE
+retail_media,Retail Media,Media/Retail Media > retail_media,2,retail_media,Media/Retail Media > retail_media,FALSE,FALSE,TRUE
+tv,TV,Media/TV > tv,1,Media/TV,Media/TV,FALSE,FALSE,FALSE
+tv,TV,Media/TV > tv,2,tv,Media/TV > tv,FALSE,FALSE,TRUE

@@ -743,6 +743,58 @@ mdo_build_stan_posterior_tables <- function(posterior_decomp_draws = NULL,
   )
 }
 
+mdo_build_stan_coef_posterior_tables <- function(posterior_coef_draws = NULL,
+                                                 media_variables = NULL,
+                                                 baseline_variables = NULL) {
+  empty <- data.table::data.table()
+  if (is.null(posterior_coef_draws)) {
+    return(list(
+      stan_posterior_coef_draws = empty,
+      stan_posterior_coef_summary = empty
+    ))
+  }
+  src <- mdo_as_dt(posterior_coef_draws, "posterior_coef_draws")
+  if (is.null(src) || !nrow(src)) {
+    return(list(
+      stan_posterior_coef_draws = empty,
+      stan_posterior_coef_summary = empty
+    ))
+  }
+  draw_col <- mdo_pick_col(src, c(".draw", "draw", "posterior_draw", "iteration", "sample_id", "mcmc_draw"))
+  variable_col <- mdo_pick_col(src, c("variable", "var", "driver", "channel"))
+  coef_col <- mdo_pick_col(src, c("coef", "coefficient", "beta", "beta_draw", "coef_draw", "value"))
+  if (is.na(draw_col) || is.na(variable_col) || is.na(coef_col)) {
+    return(list(
+      stan_posterior_coef_draws = empty,
+      stan_posterior_coef_summary = empty
+    ))
+  }
+  if (!identical(draw_col, ".draw")) data.table::setnames(src, draw_col, ".draw")
+  if (!identical(variable_col, "variable")) data.table::setnames(src, variable_col, "variable")
+  if (!identical(coef_col, "coef")) data.table::setnames(src, coef_col, "coef")
+  src[, `:=`(.draw = as.character(.draw), variable = as.character(variable), coef = mdo_safe_num(coef))]
+  src <- src[nzchar(.draw) & nzchar(variable) & is.finite(coef)]
+  if (!nrow(src)) {
+    return(list(
+      stan_posterior_coef_draws = empty,
+      stan_posterior_coef_summary = empty
+    ))
+  }
+  src[, role := mdo_assign_roles(variable, media_variables = media_variables, baseline_variables = baseline_variables)]
+  summary <- src[, .(
+    draw_n = data.table::uniqueN(.draw),
+    coef_q05 = mdo_quantile_or_na(coef, 0.05),
+    coef_q50 = mdo_quantile_or_na(coef, 0.50),
+    coef_q95 = mdo_quantile_or_na(coef, 0.95),
+    coef_mean = mean(coef, na.rm = TRUE),
+    probability_coef_positive = mean(coef > 0, na.rm = TRUE)
+  ), by = .(variable, role)][order(role, variable)]
+  list(
+    stan_posterior_coef_draws = src[order(variable, .draw)][],
+    stan_posterior_coef_summary = summary[]
+  )
+}
+
 mdo_build_chart_registry <- function(report_tables) {
   specs <- data.table::data.table(
     chart_id = c(
@@ -803,6 +855,7 @@ build_mmm_deck_tables <- function(long_decomp,
                                   spend_map = NULL,
                                   optimizer_output = NULL,
                                   posterior_decomp_draws = NULL,
+                                  posterior_coef_draws = NULL,
                                   channel_map = NULL,
                                   media_variables = NULL,
                                   baseline_variables = NULL,
@@ -1120,6 +1173,21 @@ build_mmm_deck_tables <- function(long_decomp,
       data.table::setorderv(kpi_economics_by_rollup_node, c("rollup_level", "rollup_node", "signed_economics_flag", "cost_per_outcome"), order = c(1L, 1L, 1L, 1L))
     }
   }
+  rollup_performance_table <- data.table::data.table()
+  if (nrow(kpi_economics_by_rollup_node)) {
+    rollup_performance_table <- data.table::copy(kpi_economics_by_rollup_node)
+    kpi_value <- if (!is.null(kpi_value_per_outcome) && is.finite(as.numeric(kpi_value_per_outcome)[1])) as.numeric(kpi_value_per_outcome)[1] else NA_real_
+    rollup_performance_table[, `:=`(
+      display_name = paste0(strrep("  ", pmax(as.integer(rollup_level) - 1L, 0L)), rollup_node),
+      incremental_kpi = contribution,
+      incremental_value = if (is.finite(kpi_value)) contribution * kpi_value else NA_real_,
+      roi_like = if (is.finite(kpi_value)) contribution * kpi_value / data.table::fifelse(abs(spend) > 1e-8, spend, NA_real_) else outcome_per_cost,
+      cost_per_kpi = cost_per_outcome,
+      spend_bar_value = pmax(0, pmin(1, spend_share)),
+      contribution_bar_value = pmax(0, pmin(1, abs(contribution_share)))
+    )]
+    data.table::setorderv(rollup_performance_table, c("rollup_level", "rollup_node_path", "role"))
+  }
 
   kpi_economics_by_period <- mdo_empty_kpi_economics(TRUE)
   if (nrow(spend$by_period)) {
@@ -1168,6 +1236,11 @@ build_mmm_deck_tables <- function(long_decomp,
       on = c("period_granularity", "period_start", "period_label", "period_sort", "variable", "role")
     ]
   }
+  stan_coef_posterior_tables <- mdo_build_stan_coef_posterior_tables(
+    posterior_coef_draws = posterior_coef_draws,
+    media_variables = media_variables,
+    baseline_variables = baseline_variables
+  )
 
   diagnostic_flags <- data.table::data.table(
     check = character(),
@@ -1282,6 +1355,7 @@ build_mmm_deck_tables <- function(long_decomp,
     kpi_economics = kpi_economics[],
     kpi_economics_by_channel = kpi_economics_by_channel[],
     kpi_economics_by_rollup_node = kpi_economics_by_rollup_node[],
+    rollup_performance_table = rollup_performance_table[],
     kpi_economics_by_period = kpi_economics_by_period[],
     diagnostic_flags = diagnostic_flags[],
     period_slicer_index = period_slicer_index[],
@@ -1293,6 +1367,7 @@ build_mmm_deck_tables <- function(long_decomp,
   )
   out <- c(out, optimizer_tables)
   out <- c(out, stan_posterior_tables)
+  out <- c(out, stan_coef_posterior_tables)
   out$chart_registry <- mdo_build_chart_registry(out)
   out
 }
@@ -1589,8 +1664,7 @@ write_mmm_deck_html <- function(report_tables,
     "<div class=\"charts\">", chart_html, "</div>",
     "<section><h2>KPI decomposition funnel</h2>", mdo_table_html(report_tables$funnel_summary, 20), "</section>",
     "<section><h2>Optimizer scenarios</h2>", mdo_table_html(report_tables$optimizer_scenario_comparison, 30),
-    "<h3>Recommended plan</h3>", mdo_table_html(report_tables$optimizer_plan[, intersect(c("variable", "current_spend", "recommended_spend", "spend_change", "current_contribution", "expected_contribution", "contribution_change", "expected_roi", "expected_mroi", "expected_cost_per_kpi"), names(report_tables$optimizer_plan)), with = FALSE], 40),
-    "<h3>Optimizer chart registry</h3>", mdo_table_html(report_tables$chart_registry, 30), "</section>",
+    "<h3>Recommended plan</h3>", mdo_table_html(report_tables$optimizer_plan[, intersect(c("variable", "current_spend", "recommended_spend", "spend_change", "current_contribution", "expected_contribution", "contribution_change", "expected_roi", "expected_mroi", "expected_cost_per_kpi"), names(report_tables$optimizer_plan)), with = FALSE], 40), "</section>",
     "<div class=\"toolbar\"><label for=\"periodSelect\">Period</label><select id=\"periodSelect\">", period_options, "</select></div>",
     period_panels,
     "<footer>Use the CSV tables for deck chart rebuilds. Cost metrics are generic KPI economics: outcome per cost and cost per outcome, not revenue ROI unless a KPI value is supplied.</footer>",
@@ -1676,6 +1750,10 @@ write_mmm_deck_shiny_app <- function(report_tables,
     'if (!length(posterior_source_choices)) posterior_source_choices <- c("No draw-level posterior tables" = "none")',
     'posterior_variable_choices <- if (length(stan_posterior_variable_choices)) stan_posterior_variable_choices else optimizer_posterior_variable_choices',
     'if (!length(posterior_variable_choices)) posterior_variable_choices <- curve_choices',
+    'coef_posterior_choices <- choices_from("stan_posterior_coef_draws", "variable")',
+    'if (!length(coef_posterior_choices)) coef_posterior_choices <- character()',
+    'rollup_levels <- sort(unique(as.character(table_or_empty("rollup_performance_table")$rollup_level)))',
+    'rollup_level_choices <- c("All levels" = "__all__", stats::setNames(rollup_levels, paste("Level", rollup_levels)))',
     'role_choices <- c("All roles" = "__all__", stats::setNames(sort(unique(as.character(table_or_empty("contribution_by_variable")$role))), sort(unique(as.character(table_or_empty("contribution_by_variable")$role)))))',
     'fit_overlay_choices <- c("None" = "__none__", stats::setNames(variable_choices, variable_choices))',
     'curve_metric_choices <- intersect(c("contribution", "contribution_vs_current", "roi", "mroi", "cost_per_kpi", "value_per_cost"), names(table_or_empty("optimizer_response_curves")))',
@@ -1715,7 +1793,8 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '    tabPanel("KPI Economics", br(), div(class = "control-panel", selectInput("econ_metric", "Economics metric", choices = econ_metric_choices, selected = econ_metric_choices[1])), fluidRow(column(6, div(class = "panel", plotlyOutput("spend_scatter", height = "420px"))), column(6, div(class = "panel", plotlyOutput("econ_rank_plot", height = "420px"))))),',
     '    tabPanel("Optimizer", br(), div(class = "control-panel", fluidRow(column(4, selectInput("scenario_metric", "Scenario metric", choices = scenario_metric_choices, selected = scenario_metric_choices[1])), column(8, plotlyOutput("optimizer_scenario_plot", height = "330px")))), fluidRow(column(6, div(class = "panel", plotlyOutput("optimizer_spend_plot", height = "420px"))), column(6, div(class = "panel", plotlyOutput("optimizer_saturation_plot", height = "420px"))))),',
     '    tabPanel("Posterior / Uncertainty", br(), div(class = "control-panel", fluidRow(column(2, selectInput("posterior_source", "Posterior source", choices = posterior_source_choices, selected = posterior_source_choices[1])), column(2, selectInput("posterior_variable", "Variable", choices = posterior_variable_choices, selected = if (length(posterior_variable_choices)) posterior_variable_choices[1] else character())), column(2, selectInput("posterior_scenario", "Scenario", choices = c("Auto" = "__auto__"))), column(2, selectInput("posterior_density_metric", "Density metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "contribution")), column(2, selectInput("posterior_x", "X metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "contribution")), column(2, selectInput("posterior_y", "Y metric", choices = c("Contribution" = "contribution", "ROI" = "roi", "mROI" = "mroi", "Cost per KPI" = "cost_per_kpi", "Outcome per cost" = "outcome_per_cost"), selected = "roi")))), fluidRow(column(6, div(class = "panel", h4("Scenario contribution uncertainty"), plotlyOutput("scenario_uncertainty_plot", height = "420px"))), column(6, div(class = "panel", h4("Posterior density"), plotlyOutput("posterior_density_plot", height = "420px")))), fluidRow(column(12, div(class = "panel", h4("2D posterior draw distribution"), plotlyOutput("posterior_2d_plot", height = "470px"))))),',
-    '    tabPanel("Diagnostics", br(), div(class = "panel", DTOutput("flags_table")), div(class = "panel", DTOutput("fit_table")), div(class = "panel", plotlyOutput("residual_plot", height = "380px")), div(class = "panel", h4("Chart registry"), DTOutput("chart_registry_table")))',
+    '    tabPanel("Rollup", br(), div(class = "control-panel", fluidRow(column(4, selectInput("rollup_level_filter", "Rollup depth", choices = rollup_level_choices, selected = "__all__")), column(8, tags$span(style = "color:#4B5563;", "Uses rollup_path metadata; parent rows are reporting rollups, not separately modeled variables.")))), fluidRow(column(6, div(class = "panel", h4("Rollup contribution"), plotlyOutput("rollup_contribution_plot", height = "430px"))), column(6, div(class = "panel", h4("Rollup KPI economics"), DTOutput("rollup_performance_dt"))))),',
+    '    tabPanel("Diagnostics", br(), fluidRow(column(6, div(class = "panel", h4("Coefficient posterior density"), selectInput("coef_density_variable", "Coefficient", choices = coef_posterior_choices, selected = if (length(coef_posterior_choices)) coef_posterior_choices[1] else character()), plotlyOutput("coef_density_plot", height = "380px"))), column(6, div(class = "panel", h4("Residuals"), plotlyOutput("residual_plot", height = "380px")))), div(class = "panel", DTOutput("flags_table")), div(class = "panel", DTOutput("fit_table")))',
     '  )',
     ')',
     'server <- function(input, output, session) {',
@@ -1960,6 +2039,18 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '    dt <- as.data.table(dt)',
     '    datatable(dt, options = list(pageLength = page, scrollX = TRUE), filter = "top", rownames = FALSE)',
     '  }',
+    '  bar_cell <- function(x, color) {',
+    '    x <- suppressWarnings(as.numeric(x))',
+    '    pct <- ifelse(is.finite(x), pmax(0, pmin(100, 100 * x)), 0)',
+    '    label <- ifelse(is.finite(x), paste0(round(100 * x, 1), "%"), "")',
+    '    sprintf("<div style=\"position:relative;min-width:92px;background:#f3f4f6;border-radius:3px;overflow:hidden;\"><div style=\"width:%s%%;height:18px;background:%s;opacity:.35;\"></div><span style=\"position:absolute;left:6px;top:1px;font-size:12px;color:#111827;\">%s</span></div>", pct, color, label)',
+    '  }',
+    '  rollup_dt <- reactive({',
+    '    dt <- copy(table_or_empty("rollup_performance_table"))',
+    '    if (!nrow(dt)) return(dt)',
+    '    if (!is.null(input$rollup_level_filter) && input$rollup_level_filter != "__all__" && "rollup_level" %in% names(dt)) dt <- dt[as.character(rollup_level) == input$rollup_level_filter]',
+    '    filter_role(dt)',
+    '  })',
     '  summary <- table_or_empty("executive_summary")[1]',
     '  output$metric_cards <- renderUI({',
     '    div(class = "metric-grid",',
@@ -2039,6 +2130,27 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '    dt <- head(dt, input$top_n)',
     '    p <- ggplot(dt, aes(x = reorder(variable, -metric_value__), y = metric_value__, text = paste(variable, "<br>", metric, ":", fmt(metric_value__)))) + geom_col(fill = palette_values()[2], width = 0.72) + coord_flip() + labs(title = paste("Ranked", gsub("_", " ", metric)), x = NULL, y = gsub("_", " ", metric)) + chart_theme()',
     '    ggplotly(p, tooltip = "text")',
+    '  })',
+    '  output$rollup_contribution_plot <- renderPlotly({',
+    '    dt <- rollup_dt()[is.finite(as.numeric(contribution))]',
+    '    validate(need(nrow(dt) > 0, "No rollup contribution rows available. Add rollup_path/channel_map metadata to enable this view."))',
+    '    dt <- dt[order(-abs(as.numeric(contribution)))]',
+    '    dt <- head(dt, input$top_n)',
+    '    p <- ggplot(dt, aes(x = reorder(display_name, as.numeric(contribution)), y = as.numeric(contribution), fill = role, text = paste(rollup_node_path, "<br>Contribution:", fmt(contribution), "<br>Spend:", fmt(spend), "<br>Cost per KPI:", fmt(cost_per_kpi), "<br>ROI-like:", fmt(roi_like)))) + geom_hline(yintercept = 0, color = "#9CA3AF") + geom_col(width = 0.72) + coord_flip() + scale_fill_manual(values = color_map(unique(dt$role))) + labs(title = "Contribution by rollup node", x = NULL, y = "Contribution") + chart_theme() + theme(legend.position = "bottom")',
+    '    ggplotly(p, tooltip = "text")',
+    '  })',
+    '  output$rollup_performance_dt <- renderDT({',
+    '    dt <- copy(rollup_dt())',
+    '    validate(need(nrow(dt) > 0, "No rollup performance rows available."))',
+    '    dt[, `:=`(',
+    '      spend_share_bar = bar_cell(spend_share, palette_values()[1]),',
+    '      contribution_share_bar = bar_cell(contribution_bar_value, palette_values()[2])',
+    '    )]',
+    '    keep <- intersect(c("display_name", "role", "spend", "incremental_kpi", "incremental_value", "roi_like", "cost_per_kpi", "spend_share_bar", "contribution_share_bar", "variables"), names(dt))',
+    '    view <- dt[, ..keep]',
+    '    rename <- c(display_name = "Rollup node", role = "Role", spend = "Spend", incremental_kpi = "Incremental KPI", incremental_value = "Incremental value", roi_like = "ROI / outcome per cost", cost_per_kpi = "Cost per KPI", spend_share_bar = "Spend share", contribution_share_bar = "Contribution share", variables = "Modeled variables")',
+    '    data.table::setnames(view, intersect(names(rename), names(view)), unname(rename[intersect(names(rename), names(view))]))',
+    '    datatable(view, escape = FALSE, options = list(pageLength = 18, scrollX = TRUE), filter = "top", rownames = FALSE)',
     '  })',
     '  output$residual_plot <- renderPlotly({',
     '    dt <- copy(table_or_empty("fit_by_period"))',
@@ -2229,6 +2341,23 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '    title_prefix <- if (identical(input$posterior_source, "stan")) "Stan posterior variable shadow:" else "Optimizer scenario posterior:"',
     '    plotly_theme(p, title = paste(title_prefix, vars), x_title = gsub("_", " ", xmetric), y_title = gsub("_", " ", ymetric))',
     '  })',
+    '  output$coef_density_plot <- renderPlotly({',
+    '    dt <- table_or_empty("stan_posterior_coef_draws")',
+    '    validate(need(nrow(dt) > 0, "No coefficient posterior draws available. Pass posterior_coef_draws to the deck builder to enable this diagnostic."))',
+    '    vars <- input$coef_density_variable %||% coef_posterior_choices[1]',
+    '    dt <- dt[as.character(variable) == vars]',
+    '    x <- suppressWarnings(as.numeric(dt$coef))',
+    '    x <- x[is.finite(x)]',
+    '    validate(need(length(x) >= 3 && length(unique(x)) >= 2, "Not enough finite coefficient draws for a density curve."))',
+    '    den <- stats::density(x, na.rm = TRUE)',
+    '    dens_dt <- data.table(value = den$x, density = den$y)',
+    '    qs <- as.numeric(stats::quantile(x, c(0.05, 0.50, 0.95), na.rm = TRUE, names = FALSE))',
+    '    ymax <- max(dens_dt$density, na.rm = TRUE)',
+    '    p <- plot_ly(dens_dt, x = ~value, y = ~density, type = "scatter", mode = "lines", name = "Coefficient posterior", fill = "tozeroy", fillcolor = "rgba(124,58,237,0.16)", line = list(color = palette_values()[4], width = 2.5), hovertemplate = paste0(vars, "<br>coef: %{x:,.5f}<br>Density: %{y:,.4f}<extra></extra>"))',
+    '    q_dt <- data.table(q = c("q05", "q50", "q95"), value = qs, density = ymax * c(0.72, 0.98, 0.72))',
+    '    p <- add_trace(p, data = q_dt, x = ~value, y = ~density, type = "scatter", mode = "markers+text", text = ~q, textposition = "top center", marker = list(color = c(palette_values()[2], palette_values()[3], palette_values()[2]), size = c(7, 9, 7)), name = "q05/q50/q95", hovertemplate = "%{text}<br>%{x:,.5f}<extra></extra>")',
+    '    plotly_theme(p, title = paste("Coefficient posterior density:", vars), x_title = "Coefficient", y_title = "Density")',
+    '  })',
     '  output$contribution_table <- renderDT(dt_widget(selected_contrib(), 20))',
     '  output$trend_table <- renderDT(dt_widget(filter_role(filter_vars(table_or_empty("contribution_by_period_variable"))), 20))',
     '  output$econ_table <- renderDT(dt_widget(selected_econ(), 20))',
@@ -2240,7 +2369,6 @@ write_mmm_deck_shiny_app <- function(report_tables,
     '  output$optimizer_scenario_table <- renderDT(dt_widget(table_or_empty("optimizer_scenario_comparison"), 20))',
     '  output$flags_table <- renderDT(dt_widget(table_or_empty("diagnostic_flags"), 10))',
     '  output$fit_table <- renderDT(dt_widget(table_or_empty("fit_diagnostics"), 10))',
-    '  output$chart_registry_table <- renderDT(dt_widget(table_or_empty("chart_registry"), 20))',
     '}',
     'shinyApp(ui, server)'
   )
@@ -2332,6 +2460,7 @@ run_mmm_deck_output_builder <- function(long_decomp,
                                         spend_map = NULL,
                                         optimizer_output = NULL,
                                         posterior_decomp_draws = NULL,
+                                        posterior_coef_draws = NULL,
                                         channel_map = NULL,
                                         output_dir,
                                         prefix = "",
@@ -2363,6 +2492,7 @@ run_mmm_deck_output_builder <- function(long_decomp,
     spend_map = spend_map,
     optimizer_output = optimizer_output,
     posterior_decomp_draws = posterior_decomp_draws,
+    posterior_coef_draws = posterior_coef_draws,
     channel_map = channel_map,
     media_variables = media_variables,
     baseline_variables = baseline_variables,

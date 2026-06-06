@@ -17,6 +17,7 @@ table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showc
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_kpi_economics.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_kpi_economics_by_channel.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_kpi_economics_by_rollup_node.csv
+table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_rollup_performance_table.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_kpi_economics_by_period.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_diagnostic_flags.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_period_slicer_index.csv
@@ -42,6 +43,8 @@ table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showc
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_stan_posterior_variable_draws.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_stan_posterior_variable_summary.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_stan_posterior_period_variable_summary.csv
+table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_stan_posterior_coef_draws.csv
+table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_stan_posterior_coef_summary.csv
 table,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/tables/showcase_chart_registry.csv
 chart,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/charts/contribution_by_variable.png
 chart,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/charts/contribution_trend.png

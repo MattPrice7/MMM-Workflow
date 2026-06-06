@@ -78,7 +78,16 @@ if (!file.exists(cache_path) || force_rebuild_data) {
   channel_map <- data.table(
     variable = c(media_vars, "baseline", "promo"),
     channel = c("TV", "Paid Search", "Paid Social", "Retail Media", "Display", "Baseline", "Promo"),
-    role = c(rep("media", length(media_vars)), "baseline_control", "baseline_control")
+    role = c(rep("media", length(media_vars)), "baseline_control", "baseline_control"),
+    rollup_path = c(
+      "Media/TV",
+      "Media/Paid Search",
+      "Media/Paid Social",
+      "Media/Retail Media",
+      "Media/Display",
+      "Non Media/Baseline",
+      "Non Media/Promo"
+    )
   )
 
   curve_grid <- seq(0, 2.2, by = 0.05)
@@ -120,6 +129,18 @@ if (!file.exists(cache_path) || force_rebuild_data) {
     tmp[]
   }), fill = TRUE)
 
+  coef_means <- data.table(
+    variable = media_vars,
+    coef_mean = c(1.25, 1.55, 1.05, 0.95, 0.70),
+    coef_sd = c(0.16, 0.20, 0.18, 0.14, 0.12)
+  )
+  posterior_coef_draws <- rbindlist(lapply(seq_len(400), function(draw_id) {
+    tmp <- copy(coef_means)
+    tmp[, .draw := draw_id]
+    tmp[, coef := pmax(0, rnorm(.N, coef_mean, coef_sd))]
+    tmp[, .(.draw, variable, coef)]
+  }), fill = TRUE)
+
   optimizer_output <- run_optimizer_scenario_planner(
     response_curves = response_curves,
     response_curve_draws = draw_curves,
@@ -147,6 +168,7 @@ if (!file.exists(cache_path) || force_rebuild_data) {
     spend_map = spend_map,
     channel_map = channel_map,
     posterior_decomp_draws = posterior_decomp_draws,
+    posterior_coef_draws = posterior_coef_draws,
     optimizer_output = optimizer_output
   ), cache_path)
 } else {
@@ -168,6 +190,21 @@ if (!exists("posterior_decomp_draws", inherits = FALSE)) {
   }), fill = TRUE)
 }
 
+if (!exists("posterior_coef_draws", inherits = FALSE)) {
+  set.seed(20260605)
+  coef_means <- data.table(
+    variable = media_vars,
+    coef_mean = c(1.25, 1.55, 1.05, 0.95, 0.70),
+    coef_sd = c(0.16, 0.20, 0.18, 0.14, 0.12)
+  )
+  posterior_coef_draws <- rbindlist(lapply(seq_len(400), function(draw_id) {
+    tmp <- copy(coef_means)
+    tmp[, .draw := draw_id]
+    tmp[, coef := pmax(0, rnorm(.N, coef_mean, coef_sd))]
+    tmp[, .(.draw, variable, coef)]
+  }), fill = TRUE)
+}
+
 result <- run_mmm_deck_output_builder(
   long_decomp = long_decomp,
   wide_decomp = wide_decomp,
@@ -175,6 +212,7 @@ result <- run_mmm_deck_output_builder(
   spend_map = spend_map,
   optimizer_output = optimizer_output,
   posterior_decomp_draws = posterior_decomp_draws,
+  posterior_coef_draws = posterior_coef_draws,
   channel_map = channel_map,
   output_dir = output_dir,
   prefix = "showcase",
