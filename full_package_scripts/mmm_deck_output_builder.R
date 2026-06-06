@@ -795,59 +795,6 @@ mdo_build_stan_coef_posterior_tables <- function(posterior_coef_draws = NULL,
   )
 }
 
-mdo_build_chart_registry <- function(report_tables) {
-  specs <- data.table::data.table(
-    chart_id = c(
-      "contribution_by_variable", "contribution_trend", "actual_vs_fitted", "residuals_by_period",
-      "cost_per_outcome", "spend_vs_contribution", "kpi_decomposition_funnel",
-      "optimizer_current_vs_recommended_spend", "optimizer_scenario_incremental_contribution",
-      "optimizer_response_curves", "optimizer_mroi_curves", "optimizer_saturation_headroom"
-    ),
-    chart_name = c(
-      "Contribution by variable", "Contribution trend", "Actual vs fitted KPI", "Residuals by period",
-      "Cost per KPI outcome", "Spend vs KPI contribution", "KPI decomposition funnel",
-      "Current vs recommended spend", "Scenario incremental contribution",
-      "Response curves", "Marginal response curves", "Saturation and headroom"
-    ),
-    audience = c("client", "client", "appendix", "internal_qa", "client", "client", "client",
-                 "client", "client", "client", "appendix", "appendix"),
-    required_table = c(
-      "contribution_by_variable", "contribution_by_period_variable", "fit_by_period", "fit_by_period",
-      "kpi_economics", "kpi_economics", "funnel_summary",
-      "optimizer_plan", "optimizer_scenario_comparison", "optimizer_response_curves",
-      "optimizer_response_curves", "optimizer_saturation_headroom"
-    ),
-    required_columns = c(
-      "variable|contribution|role", "period_label|period_sort|variable|contribution", "period_label|period_sort|actual|pred", "period_label|period_sort|residual",
-      "variable|cost_per_outcome", "variable|spend|contribution", "stage|value",
-      "variable|current_spend|recommended_spend", "plan_name|incremental_contribution", "variable|spend_multiplier|contribution",
-      "variable|spend_multiplier|mroi", "variable|pct_of_peak_grid_contribution"
-    ),
-    business_question_answered = c(
-      "Which drivers contributed the most KPI?", "How did driver contribution move over time?", "How closely did the model fit observed KPI?", "Where are residuals concentrated?",
-      "Which channels look efficient on average?", "How does contribution compare with spend?", "How does actual KPI decompose into model components?",
-      "How does the recommended plan change spend?", "Which scenarios add the most incremental KPI?", "How does expected contribution change as spend/support changes?",
-      "Where is marginal response strongest or weakest?", "Which channels have response headroom?"
-    ),
-    recommended_slide_title = c(
-      "What drove KPI contribution?", "How contribution changed over time", "Model fit over time", "Residual QA by period",
-      "Cost per KPI by channel", "Spend and contribution by channel", "KPI decomposition funnel",
-      "Recommended budget changes", "Scenario KPI upside", "Response curves by channel",
-      "Marginal response by channel", "Saturation and headroom"
-    )
-  )
-  specs[, available := vapply(seq_len(.N), function(i) {
-    tab_name <- required_table[i]
-    if (!tab_name %in% names(report_tables)) return(FALSE)
-    tab <- report_tables[[tab_name]]
-    if (is.null(tab) || !nrow(tab)) return(FALSE)
-    req <- strsplit(required_columns[i], "\\|")[[1]]
-    all(req %in% names(tab))
-  }, logical(1))]
-  specs[, skip_if_missing_columns := !available]
-  specs[]
-}
-
 build_mmm_deck_tables <- function(long_decomp,
                                   wide_decomp = NULL,
                                   raw_data = NULL,
@@ -1368,7 +1315,6 @@ build_mmm_deck_tables <- function(long_decomp,
   out <- c(out, optimizer_tables)
   out <- c(out, stan_posterior_tables)
   out <- c(out, stan_coef_posterior_tables)
-  out$chart_registry <- mdo_build_chart_registry(out)
   out
 }
 

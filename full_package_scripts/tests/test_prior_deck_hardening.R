@@ -183,9 +183,8 @@ add_result("deck builder ingests optimizer output tables",
            nrow(tables_opt$optimizer_plan) == 2L &&
              nrow(tables_opt$optimizer_scenario_comparison) >= 2L &&
              nrow(tables_opt$optimizer_response_curves) > 0L)
-add_result("deck builder exposes chart registry with optimizer charts",
-           is.data.table(tables_opt$chart_registry) &&
-             any(tables_opt$chart_registry$chart_id == "optimizer_response_curves" & tables_opt$chart_registry$available))
+add_result("deck builder omits chart registry from analyst-facing outputs",
+           !"chart_registry" %in% names(tables_opt))
 if (requireNamespace("ggplot2", quietly = TRUE)) {
   deck_out_dir <- file.path(tempdir(), "deck_optimizer_outputs")
   files_opt <- write_mmm_deck_outputs(
