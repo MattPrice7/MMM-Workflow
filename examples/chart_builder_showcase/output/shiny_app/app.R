@@ -335,7 +335,7 @@ server <- function(input, output, session) {
     x <- suppressWarnings(as.numeric(x))
     pct <- ifelse(is.finite(x), pmax(0, pmin(100, 100 * x)), 0)
     label <- ifelse(is.finite(x), paste0(round(100 * x, 1), "%"), "")
-    sprintf("<div style="position:relative;min-width:92px;background:#f3f4f6;border-radius:3px;overflow:hidden;"><div style="width:%s%%;height:18px;background:%s;opacity:.35;"></div><span style="position:absolute;left:6px;top:1px;font-size:12px;color:#111827;">%s</span></div>", pct, color, label)
+    sprintf('<div style="position:relative;min-width:92px;background:#f3f4f6;border-radius:3px;overflow:hidden;"><div style="width:%s%%;height:18px;background:%s;opacity:.35;"></div><span style="position:absolute;left:6px;top:1px;font-size:12px;color:#111827;">%s</span></div>', pct, color, label)
   }
   rollup_dt <- reactive({
     dt <- copy(table_or_empty("rollup_performance_table"))
