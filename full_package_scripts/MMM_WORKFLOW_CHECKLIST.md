@@ -78,6 +78,8 @@ Active / Next:
 - [ ] Add reach/frequency modeling when reach, frequency, impressions, or population are available.
 - [ ] Future / maybe: evaluate explicit interaction or effect-modifier helpers before adding time-varying coefficients. Examples include upper-funnel media modifying search response or seasonally varying channel effectiveness.
 - [ ] Future / maybe: evaluate highly regularized time-varying media coefficients only after simpler interactions, controls, and baseline diagnostics are mature.
+- [ ] Future / maybe: evaluate optional time-varying effectiveness multipliers, tightly regularized around 1.0 with smooth random-walk or AR(1) structure, gated per channel and off by default.
+- [ ] Future / maybe: evaluate optional context-varying effectiveness modifiers for named business hypotheses such as seasonal TV effectiveness or TV/social synergy, with explicit metadata, tight priors, sign constraints where justified, and min/max multiplier bounds.
 - [ ] Future / maybe: evaluate brand-equity or long-run media-stock states only when external signals exist, such as awareness, organic search, branded search, consideration, or other demand indicators.
 - [ ] Future / maybe: add optional `model_id_parts` metadata, e.g. `model_id`, `dimension_name`, `dimension_value`, so analysts can describe flexible model-cell pieces such as DMA, product, LOB, retailer, store type, segment, or platform. Keep the core model generic; use this only for rollups, diagnostics, optional hierarchy/shrinkage instructions, and future “pool across this dimension but not that one” settings.
 
@@ -102,6 +104,7 @@ Done:
 - [x] National-repeated media is diagnostic-only / not geo-identifiable.
 - [x] Synchronized same-channel shocks across all donor markets are diagnostic-only / not geo-identifiable, even when media levels differ by market.
 - [x] Evidence summaries by event, variable, and estimand.
+- [x] Optional `channel` / `rollup_path` metadata flows into quasi-geo events, variable summaries, rollup summaries, and prior recommendation tables for reporting rollups such as total Media or total Social without changing event estimation.
 - [x] Donor placebo and leave-one-donor-out diagnostics.
 - [x] Donor/other-media contamination checks.
 - [x] Stable no-event schemas.
@@ -180,14 +183,13 @@ Done:
 - [x] Add arbitrary-depth `rollup_path` support through `channel_map`, with `variable_rollup_map`, contribution-by-rollup-node, period rollup, and KPI economics rollup tables.
 - [x] Static HTML/CSV/PNG outputs with optional Excel/Shiny paths.
 - [x] Add optimizer outputs into deck builder charts.
-- [x] Split chart metadata into client-facing, appendix, and internal QA chart registry.
+- [x] Removed chart registry from analyst-facing and exported deck outputs.
 - [x] Fix chart date parsing, including Excel serial dates with origin `1899-12-30`.
 - [x] Add guards for missing fit columns and graceful chart/table skipping.
 - [x] Add response-curve charts with current spend/support markers and spend-percent scenarios from optimizer response curves.
 - [x] Add marginal ROI / marginal CPKPI curve charts from optimizer response curves when `mroi` is available.
 - [x] Add saturation/headroom summary charts.
 - [x] Add current vs optimized budget scenario charts.
-- [x] Add standard chart registry fields: `chart_id`, `chart_name`, `audience`, `required_columns`, `skip_if_missing_columns`, `business_question_answered`, and `recommended_slide_title`.
 - [x] Add separated rolling synthetic chart-builder showcase with static HTML, PNG charts, CSV tables, and Shiny app preview.
 
 Next:
@@ -200,6 +202,7 @@ Next:
 - [ ] Add posterior/credible interval bands to contribution, response-curve, ROI, and mROI charts when draw-level outputs are available.
 - [ ] Add posterior diagnostic plots for coefficients, prior-vs-posterior shifts, and parameter uncertainty.
 - [ ] Add quasi-geo treated-vs-synthetic, media shock, donor weights, placebo distribution, and evidence-prior audit charts.
+- [ ] Future: add a dedicated Excel chart workbook builder for consultant workflows.
 
 Recommendation:
 

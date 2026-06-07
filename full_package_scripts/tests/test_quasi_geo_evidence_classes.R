@@ -39,7 +39,9 @@ make_panel <- function(n = 72, geos = paste0("G", 1:7)) {
 vm_two <- data.table(
   variable = c("tv", "search"),
   modeled_x_col = c("tv", "search"),
-  spend_col = c("tv_spend", "search_spend")
+  spend_col = c("tv_spend", "search_spend"),
+  channel = c("TV", "Search"),
+  rollup_path = c("Media/TV", "Media/Search")
 )
 
 vm_blank_spend <- data.table(variable = "tv", modeled_x_col = "tv", spend_col = "")
@@ -87,6 +89,10 @@ add_result("quasi geo returns analyst evidence summaries", nrow(up$evidence_summ
              nrow(up$variable_evidence_summary) >= 1L &&
              nrow(up$estimand_evidence_summary) >= 1L &&
              all(c("recommended_analyst_action", "best_recommended_use", "max_evidence_score") %in% names(up$variable_evidence_summary)))
+add_result("quasi geo carries rollup metadata for reporting",
+           all(c("channel", "rollup_path", "rollup_root", "rollup_leaf") %in% names(up$event_estimates_all)) &&
+             all(c("channel", "rollup_path") %in% names(up$prior_recommendations)) &&
+             nrow(up$rollup_evidence_summary[rollup_root == "Media"]) >= 1L)
 add_result("quasi geo returns donor placebo and leave-one-donor-out diagnostics", nrow(up_tv) > 0 &&
              all(c("donor_placebo_p_value", "donor_placebo_strength", "leave_one_donor_out_stability_score") %in% names(up_tv)) &&
              any(is.finite(up_tv$donor_placebo_p_value)) &&

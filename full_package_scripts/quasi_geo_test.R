@@ -278,6 +278,66 @@ qgt_parse_variable_map <- function(variable_map = NULL, media_cols = character()
   if (!length(media_cols)) stop("Provide variable_map or media_cols.")
   data.table(variable = media_cols, modeled_x_col = media_cols, spend_col = media_cols)
 }
+qgt_split_rollup_path <- function(path) {
+  if (length(path) < 1L || is.na(path[1]) || !nzchar(as.character(path[1]))) return(character())
+  nodes <- trimws(strsplit(as.character(path[1]), "\\s*(>|/)\\s*", perl = TRUE)[[1]])
+  nodes[nzchar(nodes)]
+}
+qgt_rollup_lookup <- function(vm) {
+  if (is.null(vm) || !nrow(vm)) {
+    return(data.table(
+      variable = character(),
+      channel = character(),
+      rollup_path = character(),
+      rollup_root = character(),
+      rollup_parent = character(),
+      rollup_leaf = character()
+    ))
+  }
+  out <- data.table(variable = as.character(vm$variable))
+  out[, channel := if ("channel" %in% names(vm)) as.character(vm$channel) else variable]
+  out[is.na(channel) | !nzchar(trimws(channel)), channel := variable]
+  out[, rollup_path := if ("rollup_path" %in% names(vm)) as.character(vm$rollup_path) else channel]
+  out[is.na(rollup_path) | !nzchar(trimws(rollup_path)), rollup_path := channel]
+  parts <- lapply(out$rollup_path, qgt_split_rollup_path)
+  out[, rollup_root := vapply(parts, function(x) if (length(x)) x[1] else NA_character_, character(1))]
+  out[, rollup_parent := vapply(parts, function(x) if (length(x) >= 2L) x[length(x) - 1L] else NA_character_, character(1))]
+  out[, rollup_leaf := vapply(parts, function(x) if (length(x)) x[length(x)] else NA_character_, character(1))]
+  unique(out, by = "variable")[]
+}
+qgt_attach_rollup_metadata <- function(x, lookup, var_col = "variable") {
+  out <- as.data.table(copy(x))
+  roll_cols <- c("channel", "rollup_path", "rollup_root", "rollup_parent", "rollup_leaf")
+  if (!var_col %in% names(out)) return(out[])
+  if (is.null(lookup) || !nrow(lookup)) {
+    for (cc in roll_cols) if (!cc %in% names(out)) out[, (cc) := NA_character_]
+    return(out[])
+  }
+  lk <- unique(copy(lookup), by = "variable")
+  out[, qgt_order__ := .I]
+  out <- merge(out, lk, by.x = var_col, by.y = "variable", all.x = TRUE, sort = FALSE)
+  data.table::setorder(out, qgt_order__)
+  out[, qgt_order__ := NULL]
+  out[]
+}
+qgt_build_rollup_evidence_summary <- function(event_results) {
+  if (is.null(event_results) || !nrow(event_results) || !"rollup_path" %in% names(event_results)) {
+    return(data.table())
+  }
+  dt <- copy(event_results)
+  dt <- dt[!is.na(rollup_path) & nzchar(as.character(rollup_path))]
+  if (!nrow(dt)) return(data.table())
+  if (!"rollup_root" %in% names(dt)) dt[, rollup_root := NA_character_]
+  tmp <- copy(dt)
+  tmp[, variable := as.character(rollup_path)]
+  out <- qgt_build_evidence_summary(tmp, "variable")
+  if (!nrow(out)) return(data.table())
+  data.table::setnames(out, "variable", "rollup_path")
+  root_map <- unique(dt[, .(rollup_path, rollup_root)])
+  out[root_map, rollup_root := i.rollup_root, on = "rollup_path"]
+  data.table::setcolorder(out, c("summary_scope", "rollup_root", "rollup_path", setdiff(names(out), c("summary_scope", "rollup_root", "rollup_path"))))
+  out[]
+}
 qgt_assign_raw_spend_cols <- function(dt, vm) {
   out_vm <- copy(vm)
   out_vm[, raw_spend_col__ := sprintf("..qgt_raw_spend_%03d", .I)]
@@ -1820,6 +1880,7 @@ run_quasi_geo_test <- function(input_data,
   holdout_audit <- holdout_info$audit
   vm <- qgt_assign_raw_media_cols(dt, vm)
   vm <- qgt_assign_raw_spend_cols(dt, vm)
+  rollup_lookup <- qgt_rollup_lookup(vm)
   if (normalize == "geo_mean_index") {
     dt <- qgt_mean_index_by_geo(dt, unique(c(dep_var_col, vm$modeled_x_col)), geo_col, train_col = "is_qgt_training__")
   }
@@ -1847,6 +1908,7 @@ run_quasi_geo_test <- function(input_data,
     data.table::setorder(events, variable, geo, event_start)
     events <- events[, .SD[1], by = .(variable, geo, event_start)]
   }
+  events <- qgt_attach_rollup_metadata(events, rollup_lookup)
   estimates <- if (nrow(events)) rbindlist(lapply(seq_len(nrow(events)), function(ii) {
     ev <- events[ii]
     media_col <- vm[variable == ev$variable[1], modeled_x_col[1]]
@@ -1881,6 +1943,8 @@ run_quasi_geo_test <- function(input_data,
   national_diagnostics <- qgt_national_repeated_media_diagnostics(dt_estimation, date_col, geo_col, vm)
   event_estimates_all <- rbindlist(list(estimates, national_diagnostics), use.names = TRUE, fill = TRUE)
   event_estimates_all <- qgt_classify_evidence_events(event_estimates_all)
+  event_estimates_all <- qgt_attach_rollup_metadata(event_estimates_all, rollup_lookup)
+  estimates <- qgt_attach_rollup_metadata(estimates, rollup_lookup)
   prior_events <- copy(event_estimates_all)
   if (!is.null(min_evidence_score_for_prior)) {
     prior_keep <- qgt_num(min_evidence_score_for_prior)[1]
@@ -1906,6 +1970,11 @@ run_quasi_geo_test <- function(input_data,
   evidence_summary <- qgt_build_evidence_summary(event_estimates_all, "overall")
   variable_evidence_summary <- qgt_build_evidence_summary(event_estimates_all, "variable")
   estimand_evidence_summary <- qgt_build_evidence_summary(event_estimates_all, "estimand")
+  rollup_evidence_summary <- qgt_build_rollup_evidence_summary(event_estimates_all)
+  summary_all <- qgt_attach_rollup_metadata(summary_all, rollup_lookup)
+  summary <- qgt_attach_rollup_metadata(summary, rollup_lookup)
+  prior_recommendations <- qgt_attach_rollup_metadata(prior_recommendations, rollup_lookup)
+  variable_evidence_summary <- qgt_attach_rollup_metadata(variable_evidence_summary, rollup_lookup)
   calibration_events <- calibration_events_all[recommended_use == "calibration"]
   directional_prior_events <- event_estimates_all[recommended_use == "directional_prior"]
   diagnostic_events <- event_estimates_all[recommended_use == "diagnostic_only"]
@@ -1924,6 +1993,7 @@ run_quasi_geo_test <- function(input_data,
     fwrite(evidence_summary, file.path(output_dir, paste0(prefix, "_evidence_summary.csv")))
     fwrite(variable_evidence_summary, file.path(output_dir, paste0(prefix, "_variable_evidence_summary.csv")))
     fwrite(estimand_evidence_summary, file.path(output_dir, paste0(prefix, "_estimand_evidence_summary.csv")))
+    fwrite(rollup_evidence_summary, file.path(output_dir, paste0(prefix, "_rollup_evidence_summary.csv")))
   }
   normalized_data <- copy(dt)
   raw_media_cols <- intersect(vm$raw_media_col__, names(normalized_data))
@@ -1946,6 +2016,7 @@ run_quasi_geo_test <- function(input_data,
     evidence_summary = evidence_summary[],
     variable_evidence_summary = variable_evidence_summary[],
     estimand_evidence_summary = estimand_evidence_summary[],
+    rollup_evidence_summary = rollup_evidence_summary[],
     holdout_audit = holdout_audit,
     normalized_data = normalized_data[],
     notes = c(

@@ -14,6 +14,7 @@ This file is the working backlog for the script bundle. It separates production-
 
 2. `quasi_geo_test.R`
    - Current status: signed event detection, synthetic control, TBR/DiD fallback, donor placebo, leave-one-donor-out sensitivity, overlap diagnostics, bundle handling, raw-scale economics, and analyst evidence summaries are implemented.
+   - Done: carry optional `channel` / `rollup_path` metadata from `variable_map` into quasi-geo events, summaries, and prior recommendation tables for reporting rollups such as total Media or total Social. This is reporting metadata, not a pooled causal estimand by itself.
    - Refine evidence classification so fallback methods are not unfairly blocked. A failed synthetic-control attempt should downgrade evidence only if TBR/DiD also fail or diagnostics are too weak.
    - Add multi-geo treated-cell estimation. If several markets move together and some markets remain untreated, estimate the treated cell as a group and/or estimate each treated geo with donor exclusion for other treated geos.
    - National repeated media: when media changes the same across all markets, there is no geo-identifiable untreated donor pool. Keep this diagnostic-only by default. A future national interrupted-time-series/TBR module can aggregate to a national market, but it should be labeled time-series evidence rather than geo-lift evidence.
@@ -21,13 +22,13 @@ This file is the working backlog for the script bundle. It separates production-
    - Add prospective matched-market design simulation and required-ramp/MDE planning.
 
 3. `mmm_deck_output_builder.R`
-   - Done: split chart metadata into client-facing, appendix, and internal QA chart registry.
-   - Done: add a chart registry with `chart_id`, `chart_name`, `audience`, `required_columns`, `skip_if_missing_columns`, `business_question_answered`, and `recommended_slide_title`.
+   - Done: remove the chart registry from analyst-facing and exported outputs; keep the deck builder focused on clean tables/charts rather than a registry table.
    - Done: fix consultant chart date parsing, including Excel serial dates using origin `1899-12-30`.
    - Done: add guards for missing fit columns and graceful chart skipping.
    - Done: add optimizer scenario, current-vs-recommended spend, response-curve, marginal-response, and saturation/headroom chart outputs.
    - Add client color palettes and channel color overrides.
    - Add quasi-geo treated-vs-synthetic, media shock, donor weights, placebo distribution, and evidence-prior audit charts.
+   - Future: add a dedicated Excel chart workbook builder for consultant workflows, separate from the Shiny/static HTML report path.
    - Continue improving ROI, cost-per-KPI, mROI/mCPA, contribution, due-to bridge, funnel, and executive summary chart polish.
    - Prefer table outputs plus static HTML/PNG as the stable default. Excel is useful for consultant workflows; Shiny/Plotly are good optional interactive layers, not the only delivery path.
 
@@ -36,6 +37,11 @@ This file is the working backlog for the script bundle. It separates production-
    - Keep prior conversion formulas explicit for coefficient, ROI, mROI, IKPC, CPKPI, cost-per-KPI, contribution, and contribution-share inputs.
    - Keep true inverse-variance precision rather than replacing it with vague confidence labels.
    - Consider splitting prior recovery into modules only after core Stan/quasi/deck work stabilizes.
+
+6. Future model extensions / maybe
+   - Evaluate optional time-varying effectiveness multipliers only after the core Stan model remains stable. These should be tightly regularized smooth deviations around 1.0, gated per channel, and off by default.
+   - Evaluate optional context-varying effectiveness modifiers for named hypotheses such as seasonality or TV/social synergy. These should use explicit metadata, tight priors, sign constraints where justified, and clear min/max multiplier bounds.
+   - Do not add latent week-to-week effectiveness drift as a default; it can become a baseline/media attribution escape hatch if not strongly regularized.
 
 5. Project/package structure
    - Current bundle is a script library with shippable tests.
