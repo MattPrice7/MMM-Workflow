@@ -1,5 +1,6 @@
 test,status,detail
 response-curve-only planner returns core tables,PASS,""
+optimizer preserves curve evidence metadata in decision tables,PASS,""
 response-curve-only optimizer respects fixed budget,PASS,""
 grid optimizer respects fixed budget and reports grid basis,PASS,""
 grid optimizer enforces planning-group max-spend constraint,PASS,""

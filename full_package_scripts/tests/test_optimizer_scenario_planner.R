@@ -28,6 +28,18 @@ response_curves <- rbindlist(list(
   data.table(variable = "tv", spend_multiplier = m, current_spend = 100, contribution = 60 * (1 - exp(-1.5 * m))),
   data.table(variable = "search", spend_multiplier = m, current_spend = 100, contribution = 95 * (1 - exp(-0.45 * m)))
 ))
+response_curves[variable == "tv", `:=`(
+  evidence_score_0_100 = 88,
+  confidence_band = "very_strong",
+  recommended_use = "calibration",
+  response_curve_basis = "stan_posterior_draws"
+)]
+response_curves[variable == "search", `:=`(
+  evidence_score_0_100 = 42,
+  confidence_band = "diagnostic",
+  recommended_use = "diagnostic_only",
+  response_curve_basis = "bau_or_observational_diagnostic"
+)]
 out_rc <- run_optimizer_scenario_planner(
   response_curves = response_curves,
   total_budget = 200,
@@ -45,6 +57,12 @@ add_result("response-curve-only planner returns core tables",
            all(c("current_plan", "response_curves", "saturation_headroom", "scenario_summary", "optimization_plan", "optimization_summary") %in% names(out_rc)) &&
              nrow(out_rc$current_plan) == 2L &&
              nrow(out_rc$response_curves) > 4L)
+add_result("optimizer preserves curve evidence metadata in decision tables",
+           all(c("curve_evidence_level", "curve_evidence_score", "curve_recommended_use", "response_curve_basis") %in% names(out_rc$current_plan)) &&
+             out_rc$current_plan[variable == "tv", curve_evidence_level][1] == "very_strong" &&
+             out_rc$current_plan[variable == "search", curve_evidence_level][1] == "diagnostic" &&
+             out_rc$scenario_summary[scenario == "all_channels_1x", weak_curve_count][1] == 1L &&
+             out_rc$optimization_summary$weak_curve_count[1] == 1L)
 add_result("response-curve-only optimizer respects fixed budget",
            abs(out_rc$optimization_summary$recommended_spend[1] - 200) < 1e-6)
 out_grid <- run_optimizer_scenario_planner(

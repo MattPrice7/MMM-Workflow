@@ -2,6 +2,8 @@
 
 ## Checkpoints
 
+- `rolling_latest_core_optimizer_evidence_labels`
+  - Current rolling state after carrying response-curve evidence metadata through the optimizer and scenario planner. Current plans, custom scenarios, optimized plans, saturation/headroom, scenario summaries, and optimizer summaries now preserve curve evidence scores, confidence bands, recommended use, source/basis, and weak/diagnostic curve warnings when supplied by Stan response curves, quasi-geo outputs, BAU curves, or analyst-provided curve tables. BAU anchor-search-from-dependent remains logged as a future diagnostic-only idea rather than promoted into the core workflow. Validated with optimizer source and 37 optimizer/scenario-planner regression checks.
 - `rolling_latest_core_hierarchy_bau_rrate`
   - Current rolling state after adding guarded BAU rrate/adstock diagnostics and Stan hierarchy metadata guardrails. BAU now estimates one shared diagnostic rrate per variable only when a dependent/KPI column is supplied, preserves supplied rrate by default, and reports rrate status/improvement/bound flags in `rrate_diagnostics` and `curve_metadata`. Stan now keeps curve parameters shared at variable level across groups while adding `coef_hierarchy_scope = auto/global/none/keyed`, `hierarchy_key`, `model_id_parts`, and `hierarchy_part_indices` audit fields for coefficient hierarchy decisions. `none` disables group coefficient hierarchy, `global` preserves current all-group pooling behavior, and `keyed` is retained as metadata without silently applying unsupported global pooling. Validated with BAU source/tests, Stan source/contract tests, and full workflow source.
 - `rolling_latest_core_group_optimizer_support_risk_deck_showcase_quasi_fallback`

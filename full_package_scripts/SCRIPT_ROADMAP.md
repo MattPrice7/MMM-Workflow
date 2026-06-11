@@ -47,12 +47,17 @@ This file is the working backlog for the script bundle. It separates production-
    - Keep BAU rrate/adstock estimation diagnostic. Do not let a univariate rrate search tighten priors just because high adstock better explains trend.
    - Consider splitting prior recovery into modules only after core Stan/quasi/deck work stabilizes.
 
+5. `optimizer_scenario_planner.R`
+   - Current status: standalone scenario planning, response-curve-based optimization, posterior-draw robust objectives, grouped planning constraints, support-only curves with CPM/CPP pricing, locked channels, and target-response/target-efficiency planners are implemented.
+   - Done: carry curve evidence metadata into current-plan, scenario, optimized-plan, headroom, and diagnostic outputs when supplied by Stan response-curve sheets, quasi-geo evidence, BAU curves, or analyst-provided curve tables. This includes evidence score, confidence band, recommended use, source/basis, and weak/diagnostic curve warnings.
+   - Future: add explicit future flighting and cost assumptions so plans can distinguish scaling historical support, changing cost per support unit, and changing flight timing.
+
 6. Future model extensions / maybe
    - Evaluate optional time-varying effectiveness multipliers only after the core Stan model remains stable. These should be tightly regularized smooth deviations around 1.0, gated per channel, and off by default.
    - Evaluate optional context-varying effectiveness modifiers for named hypotheses such as seasonality or TV/social synergy. These should use explicit metadata, tight priors, sign constraints where justified, and clear min/max multiplier bounds.
    - Do not add latent week-to-week effectiveness drift as a default; it can become a baseline/media attribution escape hatch if not strongly regularized.
 
-5. Project/package structure
+7. Project/package structure
    - Current bundle is a script library with shippable tests.
    - Future formal package structure should include `DESCRIPTION`, `NAMESPACE`, `R/`, `inst/stan/`, `tests/testthat/`, example data, and optional `renv.lock`.
    - Preserve backward-compatible public function names during any refactor.

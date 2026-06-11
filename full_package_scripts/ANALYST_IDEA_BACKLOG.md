@@ -46,6 +46,7 @@ This is the cleaned, non-train-of-thought backlog promoted from the scratchpad. 
 - BAU response curves:
   - evaluate optional guarded rrate/adstock estimation
   - do not use univariate rrate search as strong evidence without quasi-geo or joint-model support
+  - future optional anchor diagnostic: search conservatively around the analyst-provided anchor, require meaningful active-support variation and positive directional fit, penalize faster saturation, and keep the output as a sensitivity/audit read rather than a strong causal saturation estimate
 - Add explicit interaction/effect-modifier helpers for selected relationships, such as upper-funnel media modifying search response.
 - Add brand-equity or long-run media-stock state only when supporting external signals exist, such as awareness, consideration, organic search, branded search, or other demand indicators.
 - Add quasi-geo and optimizer chart packs once the core chart builder UI is more stable.

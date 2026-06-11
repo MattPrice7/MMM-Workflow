@@ -30,6 +30,8 @@ opsp_as_dt <- function(x, label = "input") {
   data.table::as.data.table(data.table::copy(x))
 }
 
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
 opsp_script_dir <- function() {
   tryCatch({
     frames <- sys.frames()
@@ -76,6 +78,37 @@ opsp_safe_div <- function(num, den) {
   out
 }
 
+opsp_first_nonblank <- function(x, default = NA_character_) {
+  x <- as.character(x)
+  x <- x[!is.na(x) & nzchar(trimws(x))]
+  if (length(x)) x[1] else default
+}
+
+opsp_mean_or_na <- function(x) {
+  x <- opsp_num(x)
+  x <- x[is.finite(x)]
+  if (length(x)) mean(x) else NA_real_
+}
+
+opsp_evidence_level_from_score <- function(score) {
+  score <- opsp_num(score)
+  out <- rep("unknown", length(score))
+  out[is.finite(score) & score >= 85] <- "very_strong"
+  out[is.finite(score) & score >= 70 & score < 85] <- "strong"
+  out[is.finite(score) & score >= 50 & score < 70] <- "directional"
+  out[is.finite(score) & score >= 25 & score < 50] <- "diagnostic"
+  out[is.finite(score) & score < 25] <- "weak"
+  out
+}
+
+opsp_curve_metadata_columns <- function() {
+  c(
+    "curve_evidence_level", "curve_evidence_score", "curve_confidence_band",
+    "curve_recommended_use", "curve_source", "curve_type", "response_curve_basis",
+    "uncertainty_note", "flighting_assumption", "cost_assumption"
+  )
+}
+
 opsp_interp_curve_value <- function(table, variable_name, multiplier, value_col, fallback = NA_real_) {
   if (is.null(table) || !nrow(table) || !(value_col %in% names(table))) return(fallback)
   vv <- as.character(variable_name)[1]
@@ -88,6 +121,59 @@ opsp_interp_curve_value <- function(table, variable_name, multiplier, value_col,
   if (sum(ok) == 1L) return(y[ok][1])
   ord <- order(x[ok])
   stats::approx(x[ok][ord], y[ok][ord], xout = as.numeric(multiplier)[1], rule = 2, ties = mean)$y
+}
+
+opsp_curve_meta_for_variable <- function(table, variable_name, multiplier = NA_real_) {
+  out <- data.table::data.table(
+    curve_evidence_level = "unknown",
+    curve_evidence_score = NA_real_,
+    curve_confidence_band = NA_character_,
+    curve_recommended_use = NA_character_,
+    curve_source = NA_character_,
+    curve_type = NA_character_,
+    response_curve_basis = NA_character_,
+    uncertainty_note = NA_character_,
+    flighting_assumption = NA_character_,
+    cost_assumption = NA_character_
+  )
+  if (is.null(table) || !nrow(table) || !"variable" %in% names(table)) return(out)
+  tmp <- table[variable == as.character(variable_name)[1]]
+  if (!nrow(tmp)) return(out)
+  multiplier <- suppressWarnings(as.numeric(multiplier)[1])
+  if (is.finite(multiplier) && "spend_multiplier" %in% names(tmp)) {
+    mm <- suppressWarnings(as.numeric(tmp$spend_multiplier))
+    tmp_m <- tmp[is.finite(mm) & abs(mm - multiplier) <= 1e-8]
+    if (nrow(tmp_m)) tmp <- tmp_m
+  }
+  for (cc in intersect(names(out), names(tmp))) {
+    if (is.numeric(out[[cc]])) {
+      out[, (cc) := opsp_mean_or_na(tmp[[cc]])]
+    } else {
+      out[, (cc) := opsp_first_nonblank(tmp[[cc]])]
+    }
+  }
+  if ((!is.finite(out$curve_evidence_score[1]) || is.na(out$curve_evidence_score[1])) &&
+      "evidence_score_0_100" %in% names(tmp)) out[, curve_evidence_score := opsp_mean_or_na(tmp$evidence_score_0_100)]
+  if ((!is.finite(out$curve_evidence_score[1]) || is.na(out$curve_evidence_score[1])) &&
+      "evidence_score" %in% names(tmp)) out[, curve_evidence_score := opsp_mean_or_na(tmp$evidence_score)]
+  if ((!is.finite(out$curve_evidence_score[1]) || is.na(out$curve_evidence_score[1])) &&
+      "max_evidence_score" %in% names(tmp)) out[, curve_evidence_score := opsp_mean_or_na(tmp$max_evidence_score)]
+  if ((!is.finite(out$curve_evidence_score[1]) || is.na(out$curve_evidence_score[1])) &&
+      "mean_evidence_score" %in% names(tmp)) out[, curve_evidence_score := opsp_mean_or_na(tmp$mean_evidence_score)]
+  if (!nzchar(out$curve_confidence_band[1] %||% "") && "confidence_band" %in% names(tmp)) {
+    out[, curve_confidence_band := opsp_first_nonblank(tmp$confidence_band)]
+  }
+  if (!nzchar(out$curve_recommended_use[1] %||% "") && "recommended_use" %in% names(tmp)) {
+    out[, curve_recommended_use := opsp_first_nonblank(tmp$recommended_use)]
+  }
+  if (!nzchar(out$curve_evidence_level[1] %||% "") || out$curve_evidence_level[1] == "unknown") {
+    if (nzchar(out$curve_confidence_band[1] %||% "")) {
+      out[, curve_evidence_level := curve_confidence_band]
+    } else if (is.finite(out$curve_evidence_score[1])) {
+      out[, curve_evidence_level := opsp_evidence_level_from_score(curve_evidence_score)]
+    }
+  }
+  out[]
 }
 
 opsp_clip <- function(x, lo, hi) pmin(pmax(x, lo), hi)
@@ -423,6 +509,29 @@ opsp_normalize_response_curves <- function(response_curves, support_cost_map = N
     spend_multiplier = opsp_num(spend_multiplier),
     contribution = opsp_num(contribution)
   )]
+  score_col <- opsp_pick_col(rc, c("curve_evidence_score", "evidence_score_0_100", "evidence_score", "max_evidence_score", "mean_evidence_score"))
+  band_col <- opsp_pick_col(rc, c("curve_confidence_band", "confidence_band", "best_confidence_band"))
+  use_col <- opsp_pick_col(rc, c("curve_recommended_use", "recommended_use", "use_as", "prior_use"))
+  source_col <- opsp_pick_col(rc, c("curve_source", "evidence_source", "source", "response_curve_basis"))
+  level_col <- opsp_pick_col(rc, c("curve_evidence_level", "evidence_level", "evidence_tier"))
+  if (!"curve_evidence_score" %in% names(rc)) rc[, curve_evidence_score := if (!is.na(score_col)) opsp_num(get(score_col)) else NA_real_]
+  if (!"curve_confidence_band" %in% names(rc)) rc[, curve_confidence_band := if (!is.na(band_col)) as.character(get(band_col)) else NA_character_]
+  if (!"curve_recommended_use" %in% names(rc)) rc[, curve_recommended_use := if (!is.na(use_col)) as.character(get(use_col)) else NA_character_]
+  if (!"curve_source" %in% names(rc)) rc[, curve_source := if (!is.na(source_col)) as.character(get(source_col)) else NA_character_]
+  if (!"curve_evidence_level" %in% names(rc)) {
+    rc[, curve_evidence_level := if (!is.na(level_col)) as.character(get(level_col)) else NA_character_]
+  }
+  rc[, curve_evidence_score := opsp_num(curve_evidence_score)]
+  rc[is.na(curve_evidence_level) | !nzchar(trimws(as.character(curve_evidence_level))), curve_evidence_level := data.table::fifelse(
+    !is.na(curve_confidence_band) & nzchar(trimws(as.character(curve_confidence_band))),
+    as.character(curve_confidence_band),
+    opsp_evidence_level_from_score(curve_evidence_score)
+  )]
+  rc[is.na(curve_evidence_level) | !nzchar(trimws(as.character(curve_evidence_level))), curve_evidence_level := "unknown"]
+  for (cc in c("response_curve_basis", "uncertainty_note", "flighting_assumption", "cost_assumption", "curve_type")) {
+    if (!cc %in% names(rc)) rc[, (cc) := NA_character_]
+  }
+  rc[is.na(curve_source) | !nzchar(trimws(as.character(curve_source))), curve_source := response_curve_basis]
   if ("spend" %in% names(rc)) rc[, spend := opsp_num(spend)]
   if ("current_spend" %in% names(rc)) rc[, current_spend := opsp_num(current_spend)]
   if ("support" %in% names(rc)) rc[, support := opsp_num(support)]
@@ -457,7 +566,17 @@ opsp_normalize_response_curves <- function(response_curves, support_cost_map = N
     } else NA_character_,
     support_cost_source = if ("support_cost_source" %in% names(rc)) {
       paste(sort(unique(as.character(support_cost_source[!is.na(support_cost_source) & nzchar(as.character(support_cost_source))]))), collapse = "|")
-    } else NA_character_
+    } else NA_character_,
+    curve_evidence_level = opsp_first_nonblank(curve_evidence_level, "unknown"),
+    curve_evidence_score = opsp_mean_or_na(curve_evidence_score),
+    curve_confidence_band = opsp_first_nonblank(curve_confidence_band),
+    curve_recommended_use = opsp_first_nonblank(curve_recommended_use),
+    curve_source = opsp_first_nonblank(curve_source),
+    curve_type = opsp_first_nonblank(curve_type),
+    response_curve_basis = opsp_first_nonblank(response_curve_basis),
+    uncertainty_note = opsp_first_nonblank(uncertainty_note),
+    flighting_assumption = opsp_first_nonblank(flighting_assumption),
+    cost_assumption = opsp_first_nonblank(cost_assumption)
   ), by = .(variable, spend_multiplier)][order(variable, spend_multiplier)]
 }
 
@@ -750,7 +869,8 @@ opsp_eval_variable <- function(engine, variable, multiplier, step_pct = 0.01, va
   } else {
     NA_character_
   }
-  data.table::data.table(
+  meta <- opsp_curve_meta_for_variable(source_table, v, m)
+  out <- data.table::data.table(
     variable = v,
     spend_multiplier = m,
     spend = spend,
@@ -770,6 +890,7 @@ opsp_eval_variable <- function(engine, variable, multiplier, step_pct = 0.01, va
     value_per_cost = ifelse(is.finite(value_per_kpi) && is.finite(spend) && abs(spend) > 1e-8,
                             contrib * value_per_kpi / spend, NA_real_)
   )
+  cbind(out, meta)
 }
 
 opsp_eval_table <- function(engine, multipliers, step_pct = 0.01, value_per_kpi = NA_real_) {
@@ -800,10 +921,14 @@ opsp_current_plan <- function(engine, step_pct = 0.01, value_per_kpi = NA_real_)
     current_roi = roi,
     current_mroi = mroi
   )]
-  dt[, .(
-    variable, current_spend, current_support, current_contribution, current_roi, current_mroi,
-    cost_per_kpi, value_per_cost
-  )][order(-current_spend)]
+  keep <- c(
+    "variable", "current_spend", "current_support", "current_contribution", "current_roi", "current_mroi",
+    "cost_per_kpi", "value_per_cost",
+    "curve_evidence_level", "curve_evidence_score", "curve_confidence_band",
+    "curve_recommended_use", "curve_source", "curve_type", "response_curve_basis",
+    "uncertainty_note", "flighting_assumption", "cost_assumption"
+  )
+  dt[, ..keep][order(-current_spend)]
 }
 
 opsp_build_response_curves <- function(engine,
@@ -889,6 +1014,12 @@ opsp_build_saturation_headroom <- function(response_curves,
       saturation_band = saturation_band,
       curve_non_monotonic_flag = isTRUE(non_monotonic),
       decisioning_basis = if ("decisioning_basis" %in% names(tmp)) tmp$decisioning_basis[cur_i] else NA_character_,
+      curve_evidence_level = if ("curve_evidence_level" %in% names(tmp)) opsp_first_nonblank(tmp$curve_evidence_level, "unknown") else "unknown",
+      curve_evidence_score = if ("curve_evidence_score" %in% names(tmp)) opsp_mean_or_na(tmp$curve_evidence_score) else NA_real_,
+      curve_confidence_band = if ("curve_confidence_band" %in% names(tmp)) opsp_first_nonblank(tmp$curve_confidence_band) else NA_character_,
+      curve_recommended_use = if ("curve_recommended_use" %in% names(tmp)) opsp_first_nonblank(tmp$curve_recommended_use) else NA_character_,
+      curve_source = if ("curve_source" %in% names(tmp)) opsp_first_nonblank(tmp$curve_source) else NA_character_,
+      response_curve_basis = if ("response_curve_basis" %in% names(tmp)) opsp_first_nonblank(tmp$response_curve_basis) else NA_character_,
       interpretation_note = "Grid-based response-curve headroom diagnostic. It ranks planning headroom over the supplied curve grid; it is not standalone causal proof of true saturation."
     )
   }, by = variable]
@@ -919,7 +1050,10 @@ opsp_evaluate_scenario <- function(engine, multipliers, scenario_name,
   rows[, spend_multiplier := as.numeric(mult[variable])]
   rows[, .(
     scenario, variable, spend_multiplier, spend, support, current_support, contribution,
-    contribution_vs_current, roi, mroi, cost_per_kpi, value_per_cost
+    contribution_vs_current, roi, mroi, cost_per_kpi, value_per_cost,
+    curve_evidence_level, curve_evidence_score, curve_confidence_band,
+    curve_recommended_use, curve_source, curve_type, response_curve_basis,
+    uncertainty_note, flighting_assumption, cost_assumption
   )]
 }
 
@@ -980,7 +1114,10 @@ opsp_scenario_tables <- function(engine,
     contribution = sum(contribution, na.rm = TRUE),
     contribution_vs_current = sum(contribution_vs_current, na.rm = TRUE),
     roi = opsp_safe_div(sum(contribution, na.rm = TRUE), sum(spend, na.rm = TRUE)),
-    cost_per_kpi = ifelse(sum(contribution, na.rm = TRUE) > 1e-8, sum(spend, na.rm = TRUE) / sum(contribution, na.rm = TRUE), NA_real_)
+    cost_per_kpi = ifelse(sum(contribution, na.rm = TRUE) > 1e-8, sum(spend, na.rm = TRUE) / sum(contribution, na.rm = TRUE), NA_real_),
+    min_curve_evidence_score = if (any(is.finite(curve_evidence_score))) min(curve_evidence_score, na.rm = TRUE) else NA_real_,
+    weak_curve_count = sum(curve_evidence_level %in% c("weak", "diagnostic", "unknown") | !is.finite(curve_evidence_score), na.rm = TRUE),
+    curve_evidence_summary = paste(sort(unique(curve_evidence_level[!is.na(curve_evidence_level) & nzchar(as.character(curve_evidence_level))])), collapse = "|")
   ), by = scenario][order(-contribution)]
   list(detail = detail[], summary = summary[])
 }
@@ -1470,7 +1607,13 @@ opsp_finalize_optimizer_plan <- function(engine,
     min_required_budget = min_required,
     max_possible_budget = max_possible,
     allow_unallocated = isTRUE(allow_unallocated),
-    optimizer_basis = optimizer_basis_value
+    optimizer_basis = optimizer_basis_value,
+    min_curve_evidence_score = if ("curve_evidence_score" %in% names(plan) && any(is.finite(curve_evidence_score))) min(curve_evidence_score, na.rm = TRUE) else NA_real_,
+    weak_curve_count = if ("curve_evidence_level" %in% names(plan)) {
+      sum(curve_evidence_level %in% c("weak", "diagnostic", "unknown") |
+            !is.finite(if ("curve_evidence_score" %in% names(plan)) curve_evidence_score else NA_real_), na.rm = TRUE)
+    } else NA_integer_,
+    curve_evidence_summary = if ("curve_evidence_level" %in% names(plan)) paste(sort(unique(curve_evidence_level[!is.na(curve_evidence_level) & nzchar(as.character(curve_evidence_level))])), collapse = "|") else NA_character_
   )]
   hist <- if (is.null(allocation_history)) data.table::data.table() else data.table::as.data.table(allocation_history)
   list(
@@ -2574,6 +2717,17 @@ opsp_build_diagnostics <- function(engine, current_plan, optimization, constrain
   }
   if (identical(engine$mode, "response_curve_table")) {
     add_flag("response_curve_table_mode", "info", "Planner used supplied response curves; posterior/model uncertainty is not available.")
+  }
+  if ("curve_evidence_level" %in% names(current_plan) &&
+      any(current_plan$curve_evidence_level %in% c("weak", "diagnostic", "unknown") |
+            !is.finite(current_plan$curve_evidence_score), na.rm = TRUE)) {
+    weak_vars <- current_plan[curve_evidence_level %in% c("weak", "diagnostic", "unknown") |
+                                !is.finite(curve_evidence_score), variable]
+    add_flag(
+      "weak_or_unknown_curve_evidence",
+      "warning",
+      paste(unique(weak_vars), collapse = ", ")
+    )
   }
   data.table::data.table(
     decisioning_basis = paste0(engine$mode, "_point_estimate"),
