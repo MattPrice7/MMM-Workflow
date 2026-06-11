@@ -117,7 +117,11 @@ fit_obj <- fit_hier_mmm(
 context_diag <- fit_obj$diagnostics$prior_posterior_context
 add_result("context-effect diagnostics are returned",
            nrow(context_diag) == 2L &&
-             all(c("variable", "context_key", "posterior_mean", "posterior_q05", "posterior_q95") %in% names(context_diag)))
+             all(c(
+               "variable", "context_key", "posterior_mean", "posterior_q05", "posterior_q95",
+               "context_risk_level", "context_review_flag",
+               "posterior_multiplier_min_train_range", "posterior_multiplier_max_train_range"
+             ) %in% names(context_diag)))
 
 search_theta <- context_diag[variable == "search" & context_key == "tv_context", posterior_mean][1]
 price_theta <- context_diag[variable == "price" & context_key == "macro_pressure", posterior_mean][1]

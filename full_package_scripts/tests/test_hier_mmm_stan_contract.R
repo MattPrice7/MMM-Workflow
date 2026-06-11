@@ -115,7 +115,7 @@ add_result("fixed-curve Stan input precomputes canonical transform",
 
 context_panel <- make_panel(groups = c("G1", "G2"), n = 18L)
 context_meta <- make_meta("tv")
-context_meta[, context := "(time, 0, 0.10, +-);(context_signal, 0.02, 0.03, +)"]
+context_meta[, context := "(context_signal, 0.02, 0.03, +)"]
 prep_context <- prepare_stan_data_hier_mmm(
   data = context_panel,
   metadata_input = context_meta,
@@ -132,21 +132,56 @@ prep_context <- prepare_stan_data_hier_mmm(
 sd_context <- prep_context$stan_data
 context_train <- sd_context$is_train == 1L
 add_result("context metadata tuples build Stan context contract",
-           sd_context$K_context == 2L &&
-             ncol(sd_context$X_context) == 2L &&
+           sd_context$K_context == 1L &&
+             ncol(sd_context$X_context) == 1L &&
              sd_context$K_context_pos == 1L &&
-             sd_context$K_context_free == 1L &&
+             sd_context$K_context_free == 0L &&
              sd_context$context_log_multiplier_bound == 1.5 &&
              all(sd_context$context_variable_idx == prep_context$variable_lookup[variable == "tv", variable_idx][1]))
 add_result("context drivers are standardized on training rows",
            max(abs(colMeans(sd_context$X_context[context_train, , drop = FALSE])), na.rm = TRUE) < 1e-12 &&
              max(abs(apply(sd_context$X_context[context_train, , drop = FALSE], 2, sd) - 1), na.rm = TRUE) < 1e-12 &&
-             prep_context$context_effects[context_key == "time", grepl("time special key", context_note)][1])
+             prep_context$context_effects[context_key == "context_signal", grepl("named data column", context_note)][1] &&
+             all(c("context_risk_level", "prior_multiplier_min_train_range", "prior_multiplier_max_train_range") %in% names(prep_context$context_effects)))
 context_init <- build_ucm_warm_start_init(prep_context, chains = 1L, seed = 123)
 add_result("context warm-start init respects sign-constrained parameter blocks",
            length(context_init[[1]]$context_coef_pos) == 1L &&
-             length(context_init[[1]]$context_coef_free) == 1L &&
+             length(context_init[[1]]$context_coef_free) == 0L &&
              context_init[[1]]$context_coef_pos[1] > 0)
+time_context_error <- tryCatch({
+  z <- make_meta("tv")
+  z[, context := "(time, 0, 0.10, +-)"]
+  prepare_stan_data_hier_mmm(
+    data = context_panel,
+    metadata_input = z,
+    dep_var_col = "y",
+    group_col = "geo",
+    time_col = "week",
+    entity_col = "entity",
+    intercept_type = "flat",
+    sample_curve_parameters = "never"
+  )
+  ""
+}, error = function(e) conditionMessage(e))
+add_result("time context is blocked by default",
+           grepl("disabled by default", time_context_error, fixed = TRUE))
+self_context_error <- tryCatch({
+  z <- make_meta("tv")
+  z[, context := "(tv, 0, 0.10, +-)"]
+  prepare_stan_data_hier_mmm(
+    data = context_panel,
+    metadata_input = z,
+    dep_var_col = "y",
+    group_col = "geo",
+    time_col = "week",
+    entity_col = "entity",
+    intercept_type = "flat",
+    sample_curve_parameters = "never"
+  )
+  ""
+}, error = function(e) conditionMessage(e))
+add_result("self-context is blocked",
+           grepl("cannot use itself as a context modifier", self_context_error, fixed = TRUE))
 
 generic_panel <- make_panel(groups = c("north", "south"), n = 10L)
 generic_panel[, model_id := paste(entity, geo, sep = "|")]

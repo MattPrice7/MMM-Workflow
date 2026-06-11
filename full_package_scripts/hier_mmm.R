@@ -1688,7 +1688,9 @@ parse_context_effect_cell_hier_mmm <- function(cell, variable) {
   rbindlist(rows[!vapply(rows, is.null, logical(1))], use.names = TRUE, fill = TRUE)
 }
 
-clean_context_effects_hier_mmm <- function(context_effects = NULL, metadata = NULL) {
+clean_context_effects_hier_mmm <- function(context_effects = NULL,
+                                           metadata = NULL,
+                                           allow_time_context = FALSE) {
   rows <- list()
   if (!is.null(metadata)) {
     md <- as.data.table(copy(metadata))
@@ -1756,7 +1758,7 @@ clean_context_effects_hier_mmm <- function(context_effects = NULL, metadata = NU
   if (!nrow(out)) return(data.table())
   out[!is.finite(context_coef_mean) | is.na(context_coef_mean), context_coef_mean := 0]
   out[!is.finite(context_coef_sd) | is.na(context_coef_sd) | context_coef_sd <= 0,
-      context_coef_sd := fifelse(context_key_normalized == "time", 0.10, 0.05)]
+      context_coef_sd := 0.05]
   out[, context_coef_sd := pmax(context_coef_sd, 1e-4)]
   if (out[context_sign == "positive" & context_coef_mean < 0, .N] > 0L) {
     stop("Positive context effects cannot have negative context_coef_mean/gamma_prior.")
@@ -1765,7 +1767,16 @@ clean_context_effects_hier_mmm <- function(context_effects = NULL, metadata = NU
     stop("Negative context effects cannot have positive context_coef_mean/gamma_prior.")
   }
   if (out[context_key_normalized == "time", .N] > 0L) {
+    if (!isTRUE(allow_time_context)) {
+      stop("context key 'time' is disabled by default because it can behave like a free drift term. ",
+           "Use an explicit real context column, or set allow_time_context = TRUE only for a deliberate advanced drift sensitivity test.")
+    }
     out[context_key_normalized == "time", context_key := "time"]
+  }
+  self_context <- out[tolower(variable) == context_key_normalized]
+  if (nrow(self_context)) {
+    stop("A variable cannot use itself as a context modifier because that confounds response shape with effectiveness drift: ",
+         paste(unique(paste0(self_context$variable, ":", self_context$context_key)), collapse = ", "))
   }
   if (anyDuplicated(out[, .(variable, context_key_normalized)])) {
     dup <- out[duplicated(out[, .(variable, context_key_normalized)]) | duplicated(out[, .(variable, context_key_normalized)], fromLast = TRUE),
@@ -2088,6 +2099,7 @@ prepare_stan_data_hier_mmm <- function(data,
                                        coef_override_input = NULL,
                                        context_effects = NULL,
                                        context_log_multiplier_bound = 2,
+                                       allow_time_context = FALSE,
                                        intercept_type = "fourier",
                                        ucm_spec = NULL,
                                        use_ucm_metadata = FALSE,
@@ -2159,6 +2171,7 @@ prepare_stan_data_hier_mmm <- function(data,
   if (!is.finite(context_log_multiplier_bound) || is.na(context_log_multiplier_bound) || context_log_multiplier_bound <= 0) {
     stop("context_log_multiplier_bound must be finite and > 0.")
   }
+  allow_time_context <- isTRUE(allow_time_context)
   likelihood_family <- if (likelihood == "student_t") 2L else 1L
 
   dt <- as.data.table(copy(data))
@@ -2221,7 +2234,11 @@ prepare_stan_data_hier_mmm <- function(data,
   )
   dt <- holiday_controls$data
   extra_control_cols <- holiday_controls$extra_control_cols
-  context_effects_clean <- clean_context_effects_hier_mmm(context_effects = context_effects, metadata = md)
+  context_effects_clean <- clean_context_effects_hier_mmm(
+    context_effects = context_effects,
+    metadata = md,
+    allow_time_context = allow_time_context
+  )
   if (nrow(context_effects_clean)) {
     missing_context_vars <- setdiff(context_effects_clean$variable, md$variable)
     if (length(missing_context_vars)) {
@@ -2431,6 +2448,7 @@ prepare_stan_data_hier_mmm <- function(data,
         stop("Context driver '", ck, "' for variable '", context_effect_audit$variable[h],
              "' contains NA/non-finite values. Clean or impute it before fitting.")
       }
+      target_vec <- suppressWarnings(as.numeric(dt[[context_effect_audit$variable[h]]]))
       m <- mean(raw_vec[train_idx], na.rm = TRUE)
       s <- safe_sd(raw_vec[train_idx])
       if (!is.finite(s) || is.na(s) || s <= 1e-8) {
@@ -2438,9 +2456,48 @@ prepare_stan_data_hier_mmm <- function(data,
              "' has zero/nearly-zero training variance.")
       }
       X_context[, h] <- (raw_vec - m) / s
+      z_train <- X_context[train_idx, h]
+      z_min <- min(z_train, na.rm = TRUE)
+      z_max <- max(z_train, na.rm = TRUE)
+      coef_mu_h <- context_effect_audit$context_coef_mean[h]
+      coef_sd_h <- context_effect_audit$context_coef_sd[h]
+      coef_lo <- coef_mu_h - 2 * coef_sd_h
+      coef_hi <- coef_mu_h + 2 * coef_sd_h
+      log_candidates <- c(z_min * coef_lo, z_min * coef_hi, z_max * coef_lo, z_max * coef_hi)
+      log_candidates <- clip_numeric(log_candidates, -context_log_multiplier_bound, context_log_multiplier_bound)
+      prior_mult_min <- exp(min(log_candidates, na.rm = TRUE))
+      prior_mult_max <- exp(max(log_candidates, na.rm = TRUE))
+      target_corr <- safe_cor(raw_vec[train_idx], target_vec[train_idx])
+      modeled_context <- identical(context_effect_audit$context_type[h], "column") && ck %in% variable_lookup$variable
+      reasons <- character()
+      if (identical(context_effect_audit$context_type[h], "time")) reasons <- c(reasons, "time_context_advanced_drift_risk")
+      if (isTRUE(modeled_context)) reasons <- c(reasons, "context_is_modeled_variable_interaction")
+      if (is.finite(target_corr) && abs(target_corr) >= 0.80) reasons <- c(reasons, "context_highly_correlated_with_target_support")
+      if (is.finite(prior_mult_min) && prior_mult_min < 0.25) reasons <- c(reasons, "prior_allows_large_downward_multiplier")
+      if (is.finite(prior_mult_max) && prior_mult_max > 4) reasons <- c(reasons, "prior_allows_large_upward_multiplier")
+      risk_level <- if (
+        identical(context_effect_audit$context_type[h], "time") ||
+          (is.finite(target_corr) && abs(target_corr) >= 0.95) ||
+          (is.finite(prior_mult_min) && prior_mult_min < 1 / 6) ||
+          (is.finite(prior_mult_max) && prior_mult_max > 6)
+      ) {
+        "high_review"
+      } else if (length(reasons)) {
+        "review"
+      } else {
+        "standard"
+      }
       context_effect_audit[h, `:=`(
         context_train_mean = m,
         context_train_sd = s,
+        context_train_min_z = z_min,
+        context_train_max_z = z_max,
+        context_is_modeled_variable = modeled_context,
+        context_train_corr_with_target_support = target_corr,
+        prior_multiplier_min_train_range = prior_mult_min,
+        prior_multiplier_max_train_range = prior_mult_max,
+        context_risk_level = risk_level,
+        context_risk_reasons = if (length(reasons)) paste(reasons, collapse = "; ") else NA_character_,
         context_note = fifelse(
           context_type == "time",
           "advanced time special key: generated as within-group row index, then standardized on training rows; use only for an explicit drift hypothesis and prefer real seasonality/trend controls when available",
@@ -2929,6 +2986,7 @@ prepare_stan_data_hier_mmm <- function(data,
     min_coef_sd_frac = min_coef_sd_frac,
     hard_prior_precision_threshold = hard_prior_precision_threshold,
     context_log_multiplier_bound = context_log_multiplier_bound,
+    allow_time_context = allow_time_context,
     use_ucm_metadata = use_ucm_metadata,
     ucm_metadata = if (isTRUE(use_ucm_metadata)) ucm_cfg$ucm_metadata else data.table(),
     ucm_prior_controls = list(
@@ -4235,6 +4293,22 @@ build_prior_posterior_diagnostics <- function(fit, prep, outputs) {
         )
       )
     )]
+    if (all(c("context_train_min_z", "context_train_max_z") %in% names(context_diag))) {
+      post_log_a <- context_diag$context_train_min_z * context_diag$posterior_mean
+      post_log_b <- context_diag$context_train_max_z * context_diag$posterior_mean
+      bound <- as.numeric(prep$context_log_multiplier_bound %||% 2)[1]
+      if (!is.finite(bound) || bound <= 0) bound <- 2
+      context_diag[, `:=`(
+        posterior_multiplier_min_train_range = exp(pmin(clip_numeric(post_log_a, -bound, bound), clip_numeric(post_log_b, -bound, bound), na.rm = TRUE)),
+        posterior_multiplier_max_train_range = exp(pmax(clip_numeric(post_log_a, -bound, bound), clip_numeric(post_log_b, -bound, bound), na.rm = TRUE))
+      )]
+      context_diag[, context_review_flag := (
+        context_risk_level != "standard" |
+          far_from_prior_flag |
+          posterior_multiplier_min_train_range < 0.25 |
+          posterior_multiplier_max_train_range > 4
+      )]
+    }
   }
 
   list(coef = coef_diag[], curve = curve_diag[], context = context_diag[])
@@ -4422,6 +4496,7 @@ fit_hier_mmm_engine <- function(data,
                          coef_override_input = NULL,
                          context_effects = NULL,
                          context_log_multiplier_bound = 2,
+                         allow_time_context = FALSE,
                          intercept_type = "fourier",
                          ucm_spec = list(
                            level = FALSE,
@@ -4553,6 +4628,7 @@ fit_hier_mmm_engine <- function(data,
     coef_override_input = coef_override_input,
     context_effects = context_effects,
     context_log_multiplier_bound = context_log_multiplier_bound,
+    allow_time_context = allow_time_context,
     intercept_type = intercept_type,
     ucm_spec = ucm_spec,
     use_ucm_metadata = use_ucm_metadata,
@@ -6197,6 +6273,7 @@ fit_hier_mmm <- function(data,
                          calibration_input = NULL,
                          budget_optimizer_config = NULL,
                          context_effects = NULL,
+                         allow_time_context = FALSE,
                          raw_output_data = NULL,
                          create_response_curves = TRUE,
                          create_response_curve_draws = FALSE,
@@ -6239,6 +6316,7 @@ fit_hier_mmm <- function(data,
     time_col = time_col,
     entity_col = entity_col,
     context_effects = context_effects,
+    allow_time_context = allow_time_context,
     holiday_config = holiday_config,
     output_dir = output_dir,
     output_prefix = output_prefix
