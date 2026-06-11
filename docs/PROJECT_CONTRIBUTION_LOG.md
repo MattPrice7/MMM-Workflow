@@ -40,6 +40,10 @@ causal evidence.
   checkpoint summaries instead of relying on documentation claims.
 - Reframed weak methods as diagnostic/directional evidence rather than allowing
   them to become overconfident priors.
+- Maintained a triage workflow for rough analyst notes: raw scratchpad,
+  cleaned review notes, formal checklist promotion, and contribution logging.
+  This keeps speculative ideas visible without letting them override core
+  production priorities.
 
 ## Core Features I Drove
 
@@ -198,4 +202,3 @@ still research. The package is strongest where it is transparent, auditable, and
 diagnostic-heavy: Stan MMM, quasi-geo evidence, optimizer/scenario planning, and
 reporting. Neural MMM should remain a challenger until it proves stable across
 external simulators, more hostile synthetic regimes, and real-world validation.
-

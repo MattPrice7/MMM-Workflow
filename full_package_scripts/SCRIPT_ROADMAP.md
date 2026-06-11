@@ -7,14 +7,19 @@ This file is the working backlog for the script bundle. It separates production-
 1. `hier_mmm.R` / `hier_mmm.stan`
    - Keep as the top-priority production model layer.
    - Add channel-level median/half-saturation anchor overrides so each channel can use its own anchor, for example `median_anchor = 0.30` instead of a global 0.50 median non-zero support rule.
+   - Current curve-parameter behavior: `rrate` and curve-rate are estimated by Stan when `sample_curve_parameters = "always"`; fixed-curve modes intentionally use R-precomputed transforms for speed and sampler geometry.
+   - Evaluate active-only curve normalization before applying it. Current logic uses active raw-support weeks for the median saturation anchor but all training rows for adstocked-support scaling. The candidate API is `curve_normalization_scope = c("all_train", "active_train")`; do not change this until Stan, R transform, decomposition, response-curve, optimizer, and BAU paths can be tested together.
+   - Add a central prior-scale parser later so analyst-facing priors can be entered as SD or precision consistently, defaulting to SD while preserving true inverse-variance precision internally.
    - Revisit the default curve family. Meridian uses Hill + adstock as the standard media transform, with Hill applied after adstock by default. This bundle supports both `weibull` and `hill`; before changing the default, add tests that compare Weibull defaults to Hill slope-1 concave curves and verify response-curve/optimizer behavior.
    - Done: add holiday-control generation inside the Stan workflow so analysts can request holiday dummies without hand-building columns. Options include holiday week, week before, week after, country/region sets such as US major and EU major, and user-supplied holiday calendars.
    - Keep UCM inside Stan for joint estimation with media. A separate pre-fit UCM helper can be added later for diagnostics or initialization, but it should not replace the joint model path.
+   - Future: add optional hierarchy/pooling keys based on arbitrary model-ID parts. Keep `group_col` generic and avoid hardcoded names like DMA/product/LOB. `source_entity` should remain source/halo metadata, not the main hierarchy-family key.
    - Future cleanup: split internals into modules for metadata, validation, Stan data creation, transforms, UCM/baseline, execution, posterior extraction, decomposition, diagnostics, decisioning, and export.
 
 2. `quasi_geo_test.R`
    - Current status: signed event detection, synthetic control, TBR/DiD fallback, donor placebo, leave-one-donor-out sensitivity, overlap diagnostics, bundle handling, raw-scale economics, and analyst evidence summaries are implemented.
    - Done: carry optional `channel` / `rollup_path` metadata from `variable_map` into quasi-geo events, summaries, and prior recommendation tables for reporting rollups such as total Media or total Social. This is reporting metadata, not a pooled causal estimand by itself.
+   - Future: only estimate rollup-level quasi-geo effects when the rollup itself has identifiable variation. Do not allocate or pool causal evidence by rollup name alone.
    - Refine evidence classification so fallback methods are not unfairly blocked. A failed synthetic-control attempt should downgrade evidence only if TBR/DiD also fail or diagnostics are too weak.
    - Add multi-geo treated-cell estimation. If several markets move together and some markets remain untreated, estimate the treated cell as a group and/or estimate each treated geo with donor exclusion for other treated geos.
    - National repeated media: when media changes the same across all markets, there is no geo-identifiable untreated donor pool. Keep this diagnostic-only by default. A future national interrupted-time-series/TBR module can aggregate to a national market, but it should be labeled time-series evidence rather than geo-lift evidence.
@@ -36,6 +41,7 @@ This file is the working backlog for the script bundle. It separates production-
    - Add channel-level curve anchor overrides and audit fields.
    - Keep prior conversion formulas explicit for coefficient, ROI, mROI, IKPC, CPKPI, cost-per-KPI, contribution, and contribution-share inputs.
    - Keep true inverse-variance precision rather than replacing it with vague confidence labels.
+   - BAU response curves: evaluate safe optional rrate/adstock estimation only as a guarded diagnostic. Do not let a univariate rrate search tighten priors just because high adstock better explains trend.
    - Consider splitting prior recovery into modules only after core Stan/quasi/deck work stabilizes.
 
 6. Future model extensions / maybe

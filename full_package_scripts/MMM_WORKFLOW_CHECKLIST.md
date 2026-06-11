@@ -60,6 +60,7 @@ Done:
 - [x] Direct channel-level `anchor_saturation` inputs flow into Stan metadata and are converted to the correct curve-family-specific internal curve rate for Hill or Weibull.
 - [x] Direct Stan media metadata defaults to 50% saturation at median active support when no explicit curve-rate or anchor is supplied.
 - [x] Direct Stan media metadata no longer requires analyst-supplied `rrate`, `rrate_precision`, `dvalue`, or `dvalue_precision` columns; no-adstock and shape-1 defaults are applied unless overridden, and default/audit flags are retained.
+- [x] `rrate` and curve-rate are estimated in Stan when `sample_curve_parameters = "always"`; fixed-curve mode intentionally uses the R-precomputed transform path for speed and geometry.
 - [x] Direct business-prior inputs are available in the main Stan workflow wrapper through `fit_hier_mmm(..., business_priors = ...)`.
 - [x] Business-prior inputs accept `coef`, `roi`, `mroi`, `ikpc`, and `cpkpi` with SD or precision and convert to true inverse-variance coefficient precision on the Stan scale.
 - [x] Business-prior conversion uses training rows only when holdouts exist and writes a `business_prior_audit` table.
@@ -68,6 +69,8 @@ Done:
 Active / Next:
 
 - [ ] Validate Hill and Weibull defaults against Meridian-style Hill-after-adstock behavior before changing the default curve family.
+- [ ] Evaluate active-only curve normalization before changing defaults: current Stan/BAU transforms normalize adstocked support by all training rows, while the median saturation anchor uses active raw-support weeks only. Proposed option: `curve_normalization_scope = c("all_train", "active_train")`, with all R/Stan/decomp/optimizer paths kept transform-consistent.
+- [ ] Add a central prior-scale parser so public inputs can accept either SD or precision consistently. Default analyst-facing input should be SD; internals can convert to true inverse-variance precision. Do this as an API cleanup pass, not as a piecemeal column rename.
 - [ ] Make mROI / marginal CPKPI priors use true marginal-curve conversion, not average ROI conversion.
 - [ ] Add `kpi_value_per_outcome` to Stan output economics so revenue ROI can be computed when appropriate.
 - [ ] Add richer prior predictive simulation before sampling.
@@ -82,6 +85,7 @@ Active / Next:
 - [ ] Future / maybe: evaluate optional context-varying effectiveness modifiers for named business hypotheses such as seasonal TV effectiveness or TV/social synergy, with explicit metadata, tight priors, sign constraints where justified, and min/max multiplier bounds.
 - [ ] Future / maybe: evaluate brand-equity or long-run media-stock states only when external signals exist, such as awareness, organic search, branded search, consideration, or other demand indicators.
 - [ ] Future / maybe: add optional `model_id_parts` metadata, e.g. `model_id`, `dimension_name`, `dimension_value`, so analysts can describe flexible model-cell pieces such as DMA, product, LOB, retailer, store type, segment, or platform. Keep the core model generic; use this only for rollups, diagnostics, optional hierarchy/shrinkage instructions, and future “pool across this dimension but not that one” settings.
+- [ ] Future / maybe: add explicit hierarchy/pooling keys derived from arbitrary model-ID parts, e.g. "pool within product" or "pool within product + retailer". This is separate from `source_entity`; do not overload halo/source metadata as the hierarchy-family key.
 
 Important interpretation:
 
@@ -120,6 +124,7 @@ Active / Next:
 - [ ] Add explicit event overlap detection across variables/geos/windows.
 - [ ] Future / separate from quasi-geo: optional national interrupted-time-series/TBR diagnostic for all-market media shocks, clearly labeled as lower-tier time-series context and never routed as geo-lift calibration.
 - [ ] Add a dedicated quasi-geo evidence report pack for analysts.
+- [ ] Future / maybe: evaluate rollup-level quasi-geo estimands only when the rollup has identifiable variation. `rollup_path` is currently reporting metadata; it should not silently turn branded + non-branded search into a causal total-search estimand unless the event design supports that rollup.
 
 ## 3. Optimizer / Scenario Planner
 
@@ -203,6 +208,7 @@ Next:
 - [ ] Add posterior diagnostic plots for coefficients, prior-vs-posterior shifts, and parameter uncertainty.
 - [ ] Add quasi-geo treated-vs-synthetic, media shock, donor weights, placebo distribution, and evidence-prior audit charts.
 - [ ] Future: add a dedicated Excel chart workbook builder for consultant workflows.
+- [ ] Future: keep the Excel chart workbook separate from the Shiny/static deck builder so analyst Excel customization does not complicate the production chart/export contract.
 
 Recommendation:
 
@@ -243,6 +249,7 @@ Core files: `mmm_prior_workflow.R`, `semi_univariate_prior_builder_production_fi
 - [ ] Keep stable; no further prior-recovery changes until the core Stan, quasi-geo, optimizer, and reporting files are production-strong.
 - [ ] Optional parent/child/subchild ridge or NNLS allocation workflow.
 - [ ] Optional Robyn-style ridge prior-recovery script if useful later.
+- [ ] BAU response curves: evaluate safe optional rrate/adstock estimation only with guardrails, e.g. bounded search, active-support anchor, no automatic tightening, and diagnostics when higher rrate simply improves fit by absorbing baseline trend.
 
 ### Data Pullers / Public Inputs
 

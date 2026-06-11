@@ -75,26 +75,40 @@
 #     extra_control_cols
 #
 # REQUIRED METADATA INPUT (single file / data.table / data.frame)
-#   Required columns EXACTLY in this logic:
+#   Required model-variable columns:
 #     - variable            : raw data column for normal X variables; internal UCM name for role=ucm
 #     - role                : media, distribution, price, promo, trade, comp, macro, dummy, control, other, ucm
-#     - source_entity       : source entity for that variable
-#                             blank / NA / 0 / GLOBAL / globale all mean "GLOBAL"
-#                             otherwise this is compared to entity_col only as
-#                             a halo diagnostic (not as a model family)
-#     - rrate               : prior center for retention / adstock
+#     - coef                : coefficient prior center at VARIABLE level
+#     - coef_precision      : coefficient prior precision at VARIABLE level
+#
+#   Optional but commonly used model-variable columns:
+#     - source_entity       : source entity for that variable. Blank / NA / 0 /
+#                             GLOBAL / globale all mean "GLOBAL"; otherwise this
+#                             is compared to entity_col as a halo diagnostic.
+#                             It is not the hierarchy key by itself.
+#     - rrate               : prior center for retention / adstock. In
+#                             sampled-curve mode this is a prior center, not a
+#                             fixed value.
 #     - rrate_precision     : prior precision for rrate
 #     - cvalue              : internal saturation inverse-scale/rate prior center
 #                             retained for backward compatibility. Prefer
 #                             curve_rate or anchor_saturation in new metadata.
 #                             For Hill, this is not EC50; EC50 on the normalized
 #                             curve-input scale is 1 / curve_rate when dvalue = 1.
+#                             In sampled-curve mode this is a prior center, not a
+#                             fixed value.
 #     - cvalue_precision    : prior precision for the internal curve rate
-#     - dvalue              : prior center for saturation shape
+#     - dvalue              : prior center for saturation shape. It is fixed near
+#                             its center unless estimate_dvalue = TRUE.
 #     - dvalue_precision    : prior precision for dvalue
-#     - coef                : coefficient prior center at VARIABLE level
-#     - coef_precision      : coefficient prior precision at VARIABLE level
 #     - coef_bound          : coefficient constraint cell: pos, neg, (lower,upper), (lower,), (,upper), blank/free
+#     - coef_hierarchy_scale: multiplier on group-level coefficient variation.
+#                             Use lower values for national-only or weakly
+#                             geo-resolved media when group-specific effects are
+#                             weakly identified.
+#     - anchor_saturation   : saturation level at median active support. If no
+#                             curve_rate/cvalue is supplied, media defaults to
+#                             0.50 at median active support.
 #     - curve_bound         : optional shorthand curve bound; parameter-specific bounds below override it
 #     - rrate_bound         : optional rrate bound cell using the same parenthetical syntax
 #     - cvalue_bound        : optional internal curve-rate bound cell using the
@@ -103,7 +117,12 @@
 #
 # IMPORTANT RULES
 #   - If rrate, internal curve rate, and dvalue are all 0, that variable is treated as NO-CURVE.
-#   - Separate precisions are required for rrate, internal curve rate, dvalue, and coef.
+#   - Curve precisions are optional and default to intentionally weak values.
+#     Coefficient precision is currently required unless supplied through a
+#     business-prior conversion helper.
+#   - sample_curve_parameters = "always" estimates rrate and curve_rate in Stan.
+#     sample_curve_parameters = "never" uses the fixed R-precomputed transform
+#     path for speed and sampler geometry.
 #   - coef_by_mod_id stays on model scale; decomposition outputs are rescaled to
 #     original units when possible.
 #   - source_entity is generic. It does not need to be product-specific.
