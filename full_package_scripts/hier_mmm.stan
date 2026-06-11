@@ -114,6 +114,9 @@ data {
   vector[J_curve] dvalue_upper;
   int<lower=0, upper=1> estimate_dvalue;
   int<lower=0, upper=1> normalize_curve_x;
+  // 1 = use training rows with raw/current-period X > 0 for carry and
+  // transformed-mean scaling. 0 = use all training rows.
+  int<lower=0, upper=1> curve_normalization_active;
   int<lower=0, upper=1> center_predictors_for_sampling;
   // 1 = non-centered group intercepts, 2 = centered group intercepts, 3 = shared intercept.
   int<lower=1, upper=3> alpha_parameterization;
@@ -456,23 +459,34 @@ transformed parameters {
 
         if (normalize_curve_x == 1) {
           real carry_for_scale = 0;
-          real carry_sum = 0;
-          int carry_count = 0;
+          real carry_sum_all = 0;
+          int carry_count_all = 0;
+          real carry_sum_active = 0;
+          int carry_count_active = 0;
           for (n in start_idx[g]:end_idx[g]) {
             real x = fmax(X[n, j], 0);
             carry_for_scale = x + rr * carry_for_scale;
             if (is_train[n] == 1) {
-              carry_sum += carry_for_scale;
-              carry_count += 1;
+              carry_sum_all += carry_for_scale;
+              carry_count_all += 1;
+              if (curve_normalization_active == 1 && x > 0) {
+                carry_sum_active += carry_for_scale;
+                carry_count_active += 1;
+              }
             }
           }
-          carry_scale = fmax(carry_sum / carry_count, 1e-8);
+          if (curve_normalization_active == 1 && carry_count_active > 0)
+            carry_scale = fmax(carry_sum_active / carry_count_active, 1e-8);
+          else
+            carry_scale = fmax(carry_sum_all / carry_count_all, 1e-8);
         }
 
         {
           real carry_mean = 0;
-          real trans_sum = 0;
-          int n_count = 0;
+          real trans_sum_all = 0;
+          int n_count_all = 0;
+          real trans_sum_active = 0;
+          int n_count_active = 0;
           for (n in start_idx[g]:end_idx[g]) {
             real x = fmax(X[n, j], 0);
             real carry_for_curve;
@@ -487,11 +501,18 @@ transformed parameters {
               trans = curve_type[k] == 2 ? z / (1 + z) : 1 - exp(-z);
             }
             if (is_train[n] == 1) {
-              trans_sum += trans;
-              n_count += 1;
+              trans_sum_all += trans;
+              n_count_all += 1;
+              if (curve_normalization_active == 1 && x > 0) {
+                trans_sum_active += trans;
+                n_count_active += 1;
+              }
             }
           }
-          trans_mean = fmax(trans_sum / n_count, 1e-8);
+          if (curve_normalization_active == 1 && n_count_active > 0)
+            trans_mean = fmax(trans_sum_active / n_count_active, 1e-8);
+          else
+            trans_mean = fmax(trans_sum_all / n_count_all, 1e-8);
         }
 
         {

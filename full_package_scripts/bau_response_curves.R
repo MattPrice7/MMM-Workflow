@@ -75,6 +75,34 @@ bau_saturation <- function(x, curve_rate, shape = 1, curve_type = "hill") {
   }
 }
 
+bau_normalize_curve_normalization_scope <- function(x) {
+  out <- tolower(trimws(as.character(x %||% "active_train")[1]))
+  if (is.na(out) || !nzchar(out)) out <- "active_train"
+  out <- gsub("-", "_", out)
+  switch(out,
+    active = "active_train",
+    active_only = "active_train",
+    nonzero = "active_train",
+    non_zero = "active_train",
+    nonzero_train = "active_train",
+    active_train = "active_train",
+    all = "all_train",
+    train = "all_train",
+    all_train = "all_train",
+    stop("curve_normalization_scope must be 'active_train' or 'all_train'.", call. = FALSE)
+  )
+}
+
+bau_curve_norm_mask <- function(x_raw, train_mask, scope = "active_train") {
+  scope <- bau_normalize_curve_normalization_scope(scope)
+  train_mask <- as.logical(train_mask)
+  train_mask[is.na(train_mask)] <- FALSE
+  if (!any(train_mask)) train_mask <- rep(TRUE, length(x_raw))
+  if (identical(scope, "all_train")) return(train_mask)
+  active <- train_mask & is.finite(x_raw) & x_raw > 0
+  if (any(active)) active else train_mask
+}
+
 bau_rate_from_anchor <- function(anchor_x, anchor_saturation = 0.50, shape = 1, curve_type = "hill") {
   anchor_x <- bau_num(anchor_x)[1]
   anchor_saturation <- bau_clip(bau_num(anchor_saturation)[1], 0.01, 0.99)
@@ -343,6 +371,7 @@ create_bau_response_curves <- function(data,
                                        shape = 1,
                                        adstock_decay = 0,
                                        normalize_curve_x = TRUE,
+                                       curve_normalization_scope = c("active_train", "all_train"),
                                        multiplier_grid = seq(0, 3, by = 0.05),
                                        step_pct = 0.01,
                                        train_col = NULL,
@@ -355,6 +384,7 @@ create_bau_response_curves <- function(data,
   if (!nrow(dt)) stop("data must contain at least one row.", call. = FALSE)
   support_basis <- match.arg(support_basis)
   curve_scope <- match.arg(curve_scope)
+  curve_normalization_scope <- bau_normalize_curve_normalization_scope(match.arg(curve_normalization_scope))
   if (is.null(population_col) || !nzchar(as.character(population_col)[1])) {
     population_col <- bau_pick_col(dt, c("population", "pop", "households", "hh", "market_size", "market_population"))
   }
@@ -447,7 +477,8 @@ create_bau_response_curves <- function(data,
       x_raw <- pmax(bau_num(ser$support_raw__), 0)
       spend_raw <- pmax(bau_num(ser$spend_raw__), 0)
       carry <- bau_adstock(x_curve, decay = rr)
-      carry_scale <- if (normalize_curve_x) mean(carry[train_mask], na.rm = TRUE) else 1
+      norm_mask <- bau_curve_norm_mask(x_raw, train_mask, curve_normalization_scope)
+      carry_scale <- if (normalize_curve_x) mean(carry[norm_mask], na.rm = TRUE) else 1
       if (!is.finite(carry_scale) || carry_scale <= 1e-10) carry_scale <- 1
       z <- carry / carry_scale
       active <- train_mask & is.finite(z) & z > 0 & is.finite(x_raw) & x_raw > 0
@@ -460,7 +491,7 @@ create_bau_response_curves <- function(data,
         curve_status <- "anchored"
       }
       sat_current <- bau_saturation(z, curve_rate = rate, shape = sh, curve_type = ct)
-      current_response_mean <- mean(sat_current[train_mask], na.rm = TRUE)
+      current_response_mean <- mean(sat_current[norm_mask], na.rm = TRUE)
       if (!is.finite(current_response_mean) || current_response_mean <= 1e-10) current_response_mean <- 1
       current_support <- sum(x_raw[train_mask], na.rm = TRUE)
       current_spend <- if (all(is.na(spend_raw))) NA_real_ else sum(spend_raw[train_mask], na.rm = TRUE)
@@ -479,12 +510,12 @@ create_bau_response_curves <- function(data,
         carry_eval <- bau_adstock(x_curve * m, decay = rr)
         z_eval <- carry_eval / carry_scale
         sat_eval <- bau_saturation(z_eval, curve_rate = rate, shape = sh, curve_type = ct)
-        response_mean <- mean(sat_eval[train_mask], na.rm = TRUE)
+        response_mean <- mean(sat_eval[norm_mask], na.rm = TRUE)
         response_index <- if (is.finite(response_mean)) response_mean / current_response_mean else NA_real_
 
         carry_up <- bau_adstock(x_curve * (m + step_pct), decay = rr)
         sat_up <- bau_saturation(carry_up / carry_scale, curve_rate = rate, shape = sh, curve_type = ct)
-        response_up <- mean(sat_up[train_mask], na.rm = TRUE) / current_response_mean
+        response_up <- mean(sat_up[norm_mask], na.rm = TRUE) / current_response_mean
         spend <- if (is.finite(current_spend)) current_spend * m else NA_real_
         support <- current_support * m
         contribution <- if (is.finite(current_contribution)) current_contribution * response_index else NA_real_
@@ -544,6 +575,7 @@ create_bau_response_curves <- function(data,
         current_spend = current_spend,
         current_contribution = current_contribution,
         support_basis = ser$support_basis_used__[1],
+        curve_normalization_scope = curve_normalization_scope,
         population_col = population_col %||% NA_character_,
         population_scale = ser$population_scale__[1],
         rows_used = sum(train_mask, na.rm = TRUE),
@@ -575,6 +607,7 @@ create_bau_response_curves <- function(data,
       support_basis = support_basis,
       curve_scope = curve_scope,
       normalize_curve_x = normalize_curve_x,
+      curve_normalization_scope = curve_normalization_scope,
       train_col = train_col,
       holdout_col = holdout_col,
       date_col = date_col,

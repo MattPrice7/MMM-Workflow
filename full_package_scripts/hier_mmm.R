@@ -341,13 +341,43 @@ saturate_media_hier_mmm <- function(x, cvalue, dvalue = 1, curve_type = "weibull
   }
 }
 
+normalize_curve_normalization_scope_hier_mmm <- function(x) {
+  out <- tolower(trimws(as.character(x %||% "active_train")[1]))
+  if (is.na(out) || !nzchar(out)) out <- "active_train"
+  out <- gsub("-", "_", out)
+  out <- switch(out,
+    active = "active_train",
+    active_only = "active_train",
+    nonzero = "active_train",
+    non_zero = "active_train",
+    nonzero_train = "active_train",
+    active_train = "active_train",
+    all = "all_train",
+    train = "all_train",
+    all_train = "all_train",
+    stop("curve_normalization_scope must be 'active_train' or 'all_train'.", call. = FALSE)
+  )
+  out
+}
+
+curve_normalization_mask_hier_mmm <- function(x_ref, train_mask, scope = "active_train") {
+  scope <- normalize_curve_normalization_scope_hier_mmm(scope)
+  train_mask <- as.logical(train_mask)
+  train_mask[is.na(train_mask)] <- FALSE
+  if (!any(train_mask)) train_mask <- rep(TRUE, length(x_ref))
+  if (identical(scope, "all_train")) return(train_mask)
+  active <- train_mask & is.finite(x_ref) & x_ref > 0
+  if (any(active)) active else train_mask
+}
+
 curve_rate_from_anchor_hier_mmm <- function(x,
                                             rrate,
                                             dvalue = 1,
                                             anchor_saturation = 0.50,
                                             curve_type = "weibull",
                                             train_mask = NULL,
-                                            normalize_curve_x = TRUE) {
+                                            normalize_curve_x = TRUE,
+                                            curve_normalization_scope = "active_train") {
   x_ref <- pmax(suppressWarnings(as.numeric(x)), 0)
   x_ref[!is.finite(x_ref)] <- 0
   n <- length(x_ref)
@@ -369,7 +399,8 @@ curve_rate_from_anchor_hier_mmm <- function(x,
   }
   carry_scale <- 1
   if (isTRUE(normalize_curve_x)) {
-    carry_scale <- mean(carry[train_mask], na.rm = TRUE)
+    norm_mask <- curve_normalization_mask_hier_mmm(x_ref, train_mask, curve_normalization_scope)
+    carry_scale <- mean(carry[norm_mask], na.rm = TRUE)
     if (!is.finite(carry_scale) || is.na(carry_scale) || abs(carry_scale) <= 1e-8) carry_scale <- 1
   }
   z <- carry / carry_scale
@@ -1828,6 +1859,7 @@ prepare_stan_data_hier_mmm <- function(data,
                                        ucm_spec = NULL,
                                        use_ucm_metadata = FALSE,
                                        normalize_curve_x = TRUE,
+                                       curve_normalization_scope = c("active_train", "all_train"),
                                        sample_curve_parameters = c("always", "never"),
                                        sample_coef_hierarchy = c("auto", "always", "never"),
                                        coef_hierarchy_auto_min_groups = 5L,
@@ -1855,6 +1887,7 @@ prepare_stan_data_hier_mmm <- function(data,
                                        likelihood = c("student_t", "normal"),
                                        student_t_nu = 5) {
   likelihood <- match.arg(likelihood)
+  curve_normalization_scope <- normalize_curve_normalization_scope_hier_mmm(match.arg(curve_normalization_scope))
   sample_curve_parameters <- match.arg(sample_curve_parameters)
   sample_coef_hierarchy <- match.arg(sample_coef_hierarchy)
   coef_parameterization <- match.arg(coef_parameterization)
@@ -2078,7 +2111,8 @@ prepare_stan_data_hier_mmm <- function(data,
         anchor_saturation = md$anchor_saturation[ii],
         curve_type = md$curve_type[ii],
         train_mask = !dt$is_holdout__,
-        normalize_curve_x = isTRUE(normalize_curve_x)
+        normalize_curve_x = isTRUE(normalize_curve_x),
+        curve_normalization_scope = curve_normalization_scope
       )
       if (!is.finite(loc) || loc <= 0) {
         stop("Could not derive internal curve_rate from anchor_saturation for variable '", vv,
@@ -2255,6 +2289,7 @@ prepare_stan_data_hier_mmm <- function(data,
           curve_type = curve_type_k,
           train_mask = !dt$is_holdout__[idx],
           normalize_curve_x = isTRUE(normalize_curve_x),
+          curve_normalization_scope = curve_normalization_scope,
           multiplier = 1
         )
         X_curve_fixed[idx, k] <- tr$transformed
@@ -2401,6 +2436,7 @@ prepare_stan_data_hier_mmm <- function(data,
     dvalue_upper = variable_lookup[has_curve == 1L, dvalue_upper],
     estimate_dvalue = as.integer(estimate_dvalue),
     normalize_curve_x = as.integer(normalize_curve_x),
+    curve_normalization_active = as.integer(identical(curve_normalization_scope, "active_train")),
     center_predictors_for_sampling = as.integer(center_predictors_for_sampling),
     alpha_parameterization = as.integer(alpha_parameterization_code),
     G_alpha = if (alpha_parameterization_code == 3L) 0L else nrow(group_lookup),
@@ -2540,6 +2576,7 @@ prepare_stan_data_hier_mmm <- function(data,
       cycle_harmonics = intercept_spec$cycle_harmonics
     ),
     normalize_curve_x = normalize_curve_x,
+    curve_normalization_scope = curve_normalization_scope,
     sample_curve_parameters = sample_curve_parameters,
     sample_coef_hierarchy = sample_coef_hierarchy,
     coef_parameterization = coef_parameterization,
@@ -2656,6 +2693,7 @@ prior_non_intercept_mu <- function(sd, beta = NULL) {
           curve_type = curve_type,
           train_mask = train_mask,
           normalize_curve_x = isTRUE(sd$normalize_curve_x == 1L),
+          curve_normalization_scope = if (!is.null(sd$curve_normalization_active) && isTRUE(sd$curve_normalization_active == 1L)) "active_train" else "all_train",
           multiplier = 1
         )
         trans <- tr$transformed
@@ -3099,6 +3137,7 @@ build_outputs_hier_mmm <- function(fit, prep, extra_control_cols = NULL) {
           curve_type = curve_type,
           train_mask = !dt$is_holdout__[idx],
           normalize_curve_x = prep$normalize_curve_x,
+          curve_normalization_scope = prep$curve_normalization_scope %||% "active_train",
           multiplier = 1
         )
         trans_vec <- tr$transformed
@@ -3998,6 +4037,7 @@ fit_hier_mmm_engine <- function(data,
                          ),
                          use_ucm_metadata = FALSE,
                          normalize_curve_x = TRUE,
+                         curve_normalization_scope = c("active_train", "all_train"),
                          sample_curve_parameters = c("always", "never"),
                          sample_coef_hierarchy = c("auto", "always", "never"),
                          coef_hierarchy_auto_min_groups = 5L,
@@ -4049,6 +4089,7 @@ fit_hier_mmm_engine <- function(data,
                          checkpoint_file = NULL,
                          output_variables = "lean") {
   likelihood <- match.arg(likelihood)
+  curve_normalization_scope <- normalize_curve_normalization_scope_hier_mmm(match.arg(curve_normalization_scope))
   sample_curve_parameters <- match.arg(sample_curve_parameters)
   sample_coef_hierarchy <- match.arg(sample_coef_hierarchy)
   coef_parameterization <- match.arg(coef_parameterization)
@@ -4117,6 +4158,7 @@ fit_hier_mmm_engine <- function(data,
     ucm_spec = ucm_spec,
     use_ucm_metadata = use_ucm_metadata,
     normalize_curve_x = normalize_curve_x,
+    curve_normalization_scope = curve_normalization_scope,
     sample_curve_parameters = sample_curve_parameters,
     sample_coef_hierarchy = sample_coef_hierarchy,
     coef_hierarchy_auto_min_groups = coef_hierarchy_auto_min_groups,
@@ -4329,6 +4371,7 @@ fit_hier_mmm_engine <- function(data,
     intercept_use_cycle = prep$intercept_use_cycle,
     intercept_use_season = prep$intercept_use_season,
     normalize_curve_x = prep$normalize_curve_x,
+    curve_normalization_scope = prep$curve_normalization_scope,
     sample_curve_parameters = prep$sample_curve_parameters,
     sample_coef_hierarchy = prep$sample_coef_hierarchy,
     coef_hierarchy_auto_min_groups = prep$coef_hierarchy_auto_min_groups,
@@ -4597,6 +4640,7 @@ media_transform_hier_mmm <- function(x,
                                      curve_type = "weibull",
                                      train_mask = NULL,
                                      normalize_curve_x = TRUE,
+                                     curve_normalization_scope = "active_train",
                                      multiplier = 1) {
   x_ref <- pmax(suppressWarnings(as.numeric(x)), 0)
   x_ref[!is.finite(x_ref)] <- 0
@@ -4626,12 +4670,18 @@ media_transform_hier_mmm <- function(x,
   carry_eval <- adstock_one(x_eval)
   carry_scale <- 1
   if (isTRUE(normalize_curve_x)) {
-    carry_scale <- mean(carry_ref[train_mask], na.rm = TRUE)
+    norm_mask <- curve_normalization_mask_hier_mmm(x_ref, train_mask, curve_normalization_scope)
+    carry_scale <- mean(carry_ref[norm_mask], na.rm = TRUE)
     if (!is.finite(carry_scale) || is.na(carry_scale) || abs(carry_scale) <= 1e-8) carry_scale <- 1
   }
   sat_ref <- saturate_media_hier_mmm(carry_ref / carry_scale, cvalue = cvalue, dvalue = dvalue, curve_type = curve_type)
   sat_eval <- saturate_media_hier_mmm(carry_eval / carry_scale, cvalue = cvalue, dvalue = dvalue, curve_type = curve_type)
-  trans_mean <- mean(sat_ref[train_mask], na.rm = TRUE)
+  norm_mask <- if (isTRUE(normalize_curve_x)) {
+    curve_normalization_mask_hier_mmm(x_ref, train_mask, curve_normalization_scope)
+  } else {
+    train_mask
+  }
+  trans_mean <- mean(sat_ref[norm_mask], na.rm = TRUE)
   if (!is.finite(trans_mean) || is.na(trans_mean) || abs(trans_mean) <= 1e-8) trans_mean <- if (isTRUE(normalize_curve_x)) 1 else 1e-8
   transformed <- if (isTRUE(normalize_curve_x)) sat_eval / trans_mean else sat_eval
   list(
@@ -4640,7 +4690,8 @@ media_transform_hier_mmm <- function(x,
     transformed_mean = trans_mean,
     center_value = if (isTRUE(normalize_curve_x)) 1 else trans_mean,
     adstock = carry_eval,
-    saturation = sat_eval
+    saturation = sat_eval,
+    curve_normalization_scope = normalize_curve_normalization_scope_hier_mmm(curve_normalization_scope)
   )
 }
 
@@ -4680,6 +4731,7 @@ variable_contribution_rows_hier_mmm <- function(fit_obj, variable, multiplier = 
       curve_type = curve_type,
       train_mask = !dt$is_holdout__[idx],
       normalize_curve_x = fit_obj$normalize_curve_x,
+      curve_normalization_scope = fit_obj$curve_normalization_scope %||% "active_train",
       multiplier = multiplier
     )
     trans <- tr$transformed

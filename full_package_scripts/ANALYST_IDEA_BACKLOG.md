@@ -6,9 +6,8 @@ This is the cleaned, non-train-of-thought backlog promoted from the scratchpad. 
 
 - Stan / curve-input contract:
   - document sampled-curve vs fixed-curve behavior clearly
-  - evaluate active-only curve normalization against all-training-row normalization
   - keep the median saturation anchor based on active raw-support weeks
-  - keep all transform paths consistent before changing any default
+  - active-only normalization is now implemented; monitor real-data behavior and keep `all_train` as a sensitivity option
 - Prior input cleanup:
   - add a central SD/precision parser later
   - default analyst-facing scale should be SD

@@ -9,6 +9,7 @@
 .Rproj.user/
 renv/library/
 packrat/lib*/
+full_package_scripts/hier_mmm
 
 # Python caches/environments
 __pycache__/
