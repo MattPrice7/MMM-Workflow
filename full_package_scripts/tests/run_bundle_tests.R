@@ -47,6 +47,8 @@ if (tolower(Sys.getenv("RUN_HOSTILE_TESTS", "false")) %in% c("true", "1", "yes")
 }
 
 if (tolower(Sys.getenv("RUN_STAN_SMOKE_TESTS", "false")) %in% c("true", "1", "yes")) {
+  stan_context <- file.path(test_dir, "test_hier_mmm_context_effects_sampling.R")
+  if (file.exists(stan_context)) tests <- c(tests, stan_context)
   stan_hostile <- file.path(test_dir, "test_hier_mmm_hostile_sampling.R")
   if (file.exists(stan_hostile)) tests <- c(tests, stan_hostile)
   root_stan <- file.path(bundle_dir, "test_geo_sales_national_media_mean_indexing.R")

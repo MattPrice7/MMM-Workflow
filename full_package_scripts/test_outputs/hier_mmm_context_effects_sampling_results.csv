@@ -1,0 +1,8 @@
+test,status,detail
+context-effect diagnostics are returned,PASS,""
+upper-funnel context makes search more effective in known-truth fit,PASS,"posterior_mean=0.3426, true=0.45"
+macro context increases price sensitivity magnitude in known-truth fit,PASS,"posterior_mean=0.846, true=0.35"
+context-effect known-truth fit has strong fit quality,PASS,r2=0.9809
+context-effect decomposition reconciles to prediction,PASS,""
+search effective contribution per support is higher when TV context is high,PASS,"high=10.39, low=4.33"
+price effective negative contribution is larger when macro pressure is high,PASS,"high=106.2, low=11.76"

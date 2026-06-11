@@ -2443,7 +2443,7 @@ prepare_stan_data_hier_mmm <- function(data,
         context_train_sd = s,
         context_note = fifelse(
           context_type == "time",
-          "time special key: generated as within-group row index, then standardized on training rows",
+          "advanced time special key: generated as within-group row index, then standardized on training rows; use only for an explicit drift hypothesis and prefer real seasonality/trend controls when available",
           "named data column: standardized on training rows"
         )
       )]
@@ -4064,7 +4064,7 @@ build_ucm_component_diagnostics <- function(wide_decomp, group_col, time_col) {
 build_prior_posterior_diagnostics <- function(fit, prep, outputs) {
   sm <- summarize_fit_vars(fit)
   if (!("variable" %in% names(sm))) {
-    return(list(coef = data.table(), curve = data.table()))
+    return(list(coef = data.table(), curve = data.table(), context = data.table()))
   }
 
   sd_col <- pick_first_existing_col(sm, c("sd", "stddev", "std_dev"))
@@ -4205,7 +4205,39 @@ build_prior_posterior_diagnostics <- function(fit, prep, outputs) {
     )]
   }
 
-  list(coef = coef_diag[], curve = curve_diag[])
+  context_diag <- data.table()
+  if (!is.null(prep$context_effects) && nrow(prep$context_effects)) {
+    context_diag <- copy(prep$context_effects)
+    context_diag[, parameter := sprintf("context_coef[%d]", context_idx)]
+    context_stats <- param_stats(context_diag$parameter)
+    context_diag[context_stats, on = "parameter", `:=`(
+      posterior_mean = i.posterior_mean,
+      posterior_sd = i.posterior_sd,
+      posterior_q05 = i.posterior_q05,
+      posterior_q50 = i.posterior_q50,
+      posterior_q95 = i.posterior_q95
+    )]
+    context_diag[, `:=`(
+      prior_center = context_coef_mean,
+      prior_sd_used = context_coef_sd,
+      posterior_minus_prior = posterior_mean - context_coef_mean,
+      posterior_z_vs_prior = (posterior_mean - context_coef_mean) / pmax(context_coef_sd, 1e-8),
+      posterior_sd_to_prior_sd = posterior_sd / pmax(context_coef_sd, 1e-8),
+      near_prior_flag = is.finite(posterior_mean) & abs(posterior_mean - context_coef_mean) <= 0.10 * pmax(context_coef_sd, 1e-8),
+      far_from_prior_flag = is.finite(posterior_mean) & abs(posterior_mean - context_coef_mean) >= 2.00 * pmax(context_coef_sd, 1e-8),
+      interpretation = fifelse(
+        context_sign == "positive",
+        "Higher context increases the target variable contribution multiplier.",
+        fifelse(
+          context_sign == "negative",
+          "Higher context decreases the target variable contribution multiplier.",
+          "Higher context may increase or decrease the target variable contribution multiplier."
+        )
+      )
+    )]
+  }
+
+  list(coef = coef_diag[], curve = curve_diag[], context = context_diag[])
 }
 
 
@@ -4344,6 +4376,7 @@ write_outputs_hier_mmm <- function(outputs, diagnostics, output_dir, prefix = ""
 
   if (!is.null(diagnostics$prior_posterior_coef) && nrow(diagnostics$prior_posterior_coef)) fwrite(diagnostics$prior_posterior_coef, file.path(output_dir, paste0(pfx, "diagnostics_prior_vs_posterior_coef.csv")))
   if (!is.null(diagnostics$prior_posterior_curve) && nrow(diagnostics$prior_posterior_curve)) fwrite(diagnostics$prior_posterior_curve, file.path(output_dir, paste0(pfx, "diagnostics_prior_vs_posterior_curve.csv")))
+  if (!is.null(diagnostics$prior_posterior_context) && nrow(diagnostics$prior_posterior_context)) fwrite(diagnostics$prior_posterior_context, file.path(output_dir, paste0(pfx, "diagnostics_prior_vs_posterior_context.csv")))
 
   if (!is.null(diagnostics$collinearity_overall) && nrow(diagnostics$collinearity_overall)) fwrite(diagnostics$collinearity_overall, file.path(output_dir, paste0(pfx, "diagnostics_collinearity_overall.csv")))
   if (!is.null(diagnostics$collinearity_by_group) && nrow(diagnostics$collinearity_by_group)) fwrite(diagnostics$collinearity_by_group, file.path(output_dir, paste0(pfx, "diagnostics_collinearity_by_group.csv")))
@@ -4683,6 +4716,7 @@ fit_hier_mmm_engine <- function(data,
   prior_post <- build_prior_posterior_diagnostics(fit, prep, outputs)
   diagnostics$prior_posterior_coef <- prior_post$coef
   diagnostics$prior_posterior_curve <- prior_post$curve
+  diagnostics$prior_posterior_context <- prior_post$context
 
   collinearity <- build_collinearity_diagnostics(prep, threshold = collinearity_threshold)
   diagnostics$collinearity_overall <- collinearity$overall
@@ -5288,7 +5322,9 @@ extract_posterior_draw_params_hier_mmm <- function(fit_obj,
   }
   require_hier_mmm_pkg("posterior", "extracting posterior draws for response-curve uncertainty")
   pm_mean <- extract_pm_from_fit_obj_hier_mmm(fit_obj)
-  draw_mat <- as.matrix(fit_obj$fit$draws(variables = c("beta", "rrate", "cvalue", "dvalue"), format = "matrix"))
+  draw_vars <- c("beta", "rrate", "cvalue", "dvalue")
+  if (as.integer(fit_obj$stan_data$K_context %||% 0L) > 0L) draw_vars <- c(draw_vars, "context_coef")
+  draw_mat <- as.matrix(fit_obj$fit$draws(variables = draw_vars, format = "matrix"))
   if (!nrow(draw_mat)) stop("No posterior draws were available for beta/curve parameters.", call. = FALSE)
   max_draws <- suppressWarnings(as.integer(max_draws)[1])
   if (!is.finite(max_draws) || max_draws <= 0L) max_draws <- nrow(draw_mat)
@@ -5320,6 +5356,7 @@ extract_posterior_draw_params_hier_mmm <- function(fit_obj,
     rrate <- pm_mean$rrate
     cvalue <- pm_mean$cvalue
     dvalue <- pm_mean$dvalue
+    context_coef <- pm_mean$context_coef
     if (length(curve_idx)) {
       for (k in seq_along(curve_idx)) {
         j <- curve_idx[k]
@@ -5328,12 +5365,18 @@ extract_posterior_draw_params_hier_mmm <- function(fit_obj,
         dvalue[j] <- get_draw_value(row_i, sprintf("dvalue[%d]", k), dvalue[j])
       }
     }
+    if (length(context_coef)) {
+      for (k in seq_along(context_coef)) {
+        context_coef[k] <- get_draw_value(row_i, sprintf("context_coef[%d]", k), context_coef[k])
+      }
+    }
     params[[row_i]] <- list(
       draw_id = as.character(draw_ids[row_i]),
       beta = beta,
       rrate = rrate,
       cvalue = cvalue,
       dvalue = dvalue,
+      context_coef = context_coef,
       alpha_flat = pm_mean$alpha_flat,
       gamma = pm_mean$gamma,
       level_component = pm_mean$level_component,

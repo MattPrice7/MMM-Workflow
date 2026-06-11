@@ -79,7 +79,7 @@ Active / Next:
 - [ ] Add diagnostics for baseline/UCM absorbing too much unexplained shock.
 - [ ] Validate brand-equity KPIs such as awareness, consideration, subscriptions, leads, or other non-revenue outcomes. Report KPI economics as cost per KPI / outcome per cost unless a value per KPI is supplied.
 - [ ] Add reach/frequency modeling when reach, frequency, impressions, or population are available.
-- [x] Add optional context/effect-modifier helpers before adding time-varying coefficients. Implemented in Stan as off-by-default train-standardized context multipliers with sign constraints, including special `time` key support.
+- [x] Add optional context/effect-modifier helpers before adding time-varying coefficients. Implemented in Stan as off-by-default train-standardized context multipliers with sign constraints. The special `time` key is supported only for explicit advanced drift hypotheses and is not a recommended default.
 - [ ] Future / maybe: evaluate highly regularized time-varying media coefficients only after simpler interactions, controls, and baseline diagnostics are mature.
 - [ ] Future / maybe: evaluate optional time-varying effectiveness multipliers, tightly regularized around 1.0 with smooth random-walk or AR(1) structure, gated per channel and off by default.
 - [ ] Future / maybe: extend the context modifier to true smooth AR/random-walk time variation only if needed; keep current context-key version as the safer default.
