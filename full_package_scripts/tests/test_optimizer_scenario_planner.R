@@ -383,6 +383,37 @@ add_result("custom scenario plan accepts planned support units",
            abs(out_support_cost$scenario_detail[scenario == "support_plan", spend_multiplier][1] - 1.5) < 1e-8 &&
              abs(out_support_cost$scenario_summary[scenario == "support_plan", spend][1] - 15000) < 1e-8)
 
+out_cost_flighting <- run_optimizer_scenario_planner(
+  response_curves = support_only_curves,
+  support_cost_map = support_cost_map,
+  total_budget = 15000,
+  scenario_plan = rbindlist(list(
+    data.table(scenario = "planned_support_and_spend", variable = "display",
+               planned_support = 1500000, planned_spend = 21000,
+               planned_active_weeks = 4, current_active_weeks = 8),
+    data.table(scenario = "unit_cost_multiplier", variable = "display",
+               spend_multiplier = 1.5, cost_multiplier = 1.2),
+    data.table(scenario = "planned_cpm", variable = "display",
+               planned_support = 1500000, planned_cpm = 12)
+  ), fill = TRUE),
+  multiplier_grid = c(0, 1, 1.5, 2),
+  optimizer_method = "grid",
+  optimization_grid_step = 0.5,
+  max_grid_combinations = 20L,
+  max_multiplier = 2,
+  scenario_multipliers = 1
+)
+add_result("scenario planner separates support scaling from spend and unit-cost assumptions",
+           abs(out_cost_flighting$scenario_detail[scenario == "planned_support_and_spend", spend_multiplier][1] - 1.5) < 1e-8 &&
+             abs(out_cost_flighting$scenario_detail[scenario == "planned_support_and_spend", support][1] - 1500000) < 1e-8 &&
+             abs(out_cost_flighting$scenario_summary[scenario == "planned_support_and_spend", spend][1] - 21000) < 1e-8 &&
+             abs(out_cost_flighting$scenario_summary[scenario == "planned_cpm", spend][1] - 18000) < 1e-8 &&
+             abs(out_cost_flighting$scenario_summary[scenario == "unit_cost_multiplier", spend][1] - 18000) < 1e-8)
+add_result("scenario planner reports flighting assumptions without silently reshaping curves",
+           "planned_active_periods" %in% names(out_cost_flighting$scenario_detail) &&
+             out_cost_flighting$scenario_detail[scenario == "planned_support_and_spend", planned_active_periods][1] == 4 &&
+             grepl("do not reshape", out_cost_flighting$scenario_detail[scenario == "planned_support_and_spend", flighting_assumption][1], fixed = TRUE))
+
 out_support_cap <- run_optimizer_scenario_planner(
   response_curves = support_curves,
   total_budget = 240,

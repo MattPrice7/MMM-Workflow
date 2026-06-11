@@ -50,7 +50,7 @@ This file is the working backlog for the script bundle. It separates production-
 5. `optimizer_scenario_planner.R`
    - Current status: standalone scenario planning, response-curve-based optimization, posterior-draw robust objectives, grouped planning constraints, support-only curves with CPM/CPP pricing, locked channels, and target-response/target-efficiency planners are implemented.
    - Done: carry curve evidence metadata into current-plan, scenario, optimized-plan, headroom, and diagnostic outputs when supplied by Stan response-curve sheets, quasi-geo evidence, BAU curves, or analyst-provided curve tables. This includes evidence score, confidence band, recommended use, source/basis, and weak/diagnostic curve warnings.
-   - Future: add explicit future flighting and cost assumptions so plans can distinguish scaling historical support, changing cost per support unit, and changing flight timing.
+   - Done: add explicit scenario-level support/spend/cost/flighting assumptions. Custom scenarios can now distinguish planned support from planned spend, use CPM/CPP or cost-multiplier overrides for economics, preserve cost/flighting audit fields, and report flighting inputs without silently reshaping response curves unless an effective curve multiplier is supplied.
 
 6. Future model extensions / maybe
    - Evaluate optional time-varying effectiveness multipliers only after the core Stan model remains stable. These should be tightly regularized smooth deviations around 1.0, gated per channel, and off by default.

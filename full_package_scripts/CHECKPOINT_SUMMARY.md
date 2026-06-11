@@ -2,6 +2,8 @@
 
 ## Checkpoints
 
+- `rolling_latest_core_optimizer_cost_flighting`
+  - Current rolling state after hardening optimizer scenario assumptions. Custom scenarios can now distinguish response-curve support scaling from planned spend, CPM/CPP/unit-cost overrides, and cost multipliers. Scenario detail, summaries, and draw-based uncertainty outputs use the same spend/cost interpretation, while flighting fields are preserved as explicit audit assumptions and do not silently reshape response curves unless an analyst supplies an effective curve multiplier. Validated with optimizer source, full workflow source, and 39 optimizer/scenario-planner regression checks.
 - `rolling_latest_core_optimizer_evidence_labels`
   - Current rolling state after carrying response-curve evidence metadata through the optimizer and scenario planner. Current plans, custom scenarios, optimized plans, saturation/headroom, scenario summaries, and optimizer summaries now preserve curve evidence scores, confidence bands, recommended use, source/basis, and weak/diagnostic curve warnings when supplied by Stan response curves, quasi-geo outputs, BAU curves, or analyst-provided curve tables. BAU anchor-search-from-dependent remains logged as a future diagnostic-only idea rather than promoted into the core workflow. Validated with optimizer source and 37 optimizer/scenario-planner regression checks.
 - `rolling_latest_core_hierarchy_bau_rrate`

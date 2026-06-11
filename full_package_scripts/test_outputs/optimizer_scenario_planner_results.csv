@@ -24,6 +24,8 @@ optimizer aggregates direct geo/product-geo response curves to variable level,PA
 optimizer preserves explicit spend and support from response curves,PASS,""
 support-only response curves can be priced through CPM support_cost_map,PASS,""
 custom scenario plan accepts planned support units,PASS,""
+scenario planner separates support scaling from spend and unit-cost assumptions,PASS,""
+scenario planner reports flighting assumptions without silently reshaping curves,PASS,""
 optimizer enforces max_spend against explicit nonlinear spend curve,PASS,""
 optimizer enforces min_spend for zero-current launch channel when explicit spend curve is supplied,PASS,""
 optimizer errors clearly when actual-spend constraints leave no feasible candidate,PASS,""

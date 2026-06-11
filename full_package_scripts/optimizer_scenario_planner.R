@@ -109,6 +109,21 @@ opsp_curve_metadata_columns <- function() {
   )
 }
 
+opsp_combine_notes <- function(base, extra) {
+  base <- as.character(base)
+  extra <- as.character(extra)
+  n <- max(length(base), length(extra), 1L)
+  base <- rep(base, length.out = n)
+  extra <- rep(extra, length.out = n)
+  out <- base
+  has_base <- !is.na(base) & nzchar(trimws(base))
+  has_extra <- !is.na(extra) & nzchar(trimws(extra))
+  out[!has_base & has_extra] <- extra[!has_base & has_extra]
+  out[has_base & has_extra] <- paste(base[has_base & has_extra], extra[has_base & has_extra], sep = " | ")
+  out[!has_base & !has_extra] <- NA_character_
+  out
+}
+
 opsp_interp_curve_value <- function(table, variable_name, multiplier, value_col, fallback = NA_real_) {
   if (is.null(table) || !nrow(table) || !(value_col %in% names(table))) return(fallback)
   vv <- as.character(variable_name)[1]
@@ -834,6 +849,185 @@ opsp_multiplier_for_support <- function(engine, variable, target_support) {
   if (is.finite(current_support) && current_support > 1e-8) target_support / current_support else NA_real_
 }
 
+opsp_scenario_plan_overrides <- function(scenario_plan, engine, vars) {
+  sp <- opsp_as_dt(scenario_plan, "scenario_plan")
+  vars <- as.character(vars)
+  if (!nrow(sp)) return(data.table::data.table())
+  if (!"variable" %in% names(sp)) stop("scenario_plan must include variable.", call. = FALSE)
+  if (!"scenario" %in% names(sp)) sp[, scenario := "custom_scenario"]
+  sp[, `:=`(scenario = as.character(scenario), variable = as.character(variable))]
+  sp <- sp[variable %in% vars]
+  if (!nrow(sp)) return(data.table::data.table())
+
+  spend_col <- opsp_pick_col(sp, c("spend", "recommended_spend", "planned_spend", "new_spend"))
+  support_col <- opsp_pick_col(sp, c("support", "recommended_support", "planned_support", "new_support",
+                                     "impressions", "planned_impressions", "grps", "planned_grps",
+                                     "rating_points", "planned_rating_points"))
+  effective_mult_col <- opsp_pick_col(sp, c("effective_support_multiplier", "effective_curve_multiplier",
+                                            "response_curve_multiplier", "curve_multiplier", "effective_multiplier"))
+  mult_col <- opsp_pick_col(sp, c("spend_multiplier", "support_multiplier", "multiplier"))
+  pct_col <- opsp_pick_col(sp, c("spend_delta_pct", "pct_change", "change_pct"))
+  delta_col <- opsp_pick_col(sp, c("spend_delta", "incremental_spend"))
+  support_pct_col <- opsp_pick_col(sp, c("support_delta_pct", "support_pct_change", "impressions_delta_pct", "grp_delta_pct"))
+  support_delta_col <- opsp_pick_col(sp, c("support_delta", "incremental_support", "impressions_delta", "grp_delta"))
+  cost_mult_col <- opsp_pick_col(sp, c("cost_multiplier", "unit_cost_multiplier", "spend_cost_multiplier",
+                                       "support_cost_multiplier", "cpm_multiplier", "cpp_multiplier"))
+  cost_per_support_col <- opsp_pick_col(sp, c("planned_cost_per_support", "cost_per_support", "spend_per_support",
+                                             "cost_per_unit", "unit_cost", "cpp", "cost_per_point",
+                                             "cost_per_grp", "cost_per_rating_point"))
+  cpm_col <- opsp_pick_col(sp, c("planned_cpm", "cpm", "cost_per_thousand", "cost_per_mille"))
+  flight_mult_col <- opsp_pick_col(sp, c("flighting_multiplier", "flighting_index", "flight_index"))
+  planned_active_col <- opsp_pick_col(sp, c("planned_active_periods", "planned_active_weeks",
+                                           "active_periods", "active_weeks", "planned_weeks_on",
+                                           "planned_flight_weeks"))
+  current_active_col <- opsp_pick_col(sp, c("current_active_periods", "historical_active_periods",
+                                           "current_active_weeks", "base_active_weeks"))
+  cost_note_col <- opsp_pick_col(sp, c("cost_assumption", "scenario_cost_assumption", "cost_note"))
+  flight_note_col <- opsp_pick_col(sp, c("flighting_assumption", "scenario_flighting_assumption", "flight_note"))
+
+  rows <- vector("list", nrow(sp))
+  for (i in seq_len(nrow(sp))) {
+    v <- sp$variable[i]
+    cur <- if (!is.null(engine$current_spend) && v %in% names(engine$current_spend)) engine$current_spend[[v]] else NA_real_
+    cur_support <- if (!is.null(engine$current_support) && v %in% names(engine$current_support)) engine$current_support[[v]] else NA_real_
+    planned_spend <- if (!is.na(spend_col)) opsp_num(sp[[spend_col]][i]) else NA_real_
+    planned_support <- if (!is.na(support_col)) opsp_num(sp[[support_col]][i]) else NA_real_
+    cost_multiplier <- if (!is.na(cost_mult_col)) opsp_num(sp[[cost_mult_col]][i]) else NA_real_
+    cost_per_support <- if (!is.na(cost_per_support_col)) opsp_num(sp[[cost_per_support_col]][i]) else NA_real_
+    cpm <- if (!is.na(cpm_col)) opsp_num(sp[[cpm_col]][i]) else NA_real_
+    if (!is.finite(cost_per_support) && is.finite(cpm)) cost_per_support <- cpm / 1000
+    flighting_multiplier <- if (!is.na(flight_mult_col)) opsp_num(sp[[flight_mult_col]][i]) else NA_real_
+    planned_active <- if (!is.na(planned_active_col)) opsp_num(sp[[planned_active_col]][i]) else NA_real_
+    current_active <- if (!is.na(current_active_col)) opsp_num(sp[[current_active_col]][i]) else NA_real_
+    val <- NA_real_
+    basis <- NA_character_
+    if (!is.na(effective_mult_col)) {
+      val <- opsp_num(sp[[effective_mult_col]][i])
+      if (is.finite(val)) basis <- effective_mult_col
+    }
+    if (!is.finite(val) && !is.na(mult_col)) {
+      val <- opsp_num(sp[[mult_col]][i])
+      if (is.finite(val)) basis <- mult_col
+    }
+    if (!is.finite(val) && is.finite(planned_support)) {
+      val <- opsp_multiplier_for_support(engine, v, planned_support)
+      if (is.finite(val)) basis <- support_col
+    }
+    if (!is.finite(val) && is.finite(planned_spend) && is.finite(cur) && cur > 0) {
+      val <- planned_spend / cur
+      if (is.finite(val)) basis <- spend_col
+    }
+    if (!is.finite(val) && !is.na(pct_col)) {
+      val <- 1 + opsp_num(sp[[pct_col]][i])
+      if (is.finite(val)) basis <- pct_col
+    }
+    if (!is.finite(val) && !is.na(delta_col) && is.finite(cur) && cur > 0) {
+      val <- 1 + opsp_num(sp[[delta_col]][i]) / cur
+      if (is.finite(val)) basis <- delta_col
+    }
+    if (!is.finite(val) && !is.na(support_pct_col)) {
+      val <- 1 + opsp_num(sp[[support_pct_col]][i])
+      if (is.finite(val)) basis <- support_pct_col
+    }
+    if (!is.finite(val) && !is.na(support_delta_col) && is.finite(cur_support) && cur_support > 0) {
+      val <- 1 + opsp_num(sp[[support_delta_col]][i]) / cur_support
+      if (is.finite(val)) basis <- support_delta_col
+    }
+    spend_override <- NA_real_
+    if (is.finite(planned_spend)) {
+      spend_override <- pmax(planned_spend, 0)
+    } else if (is.finite(planned_support) && is.finite(cost_per_support)) {
+      spend_override <- pmax(planned_support * cost_per_support, 0)
+    }
+    cost_note <- if (!is.na(cost_note_col)) as.character(sp[[cost_note_col]][i]) else NA_character_
+    if (!is.finite(spend_override) && is.finite(cost_multiplier)) {
+      cost_note <- opsp_combine_notes(cost_note, paste0("Scenario spend economics multiplied by ", signif(cost_multiplier, 4), " versus response-curve cost."))
+    } else if (is.finite(spend_override)) {
+      cost_note <- opsp_combine_notes(cost_note, "Scenario spend economics use supplied planned spend or supplied cost per support.")
+    }
+    flight_note <- if (!is.na(flight_note_col)) as.character(sp[[flight_note_col]][i]) else NA_character_
+    if (is.finite(flighting_multiplier) || is.finite(planned_active) || is.finite(current_active)) {
+      flight_note <- opsp_combine_notes(
+        flight_note,
+        "Flighting inputs are reported for audit. They do not reshape the response curve unless an effective curve multiplier is supplied."
+      )
+    }
+    rows[[i]] <- data.table::data.table(
+      scenario = sp$scenario[i],
+      variable = v,
+      spend_multiplier = if (is.finite(val)) pmax(val, 0) else 1,
+      scenario_input_basis = basis,
+      planned_spend_input = planned_spend,
+      planned_support_input = planned_support,
+      spend_override = spend_override,
+      support_override = if (is.finite(planned_support)) pmax(planned_support, 0) else NA_real_,
+      cost_multiplier = cost_multiplier,
+      cost_per_support_override = cost_per_support,
+      planned_active_periods = planned_active,
+      current_active_periods = current_active,
+      flighting_multiplier = flighting_multiplier,
+      scenario_cost_assumption = cost_note,
+      scenario_flighting_assumption = flight_note
+    )
+  }
+  out <- data.table::rbindlist(rows, fill = TRUE)
+  out <- out[is.finite(spend_multiplier)]
+  out[, .SD[.N], by = .(scenario, variable)][]
+}
+
+opsp_apply_scenario_overrides <- function(rows, overrides, value_per_kpi = NA_real_) {
+  rows <- data.table::copy(rows)
+  override_cols <- c(
+    "scenario_input_basis", "planned_spend_input", "planned_support_input",
+    "spend_override", "support_override", "cost_multiplier", "cost_per_support_override",
+    "planned_active_periods", "current_active_periods", "flighting_multiplier",
+    "scenario_cost_assumption", "scenario_flighting_assumption"
+  )
+  for (cc in override_cols) {
+    if (!cc %in% names(rows)) rows[, (cc) := if (grepl("assumption|basis", cc)) NA_character_ else NA_real_]
+  }
+  rows[, `:=`(spend_before_cost_override = spend, support_before_override = support)]
+  overrides <- opsp_as_dt(overrides, "scenario_overrides")
+  if (!nrow(overrides)) return(rows[])
+  rows[overrides, on = .(scenario, variable), `:=`(
+    scenario_input_basis = i.scenario_input_basis,
+    planned_spend_input = i.planned_spend_input,
+    planned_support_input = i.planned_support_input,
+    spend_override = i.spend_override,
+    support_override = i.support_override,
+    cost_multiplier = i.cost_multiplier,
+    cost_per_support_override = i.cost_per_support_override,
+    planned_active_periods = i.planned_active_periods,
+    current_active_periods = i.current_active_periods,
+    flighting_multiplier = i.flighting_multiplier,
+    scenario_cost_assumption = i.scenario_cost_assumption,
+    scenario_flighting_assumption = i.scenario_flighting_assumption
+  )]
+  rows[is.finite(support_override), support := support_override]
+  rows[is.finite(spend_override), spend := spend_override]
+  rows[!is.finite(spend_override) & is.finite(cost_multiplier) & is.finite(spend),
+       spend := spend * pmax(cost_multiplier, 0)]
+  rows[, effective_cost_per_support_override := data.table::fifelse(
+    is.finite(cost_per_support_override),
+    cost_per_support_override,
+    data.table::fifelse(is.finite(spend) & is.finite(support) & support > 1e-8, spend / support, NA_real_)
+  )]
+  rows[is.finite(cost_multiplier) & !is.finite(spend_override) & is.finite(incremental_spend_for_mroi),
+       incremental_spend_for_mroi := incremental_spend_for_mroi * pmax(cost_multiplier, 0)]
+  rows[is.finite(effective_cost_per_support_override) & is.finite(incremental_support_for_mroi),
+       incremental_spend_for_mroi := incremental_support_for_mroi * effective_cost_per_support_override]
+  rows[, `:=`(
+    roi = opsp_safe_div(contribution, spend),
+    mroi = opsp_safe_div(incremental_contribution_for_mroi, incremental_spend_for_mroi),
+    cost_per_kpi = ifelse(is.finite(contribution) & contribution > 1e-8, spend / contribution, NA_real_),
+    value_per_cost = ifelse(is.finite(value_per_kpi) & is.finite(spend) & abs(spend) > 1e-8,
+                            contribution * value_per_kpi / spend, NA_real_),
+    cost_assumption = opsp_combine_notes(cost_assumption, scenario_cost_assumption),
+    flighting_assumption = opsp_combine_notes(flighting_assumption, scenario_flighting_assumption)
+  )]
+  rows[]
+}
+
 opsp_eval_variable <- function(engine, variable, multiplier, step_pct = 0.01, value_per_kpi = NA_real_) {
   v <- as.character(variable)[1]
   m <- as.numeric(multiplier)[1]
@@ -852,6 +1046,8 @@ opsp_eval_variable <- function(engine, variable, multiplier, step_pct = 0.01, va
   up_spend <- opsp_spend_at(engine, v, m + step_pct)
   inc_spend <- up_spend - spend
   support <- opsp_support_at(engine, v, m)
+  up_support <- opsp_support_at(engine, v, m + step_pct)
+  inc_support <- up_support - support
   current_support <- if (!is.null(engine$current_support)) engine$current_support[[v]] else NA_real_
   source_table <- if (!is.null(engine$source_table)) engine$source_table else data.table::data.table()
   support_cost_per_unit <- opsp_interp_curve_value(source_table, v, m, "support_cost_per_unit", fallback = NA_real_)
@@ -888,7 +1084,8 @@ opsp_eval_variable <- function(engine, variable, multiplier, step_pct = 0.01, va
     incremental_contribution_for_mroi = inc,
     cost_per_kpi = ifelse(is.finite(contrib) && contrib > 1e-8, spend / contrib, NA_real_),
     value_per_cost = ifelse(is.finite(value_per_kpi) && is.finite(spend) && abs(spend) > 1e-8,
-                            contrib * value_per_kpi / spend, NA_real_)
+                            contrib * value_per_kpi / spend, NA_real_),
+    incremental_support_for_mroi = inc_support
   )
   cbind(out, meta)
 }
@@ -1028,7 +1225,8 @@ opsp_build_saturation_headroom <- function(response_curves,
 
 opsp_evaluate_scenario <- function(engine, multipliers, scenario_name,
                                    step_pct = 0.01,
-                                   value_per_kpi = NA_real_) {
+                                   value_per_kpi = NA_real_,
+                                   scenario_overrides = NULL) {
   vars <- engine$variables
   mult <- rep(1, length(vars))
   names(mult) <- vars
@@ -1048,12 +1246,18 @@ opsp_evaluate_scenario <- function(engine, multipliers, scenario_name,
   }), fill = TRUE)
   rows[, scenario := scenario_name]
   rows[, spend_multiplier := as.numeric(mult[variable])]
+  rows <- opsp_apply_scenario_overrides(rows, scenario_overrides, value_per_kpi = value_per_kpi)
   rows[, .(
     scenario, variable, spend_multiplier, spend, support, current_support, contribution,
     contribution_vs_current, roi, mroi, cost_per_kpi, value_per_cost,
+    spend_before_cost_override, support_before_override, scenario_input_basis,
+    planned_spend_input, planned_support_input, spend_override, support_override,
+    cost_multiplier, cost_per_support_override, planned_active_periods,
+    current_active_periods, flighting_multiplier,
     curve_evidence_level, curve_evidence_score, curve_confidence_band,
     curve_recommended_use, curve_source, curve_type, response_curve_basis,
-    uncertainty_note, flighting_assumption, cost_assumption
+    uncertainty_note, flighting_assumption, cost_assumption,
+    scenario_cost_assumption, scenario_flighting_assumption
   )]
 }
 
@@ -1072,40 +1276,15 @@ opsp_scenario_tables <- function(engine,
     )
   }
   if (!is.null(scenario_plan) && nrow(opsp_as_dt(scenario_plan))) {
-    sp <- opsp_as_dt(scenario_plan, "scenario_plan")
-    if (!"variable" %in% names(sp)) stop("scenario_plan must include variable.", call. = FALSE)
-    if (!"scenario" %in% names(sp)) sp[, scenario := "custom_scenario"]
-    spend_col <- opsp_pick_col(sp, c("spend", "recommended_spend", "planned_spend", "new_spend"))
-    support_col <- opsp_pick_col(sp, c("support", "recommended_support", "planned_support", "new_support",
-                                       "impressions", "planned_impressions", "grps", "planned_grps",
-                                       "rating_points", "planned_rating_points"))
-    mult_col <- opsp_pick_col(sp, c("spend_multiplier", "support_multiplier", "multiplier"))
-    pct_col <- opsp_pick_col(sp, c("spend_delta_pct", "pct_change", "change_pct"))
-    delta_col <- opsp_pick_col(sp, c("spend_delta", "incremental_spend"))
-    support_pct_col <- opsp_pick_col(sp, c("support_delta_pct", "support_pct_change", "impressions_delta_pct", "grp_delta_pct"))
-    support_delta_col <- opsp_pick_col(sp, c("support_delta", "incremental_support", "impressions_delta", "grp_delta"))
-    sp[, variable := as.character(variable)]
-    for (sc in unique(sp$scenario)) {
+    sp_overrides <- opsp_scenario_plan_overrides(scenario_plan, engine = engine, vars = engine$variables)
+    for (sc in unique(sp_overrides$scenario)) {
       mult <- stats::setNames(rep(1, length(engine$variables)), engine$variables)
-      tmp <- sp[scenario == sc]
-      for (i in seq_len(nrow(tmp))) {
-        v <- tmp$variable[i]
-        if (!(v %in% names(mult))) next
-        cur <- engine$current_spend[[v]]
-        cur_support <- if (!is.null(engine$current_support) && v %in% names(engine$current_support)) engine$current_support[[v]] else NA_real_
-        val <- NA_real_
-        if (!is.na(mult_col)) val <- opsp_num(tmp[[mult_col]][i])
-        if (!is.finite(val) && !is.na(support_col)) val <- opsp_multiplier_for_support(engine, v, opsp_num(tmp[[support_col]][i]))
-        if (!is.finite(val) && !is.na(spend_col) && is.finite(cur) && cur > 0) val <- opsp_num(tmp[[spend_col]][i]) / cur
-        if (!is.finite(val) && !is.na(pct_col)) val <- 1 + opsp_num(tmp[[pct_col]][i])
-        if (!is.finite(val) && !is.na(delta_col) && is.finite(cur) && cur > 0) val <- 1 + opsp_num(tmp[[delta_col]][i]) / cur
-        if (!is.finite(val) && !is.na(support_pct_col)) val <- 1 + opsp_num(tmp[[support_pct_col]][i])
-        if (!is.finite(val) && !is.na(support_delta_col) && is.finite(cur_support) && cur_support > 0) val <- 1 + opsp_num(tmp[[support_delta_col]][i]) / cur_support
-        if (is.finite(val)) mult[v] <- pmax(val, 0)
-      }
+      tmp <- sp_overrides[scenario == sc]
+      mult[tmp$variable] <- tmp$spend_multiplier
       idx <- idx + 1L
       rows[[idx]] <- opsp_evaluate_scenario(engine, mult, as.character(sc),
-                                            step_pct = step_pct, value_per_kpi = value_per_kpi)
+                                            step_pct = step_pct, value_per_kpi = value_per_kpi,
+                                            scenario_overrides = tmp)
     }
   }
   detail <- data.table::rbindlist(rows, fill = TRUE)
@@ -1182,60 +1361,38 @@ opsp_make_multiplier_sets <- function(vars,
     )
   }
   if (!is.null(scenario_plan) && nrow(opsp_as_dt(scenario_plan))) {
-    sp <- opsp_as_dt(scenario_plan, "scenario_plan")
-    if ("variable" %in% names(sp)) {
-      if (!"scenario" %in% names(sp)) sp[, scenario := "custom_scenario"]
-      spend_col <- opsp_pick_col(sp, c("spend", "recommended_spend", "planned_spend", "new_spend"))
-      support_col <- opsp_pick_col(sp, c("support", "recommended_support", "planned_support", "new_support",
-                                         "impressions", "planned_impressions", "grps", "planned_grps",
-                                         "rating_points", "planned_rating_points"))
-      mult_col <- opsp_pick_col(sp, c("spend_multiplier", "support_multiplier", "multiplier"))
-      pct_col <- opsp_pick_col(sp, c("spend_delta_pct", "pct_change", "change_pct"))
-      delta_col <- opsp_pick_col(sp, c("spend_delta", "incremental_spend"))
-      support_pct_col <- opsp_pick_col(sp, c("support_delta_pct", "support_pct_change", "impressions_delta_pct", "grp_delta_pct"))
-      support_delta_col <- opsp_pick_col(sp, c("support_delta", "incremental_support", "impressions_delta", "grp_delta"))
-      sp[, variable := as.character(variable)]
-      for (sc in unique(sp$scenario)) {
+    sp_overrides <- if (!is.null(engine)) {
+      opsp_scenario_plan_overrides(scenario_plan, engine = engine, vars = vars)
+    } else {
+      data.table::data.table()
+    }
+    if (nrow(sp_overrides)) {
+      for (sc in unique(sp_overrides$scenario)) {
         mult <- stats::setNames(rep(1, length(vars)), vars)
-        tmp <- sp[scenario == sc]
-        for (i in seq_len(nrow(tmp))) {
-          v <- tmp$variable[i]
-          if (!(v %in% names(mult))) next
-          val <- NA_real_
-          if (!is.na(mult_col)) val <- opsp_num(tmp[[mult_col]][i])
-          if (!is.finite(val) && !is.na(support_col) && !is.null(engine)) val <- opsp_multiplier_for_support(engine, v, opsp_num(tmp[[support_col]][i]))
-          if (!is.finite(val) && !is.na(pct_col)) val <- 1 + opsp_num(tmp[[pct_col]][i])
-          if (!is.finite(val) && !is.na(spend_col)) {
-            cur_spend <- if ("current_spend" %in% names(tmp)) opsp_num(tmp$current_spend[i]) else NA_real_
-            if ((!is.finite(cur_spend) || cur_spend <= 0) && !is.null(engine) && !is.null(engine$current_spend) && v %in% names(engine$current_spend)) {
-              cur_spend <- engine$current_spend[[v]]
-            }
-            if (is.finite(cur_spend) && cur_spend > 0) val <- opsp_num(tmp[[spend_col]][i]) / cur_spend
-          }
-          if (!is.finite(val) && !is.na(delta_col)) {
-            cur_spend <- if ("current_spend" %in% names(tmp)) opsp_num(tmp$current_spend[i]) else NA_real_
-            if ((!is.finite(cur_spend) || cur_spend <= 0) && !is.null(engine) && !is.null(engine$current_spend) && v %in% names(engine$current_spend)) {
-              cur_spend <- engine$current_spend[[v]]
-            }
-            if (is.finite(cur_spend) && cur_spend > 0) val <- 1 + opsp_num(tmp[[delta_col]][i]) / cur_spend
-          }
-          if (!is.finite(val) && !is.na(support_pct_col)) val <- 1 + opsp_num(tmp[[support_pct_col]][i])
-          if (!is.finite(val) && !is.na(support_delta_col)) {
-            cur_support <- if ("current_support" %in% names(tmp)) opsp_num(tmp$current_support[i]) else NA_real_
-            if ((!is.finite(cur_support) || cur_support <= 0) && !is.null(engine) && !is.null(engine$current_support) && v %in% names(engine$current_support)) {
-              cur_support <- engine$current_support[[v]]
-            }
-            if (is.finite(cur_support) && cur_support > 0) val <- 1 + opsp_num(tmp[[support_delta_col]][i]) / cur_support
-          }
-          if (is.finite(val)) mult[v] <- pmax(val, 0)
-        }
+        tmp <- sp_overrides[scenario == sc]
+        mult[tmp$variable] <- tmp$spend_multiplier
         idx <- idx + 1L
-        rows[[idx]] <- data.table::data.table(
+        scenario_rows <- data.table::data.table(
           scenario = as.character(sc),
           variable = vars,
           spend_multiplier = as.numeric(mult[vars]),
           scenario_type = "scenario"
         )
+        scenario_rows[tmp, on = .(scenario, variable), `:=`(
+          scenario_input_basis = i.scenario_input_basis,
+          planned_spend_input = i.planned_spend_input,
+          planned_support_input = i.planned_support_input,
+          spend_override = i.spend_override,
+          support_override = i.support_override,
+          cost_multiplier = i.cost_multiplier,
+          cost_per_support_override = i.cost_per_support_override,
+          planned_active_periods = i.planned_active_periods,
+          current_active_periods = i.current_active_periods,
+          flighting_multiplier = i.flighting_multiplier,
+          scenario_cost_assumption = i.scenario_cost_assumption,
+          scenario_flighting_assumption = i.scenario_flighting_assumption
+        )]
+        rows[[idx]] <- scenario_rows
       }
     }
   }
@@ -1255,7 +1412,13 @@ opsp_make_multiplier_sets <- function(vars,
   out[variable %in% vars & is.finite(spend_multiplier)]
 }
 
-opsp_eval_draw_curve_variable <- function(draw_curves, draw_id, variable, multiplier, step_pct = 0.01, value_per_kpi = NA_real_) {
+opsp_eval_draw_curve_variable <- function(draw_curves, draw_id, variable, multiplier,
+                                          step_pct = 0.01,
+                                          value_per_kpi = NA_real_,
+                                          spend_override = NA_real_,
+                                          support_override = NA_real_,
+                                          cost_multiplier = NA_real_,
+                                          cost_per_support_override = NA_real_) {
   tbl <- draw_curves[.draw == as.character(draw_id)]
   v <- as.character(variable)[1]
   m <- as.numeric(multiplier)[1]
@@ -1266,8 +1429,32 @@ opsp_eval_draw_curve_variable <- function(draw_curves, draw_id, variable, multip
   current_spend <- opsp_interp_curve_value(tbl, v, 1, "spend")
   up_spend <- opsp_interp_curve_value(tbl, v, m + step_pct, "spend")
   support <- opsp_interp_curve_value(tbl, v, m, "support")
+  up_support <- opsp_interp_curve_value(tbl, v, m + step_pct, "support")
+  spend_override <- opsp_num(spend_override)[1]
+  support_override <- opsp_num(support_override)[1]
+  cost_multiplier <- opsp_num(cost_multiplier)[1]
+  cost_per_support_override <- opsp_num(cost_per_support_override)[1]
+  if (!is.finite(cost_per_support_override) &&
+      is.finite(spend_override) && is.finite(support_override) && support_override > 1e-8) {
+    cost_per_support_override <- spend_override / support_override
+  }
+  if (is.finite(support_override)) support <- support_override
+  if (is.finite(spend_override)) {
+    spend <- spend_override
+  } else if (is.finite(cost_multiplier)) {
+    spend <- spend * pmax(cost_multiplier, 0)
+    up_spend <- up_spend * pmax(cost_multiplier, 0)
+  } else if (is.finite(cost_per_support_override) && is.finite(support)) {
+    spend <- support * cost_per_support_override
+    if (is.finite(up_support)) up_spend <- up_support * cost_per_support_override
+  }
   inc <- up - contrib
-  inc_spend <- up_spend - spend
+  inc_support <- up_support - support
+  inc_spend <- if (is.finite(cost_per_support_override) && is.finite(inc_support)) {
+    inc_support * cost_per_support_override
+  } else {
+    up_spend - spend
+  }
   spend_vs_current <- spend - current_spend
   incremental_contribution <- contrib - current_contrib
   profit <- ifelse(is.finite(value_per_kpi) && is.finite(contrib) && is.finite(spend),
@@ -1405,7 +1592,11 @@ opsp_build_uncertainty_tables <- function(draw_curves,
         variable = multiplier_sets$variable[i],
         multiplier = multiplier_sets$spend_multiplier[i],
         step_pct = step_pct,
-        value_per_kpi = value_per_kpi
+        value_per_kpi = value_per_kpi,
+        spend_override = if ("spend_override" %in% names(multiplier_sets)) multiplier_sets$spend_override[i] else NA_real_,
+        support_override = if ("support_override" %in% names(multiplier_sets)) multiplier_sets$support_override[i] else NA_real_,
+        cost_multiplier = if ("cost_multiplier" %in% names(multiplier_sets)) multiplier_sets$cost_multiplier[i] else NA_real_,
+        cost_per_support_override = if ("cost_per_support_override" %in% names(multiplier_sets)) multiplier_sets$cost_per_support_override[i] else NA_real_
       )
       z[, `:=`(
         scenario = multiplier_sets$scenario[i],

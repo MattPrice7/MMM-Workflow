@@ -160,7 +160,7 @@ Done:
 - [x] Add robust optimizer objective support for expected profit, custom-quantile incremental contribution, custom-quantile incremental ROI, custom-quantile profit, probability profit positive, and probability incremental contribution positive.
 - [x] Add optimizer outputs into deck builder charts.
 - [x] Add curve confidence/evidence labels into optimizer outputs when supplied by Stan response-curve draws, quasi-geo evidence, or analyst-provided curve metadata.
-- [ ] Add future flighting and cost assumptions to optimizer scenarios, so planning can distinguish scaling historical support, changing cost per support unit, and changing flight timing.
+- [x] Add future flighting and cost assumptions to optimizer scenarios, so planning can distinguish scaling historical support, changing cost per support unit, and changing flight timing.
 
 ## 3.1 Meridian / Core Method Gaps
 
