@@ -1237,6 +1237,104 @@ normalize_hierarchy_key <- function(x) {
   x
 }
 
+parse_hierarchy_part_indices <- function(x, index_base = c("one", "zero")) {
+  index_base <- match.arg(index_base)
+  raw <- trimws(as.character(x %||% ""))
+  if (is.na(raw) || !nzchar(raw)) return(integer())
+  toks <- unlist(strsplit(raw, "[,;| ]+", perl = TRUE), use.names = FALSE)
+  toks <- trimws(toks)
+  toks <- toks[nzchar(toks)]
+  idx <- suppressWarnings(as.integer(toks))
+  if (!length(idx) || anyNA(idx)) {
+    stop("hierarchy_part_indices must be integer positions such as '3' or '1,3'. ",
+         "Use R-style one-based positions by default, e.g. 1 = first part, 2 = second part, 3 = third part.",
+         call. = FALSE)
+  }
+  if (any(idx < 0L)) stop("hierarchy_part_indices cannot contain negative positions.", call. = FALSE)
+  if (identical(index_base, "zero")) idx <- idx + 1L
+  if (identical(index_base, "one") && any(idx < 1L)) {
+    stop("hierarchy_part_indices must be >= 1 when hierarchy index base is 'one'.", call. = FALSE)
+  }
+  unique(idx)
+}
+
+split_model_id_parts_hier_mmm <- function(x) {
+  x <- trimws(as.character(x %||% ""))
+  if (is.na(x) || !nzchar(x)) return(character())
+  parts <- unlist(strsplit(x, "[_|/:;]+", perl = TRUE), use.names = FALSE)
+  parts <- trimws(parts)
+  parts[nzchar(parts)]
+}
+
+build_coef_hierarchy_key_map <- function(group_lookup,
+                                         variable_lookup,
+                                         hierarchy_part_indices = NULL,
+                                         hierarchy_index_base = c("one", "zero")) {
+  hierarchy_index_base <- match.arg(hierarchy_index_base)
+  keyed <- variable_lookup[coef_hierarchy_scope == "keyed" & coef_hierarchy_scale > 0]
+  if (!nrow(keyed)) {
+    out_groups <- copy(group_lookup)
+    out_groups[, coef_hierarchy_key_value := "GLOBAL"]
+    return(list(
+      key_lookup = data.table(coef_hierarchy_key_id = 1L, coef_hierarchy_key_value = "GLOBAL"),
+      group_key_id = rep(1L, nrow(group_lookup)),
+      group_lookup = out_groups,
+      active = FALSE,
+      part_indices = integer(),
+      note = "No active keyed coefficient hierarchy requested."
+    ))
+  }
+  if (!is.null(hierarchy_part_indices) && length(hierarchy_part_indices)) {
+    idx_values <- paste(as.character(hierarchy_part_indices), collapse = ",")
+  } else {
+    idx_values <- unique(na.omit(trimws(as.character(keyed$hierarchy_part_indices))))
+    idx_values <- idx_values[nzchar(idx_values)]
+  }
+  if (!length(idx_values)) {
+    stop("coef_hierarchy_scope = 'keyed' requires one-time coef_hierarchy_part_indices or metadata hierarchy_part_indices so Stan can map groups to pooling families. ",
+         "Example with one-based indexing: coef_hierarchy_part_indices = 3 pools groups sharing the third group/model-id part.",
+         call. = FALSE)
+  }
+  if (length(idx_values) > 1L) {
+    stop("Only one active keyed hierarchy definition is supported per model run. Conflicting hierarchy_part_indices: ",
+         paste(idx_values, collapse = ", "), call. = FALSE)
+  }
+  part_idx <- parse_hierarchy_part_indices(idx_values[1], index_base = hierarchy_index_base)
+  group_values <- as.character(group_lookup$group_value)
+  labels <- vapply(group_values, function(gv) {
+    parts <- split_model_id_parts_hier_mmm(gv)
+    if (!length(parts) || max(part_idx) > length(parts)) {
+      stop("Could not derive keyed hierarchy family from group value '", gv,
+           "' using hierarchy_part_indices = '", idx_values[1],
+           "'. Group IDs must contain enough separator-delimited parts, e.g. product_dma_retailer.",
+           call. = FALSE)
+    }
+    paste(parts[part_idx], collapse = "|")
+  }, character(1))
+  key_lookup <- data.table(coef_hierarchy_key_value = unique(labels))
+  key_lookup[, coef_hierarchy_key_id := .I]
+  setcolorder(key_lookup, c("coef_hierarchy_key_id", "coef_hierarchy_key_value"))
+  group_key_id <- match(labels, key_lookup$coef_hierarchy_key_value)
+  out_groups <- copy(group_lookup)
+  out_groups[, `:=`(
+    coef_hierarchy_key_id = as.integer(group_key_id),
+    coef_hierarchy_key_value = labels
+  )]
+  list(
+    key_lookup = key_lookup[],
+    group_key_id = as.integer(group_key_id),
+    group_lookup = out_groups[],
+    active = TRUE,
+    part_indices = part_idx,
+    note = paste0(
+      "Active keyed coefficient hierarchy using ",
+      hierarchy_index_base,
+      "-based group/model-id part index(es): ",
+      idx_values[1]
+    )
+  )
+}
+
 inv_logit_bounded <- function(x, lower, upper, eps = 1e-6) {
   p <- (x - lower) / (upper - lower)
   p <- pmin(pmax(p, eps), 1 - eps)
@@ -1491,7 +1589,7 @@ clean_metadata <- function(meta_input,
   dt[coef_hierarchy_scope == "none", coef_hierarchy_scale := 0]
   dt[, hierarchy_note := data.table::fifelse(
     coef_hierarchy_scope == "keyed",
-    "Keyed/family pooling metadata was supplied, but the current Stan backend supports one global group coefficient hierarchy. This variable is not globally pooled unless metadata is changed to auto/global.",
+    "Eligible for single-level keyed coefficient pooling when hierarchy_part_indices can map group/model IDs to pooling families.",
     data.table::fifelse(
       coef_hierarchy_scope == "none",
       "Group coefficient hierarchy disabled for this variable.",
@@ -2100,6 +2198,8 @@ prepare_stan_data_hier_mmm <- function(data,
                                        context_effects = NULL,
                                        context_log_multiplier_bound = 2,
                                        allow_time_context = FALSE,
+                                       coef_hierarchy_part_indices = NULL,
+                                       coef_hierarchy_index_base = c("one", "zero"),
                                        intercept_type = "fourier",
                                        ucm_spec = NULL,
                                        use_ucm_metadata = FALSE,
@@ -2135,6 +2235,7 @@ prepare_stan_data_hier_mmm <- function(data,
   curve_normalization_scope <- normalize_curve_normalization_scope_hier_mmm(match.arg(curve_normalization_scope))
   sample_curve_parameters <- match.arg(sample_curve_parameters)
   sample_coef_hierarchy <- match.arg(sample_coef_hierarchy)
+  coef_hierarchy_index_base <- match.arg(coef_hierarchy_index_base)
   coef_parameterization <- match.arg(coef_parameterization)
   alpha_parameterization <- match.arg(alpha_parameterization)
   ucm_parameterization <- match.arg(ucm_parameterization)
@@ -2577,11 +2678,21 @@ prepare_stan_data_hier_mmm <- function(data,
     idx <- match(vars, variable_lookup$variable)
     as.integer(variable_lookup$sample_coef_hierarchy_flag[idx] %||% 0L)
   }
+  block_hierarchy_mode <- function(vars) {
+    vars <- as.character(vars %||% character())
+    if (!length(vars)) return(integer())
+    idx <- match(vars, variable_lookup$variable)
+    mode <- as.integer(variable_lookup$coef_hierarchy_mode[idx] %||% 0L)
+    sample_flag <- as.integer(variable_lookup$sample_coef_hierarchy_flag[idx] %||% 0L)
+    mode[sample_flag != 1L] <- 0L
+    mode
+  }
   block_centered_hierarchy <- function(vars) {
     vars <- as.character(vars %||% character())
     if (!length(vars)) return(integer())
     idx <- match(vars, variable_lookup$variable)
     sample_flag <- as.integer(variable_lookup$sample_coef_hierarchy_flag[idx] %||% 0L)
+    mode <- as.integer(variable_lookup$coef_hierarchy_mode[idx] %||% 0L)
     centered <- integer(length(vars))
     if (coef_parameterization == "centered") {
       centered <- sample_flag
@@ -2596,6 +2707,7 @@ prepare_stan_data_hier_mmm <- function(data,
         min_group_train >= 24L
       centered <- as.integer(sample_flag == 1L & strong_group_signal)
     }
+    centered[mode == 2L] <- 0L
     as.integer(centered)
   }
   block_hier_positions <- function(vars) {
@@ -2683,27 +2795,41 @@ prepare_stan_data_hier_mmm <- function(data,
   )]
   variable_lookup[!is.finite(geo_variation_week_share) | is.na(geo_variation_week_share), geo_variation_week_share := 0]
   variable_lookup[!is.finite(geo_variation_median_cv) | is.na(geo_variation_median_cv), geo_variation_median_cv := 0]
+  coef_hierarchy_key <- build_coef_hierarchy_key_map(
+    group_lookup = group_lookup,
+    variable_lookup = variable_lookup,
+    hierarchy_part_indices = coef_hierarchy_part_indices,
+    hierarchy_index_base = coef_hierarchy_index_base
+  )
+  group_lookup <- coef_hierarchy_key$group_lookup
+  variable_lookup[, coef_hierarchy_mode := fifelse(
+    coef_hierarchy_scope == "keyed", 2L,
+    fifelse(coef_hierarchy_scope %in% c("auto", "global"), 1L, 0L)
+  )]
   variable_lookup[, hierarchy_blocker_reason := NA_character_]
   variable_lookup[coef_hierarchy_scope == "none", hierarchy_blocker_reason := "coef_hierarchy_scope_none"]
-  variable_lookup[coef_hierarchy_scope == "keyed", hierarchy_blocker_reason := "keyed_hierarchy_metadata_only_current_stan_global_hierarchy"]
   variable_lookup[, sample_coef_hierarchy_flag := {
-    eligible_scope <- coef_hierarchy_scope %in% c("auto", "global") & coef_hierarchy_scale > 0
+    eligible_scope <- coef_hierarchy_scope %in% c("auto", "global", "keyed") & coef_hierarchy_scale > 0
     if (sample_coef_hierarchy == "always") {
       as.integer(nrow(group_lookup) > 1L & eligible_scope)
     } else if (sample_coef_hierarchy == "never") {
       0L
     } else {
       global_flag <- coef_hierarchy_scope == "global" & nrow(group_lookup) > 1L & eligible_scope
+      keyed_flag <- coef_hierarchy_scope == "keyed" & nrow(group_lookup) > 1L & eligible_scope
       auto_flag <- (
         nrow(group_lookup) > 1L &
           nrow(group_lookup) >= coef_hierarchy_auto_min_groups &
           coef_hierarchy_scale >= coef_hierarchy_auto_min_scale &
           geo_variation_week_share >= coef_hierarchy_auto_min_geo_variation_share &
-          eligible_scope
+          eligible_scope &
+          coef_hierarchy_scope == "auto"
       )
-      as.integer(global_flag | auto_flag)
+      as.integer(global_flag | keyed_flag | auto_flag)
     }
   }]
+  variable_lookup[sample_coef_hierarchy_flag == 0L & is.na(hierarchy_blocker_reason) & coef_hierarchy_scope == "keyed",
+                  hierarchy_blocker_reason := "keyed_hierarchy_inactive_by_sample_coef_hierarchy_or_group_count"]
   variable_lookup[sample_coef_hierarchy_flag == 0L & is.na(hierarchy_blocker_reason) & coef_hierarchy_scale <= 0,
                   hierarchy_blocker_reason := "coef_hierarchy_scale_zero"]
   variable_lookup[sample_coef_hierarchy_flag == 0L & is.na(hierarchy_blocker_reason) &
@@ -2742,6 +2868,8 @@ prepare_stan_data_hier_mmm <- function(data,
     group_id = as.integer(dt$group_idx),
     start_idx = as.integer(ranges$start_idx),
     end_idx = as.integer(ranges$end_idx),
+    K_coef_hierarchy_keys = nrow(coef_hierarchy_key$key_lookup),
+    group_coef_hierarchy_key_id = as.integer(coef_hierarchy_key$group_key_id),
     N_state_innov = if (intercept_spec$use_level == 1L) nrow(dt) - nrow(ranges) else 0L,
 
     has_curve = as.integer(variable_lookup$has_curve),
@@ -2841,6 +2969,7 @@ prepare_stan_data_hier_mmm <- function(data,
     coef_sd_pos_log = if (length(pos_idx)) pmax(comp$pos$sdlog, 0.05) else numeric(),
     tau_scale_pos = if (length(pos_idx)) comp$pos$tau_scale else numeric(),
     sample_pos_hierarchy = block_sample_hierarchy(comp$pos$dt$variable),
+    coef_hierarchy_mode_pos = block_hierarchy_mode(comp$pos$dt$variable),
     coef_centered_pos = block_centered_hierarchy(comp$pos$dt$variable),
     J_pos_hier = length(block_hier_positions(comp$pos$dt$variable)),
     pos_hier_pos = block_hier_positions(comp$pos$dt$variable),
@@ -2849,6 +2978,7 @@ prepare_stan_data_hier_mmm <- function(data,
     coef_sd_neg_log = if (length(neg_idx)) pmax(comp$neg$sdlog, 0.05) else numeric(),
     tau_scale_neg = if (length(neg_idx)) comp$neg$tau_scale else numeric(),
     sample_neg_hierarchy = block_sample_hierarchy(comp$neg$dt$variable),
+    coef_hierarchy_mode_neg = block_hierarchy_mode(comp$neg$dt$variable),
     coef_centered_neg = block_centered_hierarchy(comp$neg$dt$variable),
     J_neg_hier = length(block_hier_positions(comp$neg$dt$variable)),
     neg_hier_pos = block_hier_positions(comp$neg$dt$variable),
@@ -2857,6 +2987,7 @@ prepare_stan_data_hier_mmm <- function(data,
     coef_sd_lower_log = if (length(lower_idx)) pmax(comp$lower$sdlog, 0.05) else numeric(),
     tau_scale_lower = if (length(lower_idx)) comp$lower$tau_scale else numeric(),
     sample_lower_hierarchy = block_sample_hierarchy(comp$lower$dt$variable),
+    coef_hierarchy_mode_lower = block_hierarchy_mode(comp$lower$dt$variable),
     coef_centered_lower = block_centered_hierarchy(comp$lower$dt$variable),
     J_lower_hier = length(block_hier_positions(comp$lower$dt$variable)),
     lower_hier_pos = block_hier_positions(comp$lower$dt$variable),
@@ -2865,6 +2996,7 @@ prepare_stan_data_hier_mmm <- function(data,
     coef_sd_upper_log = if (length(upper_idx)) pmax(comp$upper$sdlog, 0.05) else numeric(),
     tau_scale_upper = if (length(upper_idx)) comp$upper$tau_scale else numeric(),
     sample_upper_hierarchy = block_sample_hierarchy(comp$upper$dt$variable),
+    coef_hierarchy_mode_upper = block_hierarchy_mode(comp$upper$dt$variable),
     coef_centered_upper = block_centered_hierarchy(comp$upper$dt$variable),
     J_upper_hier = length(block_hier_positions(comp$upper$dt$variable)),
     upper_hier_pos = block_hier_positions(comp$upper$dt$variable),
@@ -2873,6 +3005,7 @@ prepare_stan_data_hier_mmm <- function(data,
     coef_raw_sd_bounded = if (length(bounded_idx)) pmax(comp$bounded$raw_sd, 0.05) else numeric(),
     tau_scale_bounded = if (length(bounded_idx)) comp$bounded$tau_scale else numeric(),
     sample_bounded_hierarchy = block_sample_hierarchy(comp$bounded$dt$variable),
+    coef_hierarchy_mode_bounded = block_hierarchy_mode(comp$bounded$dt$variable),
     coef_centered_bounded = block_centered_hierarchy(comp$bounded$dt$variable),
     J_bounded_hier = length(block_hier_positions(comp$bounded$dt$variable)),
     bounded_hier_pos = block_hier_positions(comp$bounded$dt$variable),
@@ -2881,6 +3014,7 @@ prepare_stan_data_hier_mmm <- function(data,
     coef_sd_free = if (length(free_idx)) pmax(comp$free$sd, 0.05) else numeric(),
     tau_scale_free = if (length(free_idx)) comp$free$tau_scale else numeric(),
     sample_free_hierarchy = block_sample_hierarchy(comp$free$dt$variable),
+    coef_hierarchy_mode_free = block_hierarchy_mode(comp$free$dt$variable),
     coef_centered_free = block_centered_hierarchy(comp$free$dt$variable),
     J_free_hier = length(block_hier_positions(comp$free$dt$variable)),
     free_hier_pos = block_hier_positions(comp$free$dt$variable),
@@ -2893,6 +3027,10 @@ prepare_stan_data_hier_mmm <- function(data,
   # Prep-level Stan data contract checks catch mapping/dimension failures before compile/sampling.
   if (length(stan_data$group_id) != stan_data$N) stop("Internal error: group_id length does not equal N.")
   if (length(stan_data$is_train) != stan_data$N) stop("Internal error: is_train length does not equal N.")
+  if (length(stan_data$group_coef_hierarchy_key_id) != stan_data$G) stop("Internal error: group_coef_hierarchy_key_id length does not equal G.")
+  if (anyNA(stan_data$group_coef_hierarchy_key_id) || any(stan_data$group_coef_hierarchy_key_id < 1L | stan_data$group_coef_hierarchy_key_id > stan_data$K_coef_hierarchy_keys)) {
+    stop("Internal error: invalid group_coef_hierarchy_key_id mapping.")
+  }
   if (nrow(stan_data$X) != stan_data$N || ncol(stan_data$X) != stan_data$J) stop("Internal error: X dimensions do not match N/J.")
   if (nrow(stan_data$X_center_mean) != stan_data$G || ncol(stan_data$X_center_mean) != stan_data$J) stop("Internal error: X_center_mean dimensions do not match G/J.")
   if (nrow(stan_data$Z_extra) != stan_data$N || ncol(stan_data$Z_extra) != stan_data$K_extra) stop("Internal error: Z_extra dimensions do not match N/K_extra.")
@@ -2919,6 +3057,12 @@ prepare_stan_data_hier_mmm <- function(data,
   if (length(stan_data$coef_centered_upper) != stan_data$J_upper) stop("Internal error: coef_centered_upper length does not match J_upper.")
   if (length(stan_data$coef_centered_bounded) != stan_data$J_bounded) stop("Internal error: coef_centered_bounded length does not match J_bounded.")
   if (length(stan_data$coef_centered_free) != stan_data$J_free) stop("Internal error: coef_centered_free length does not match J_free.")
+  if (length(stan_data$coef_hierarchy_mode_pos) != stan_data$J_pos) stop("Internal error: coef_hierarchy_mode_pos length does not match J_pos.")
+  if (length(stan_data$coef_hierarchy_mode_neg) != stan_data$J_neg) stop("Internal error: coef_hierarchy_mode_neg length does not match J_neg.")
+  if (length(stan_data$coef_hierarchy_mode_lower) != stan_data$J_lower) stop("Internal error: coef_hierarchy_mode_lower length does not match J_lower.")
+  if (length(stan_data$coef_hierarchy_mode_upper) != stan_data$J_upper) stop("Internal error: coef_hierarchy_mode_upper length does not match J_upper.")
+  if (length(stan_data$coef_hierarchy_mode_bounded) != stan_data$J_bounded) stop("Internal error: coef_hierarchy_mode_bounded length does not match J_bounded.")
+  if (length(stan_data$coef_hierarchy_mode_free) != stan_data$J_free) stop("Internal error: coef_hierarchy_mode_free length does not match J_free.")
   if (length(stan_data$pos_hier_pos) != stan_data$J_pos_hier) stop("Internal error: pos_hier_pos length does not match J_pos_hier.")
   if (length(stan_data$neg_hier_pos) != stan_data$J_neg_hier) stop("Internal error: neg_hier_pos length does not match J_neg_hier.")
   if (length(stan_data$lower_hier_pos) != stan_data$J_lower_hier) stop("Internal error: lower_hier_pos length does not match J_lower_hier.")
@@ -2947,11 +3091,13 @@ prepare_stan_data_hier_mmm <- function(data,
       geo_variation_week_share, geo_variation_median_cv,
       coef_hierarchy_scale, coef_hierarchy_scope, hierarchy_key,
       model_id_parts, hierarchy_part_indices, hierarchy_note,
-      sample_coef_hierarchy_flag, hierarchy_blocker_reason
+      coef_hierarchy_mode, sample_coef_hierarchy_flag, hierarchy_blocker_reason
     )],
     variable_lookup = variable_lookup,
     context_effects = context_effect_audit,
     group_lookup = group_lookup,
+    coef_hierarchy_key_lookup = coef_hierarchy_key$key_lookup,
+    coef_hierarchy_key_note = coef_hierarchy_key$note,
     intercept_spec = intercept_spec$label,
     intercept_use_level = intercept_spec$use_level,
     intercept_use_season = intercept_spec$use_season,
@@ -2970,6 +3116,8 @@ prepare_stan_data_hier_mmm <- function(data,
     curve_normalization_scope = curve_normalization_scope,
     sample_curve_parameters = sample_curve_parameters,
     sample_coef_hierarchy = sample_coef_hierarchy,
+    coef_hierarchy_part_indices = coef_hierarchy_part_indices,
+    coef_hierarchy_index_base = coef_hierarchy_index_base,
     coef_parameterization = coef_parameterization,
     coef_hierarchy_auto_min_groups = coef_hierarchy_auto_min_groups,
     coef_hierarchy_auto_min_scale = coef_hierarchy_auto_min_scale,
@@ -3247,26 +3395,38 @@ build_ucm_warm_start_init <- function(prep,
 
     mu_log_pos = as.numeric(sd$coef_mu_pos_log),
     tau_pos = pmax(as.numeric(sd$tau_scale_pos[sd$pos_hier_pos]) * 0.25, 0.01),
+    tau_pos_key = pmax(as.numeric(sd$tau_scale_pos[sd$pos_hier_pos]) * 0.20, 0.01),
+    z_pos_key = matrix(0, nrow = sd$K_coef_hierarchy_keys, ncol = sd$J_pos_hier),
     z_pos = matrix(0, nrow = sd$G, ncol = sd$J_pos_hier),
 
     mu_log_neg = as.numeric(sd$coef_mu_neg_log),
     tau_neg = pmax(as.numeric(sd$tau_scale_neg[sd$neg_hier_pos]) * 0.25, 0.01),
+    tau_neg_key = pmax(as.numeric(sd$tau_scale_neg[sd$neg_hier_pos]) * 0.20, 0.01),
+    z_neg_key = matrix(0, nrow = sd$K_coef_hierarchy_keys, ncol = sd$J_neg_hier),
     z_neg = matrix(0, nrow = sd$G, ncol = sd$J_neg_hier),
 
     mu_log_lower = as.numeric(sd$coef_mu_lower_log),
     tau_lower = pmax(as.numeric(sd$tau_scale_lower[sd$lower_hier_pos]) * 0.25, 0.01),
+    tau_lower_key = pmax(as.numeric(sd$tau_scale_lower[sd$lower_hier_pos]) * 0.20, 0.01),
+    z_lower_key = matrix(0, nrow = sd$K_coef_hierarchy_keys, ncol = sd$J_lower_hier),
     z_lower = matrix(0, nrow = sd$G, ncol = sd$J_lower_hier),
 
     mu_log_upper = as.numeric(sd$coef_mu_upper_log),
     tau_upper = pmax(as.numeric(sd$tau_scale_upper[sd$upper_hier_pos]) * 0.25, 0.01),
+    tau_upper_key = pmax(as.numeric(sd$tau_scale_upper[sd$upper_hier_pos]) * 0.20, 0.01),
+    z_upper_key = matrix(0, nrow = sd$K_coef_hierarchy_keys, ncol = sd$J_upper_hier),
     z_upper = matrix(0, nrow = sd$G, ncol = sd$J_upper_hier),
 
     mu_raw_bounded = as.numeric(sd$coef_raw_mu_bounded),
     tau_bounded = pmax(as.numeric(sd$tau_scale_bounded[sd$bounded_hier_pos]) * 0.25, 0.01),
+    tau_bounded_key = pmax(as.numeric(sd$tau_scale_bounded[sd$bounded_hier_pos]) * 0.20, 0.01),
+    z_bounded_key = matrix(0, nrow = sd$K_coef_hierarchy_keys, ncol = sd$J_bounded_hier),
     z_bounded = matrix(0, nrow = sd$G, ncol = sd$J_bounded_hier),
 
     mu_free = as.numeric(sd$coef_mu_free),
     tau_free = pmax(as.numeric(sd$tau_scale_free[sd$free_hier_pos]) * 0.25, 0.01),
+    tau_free_key = pmax(as.numeric(sd$tau_scale_free[sd$free_hier_pos]) * 0.20, 0.01),
+    z_free_key = matrix(0, nrow = sd$K_coef_hierarchy_keys, ncol = sd$J_free_hier),
     z_free = matrix(0, nrow = sd$G, ncol = sd$J_free_hier),
 
     alpha_mu = level0_mu_init,
@@ -4497,6 +4657,8 @@ fit_hier_mmm_engine <- function(data,
                          context_effects = NULL,
                          context_log_multiplier_bound = 2,
                          allow_time_context = FALSE,
+                         coef_hierarchy_part_indices = NULL,
+                         coef_hierarchy_index_base = c("one", "zero"),
                          intercept_type = "fourier",
                          ucm_spec = list(
                            level = FALSE,
@@ -4564,6 +4726,7 @@ fit_hier_mmm_engine <- function(data,
   curve_normalization_scope <- normalize_curve_normalization_scope_hier_mmm(match.arg(curve_normalization_scope))
   sample_curve_parameters <- match.arg(sample_curve_parameters)
   sample_coef_hierarchy <- match.arg(sample_coef_hierarchy)
+  coef_hierarchy_index_base <- match.arg(coef_hierarchy_index_base)
   coef_parameterization <- match.arg(coef_parameterization)
   alpha_parameterization <- match.arg(alpha_parameterization)
   ucm_parameterization <- match.arg(ucm_parameterization)
@@ -4629,6 +4792,8 @@ fit_hier_mmm_engine <- function(data,
     context_effects = context_effects,
     context_log_multiplier_bound = context_log_multiplier_bound,
     allow_time_context = allow_time_context,
+    coef_hierarchy_part_indices = coef_hierarchy_part_indices,
+    coef_hierarchy_index_base = coef_hierarchy_index_base,
     intercept_type = intercept_type,
     ucm_spec = ucm_spec,
     use_ucm_metadata = use_ucm_metadata,
@@ -6274,6 +6439,8 @@ fit_hier_mmm <- function(data,
                          budget_optimizer_config = NULL,
                          context_effects = NULL,
                          allow_time_context = FALSE,
+                         coef_hierarchy_part_indices = NULL,
+                         coef_hierarchy_index_base = c("one", "zero"),
                          raw_output_data = NULL,
                          create_response_curves = TRUE,
                          create_response_curve_draws = FALSE,
@@ -6287,6 +6454,7 @@ fit_hier_mmm <- function(data,
                          ...) {
   dots <- list(...)
   response_curve_scope <- match.arg(response_curve_scope)
+  coef_hierarchy_index_base <- match.arg(coef_hierarchy_index_base)
   business_prior_update <- NULL
 
   if (!is.null(business_priors)) {
@@ -6317,6 +6485,8 @@ fit_hier_mmm <- function(data,
     entity_col = entity_col,
     context_effects = context_effects,
     allow_time_context = allow_time_context,
+    coef_hierarchy_part_indices = coef_hierarchy_part_indices,
+    coef_hierarchy_index_base = coef_hierarchy_index_base,
     holiday_config = holiday_config,
     output_dir = output_dir,
     output_prefix = output_prefix

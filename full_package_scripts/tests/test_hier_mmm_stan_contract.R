@@ -553,11 +553,39 @@ add_result("coef_hierarchy_scope none blocks group coefficient hierarchy even wh
            prep_scope_none$variable_lookup[variable == "tv", sample_coef_hierarchy_flag][1] == 0L &&
              prep_scope_none$metadata[variable == "tv", coef_hierarchy_scale][1] == 0 &&
              prep_scope_none$variable_lookup[variable == "tv", hierarchy_blocker_reason][1] == "coef_hierarchy_scope_none")
+keyed_missing_parts_error <- tryCatch({
+  prepare_stan_data_hier_mmm(
+    data = make_panel(groups = c("G1", "G2", "G3"), n = 20L),
+    metadata_input = {
+      z <- make_meta("tv")
+      z[, `:=`(coef_hierarchy_scope = "keyed", hierarchy_key = "snacks")]
+      z
+    },
+    dep_var_col = "y",
+    group_col = "geo",
+    time_col = "week",
+    entity_col = "entity",
+    intercept_type = "flat",
+    sample_coef_hierarchy = "always"
+  )
+  ""
+}, error = function(e) conditionMessage(e))
+add_result("keyed hierarchy requires group/model-id part indices",
+           grepl("requires one-time coef_hierarchy_part_indices", keyed_missing_parts_error, fixed = TRUE))
 prep_scope_keyed <- prepare_stan_data_hier_mmm(
-  data = make_panel(groups = c("G1", "G2", "G3"), n = 20L),
+  data = make_panel(groups = c(
+    "east_walmart_chips",
+    "east_target_chips",
+    "west_walmart_chips",
+    "east_walmart_pretzels",
+    "west_target_pretzels"
+  ), n = 20L),
   metadata_input = {
     z <- make_meta("tv")
-    z[, `:=`(coef_hierarchy_scope = "keyed", hierarchy_key = "snacks")]
+    z[, `:=`(
+      coef_hierarchy_scope = "keyed",
+      hierarchy_key = "product"
+    )]
     z
   },
   dep_var_col = "y",
@@ -565,13 +593,24 @@ prep_scope_keyed <- prepare_stan_data_hier_mmm(
   time_col = "week",
   entity_col = "entity",
   intercept_type = "flat",
-  sample_coef_hierarchy = "always"
+  sample_coef_hierarchy = "always",
+  coef_hierarchy_part_indices = 3
 )
-add_result("keyed hierarchy metadata is preserved but not silently treated as global pooling",
+add_result("keyed hierarchy maps group model-id parts into Stan pooling families",
            prep_scope_keyed$variable_lookup[variable == "tv", coef_hierarchy_scope][1] == "keyed" &&
-             prep_scope_keyed$variable_lookup[variable == "tv", hierarchy_key][1] == "snacks" &&
-             prep_scope_keyed$variable_lookup[variable == "tv", sample_coef_hierarchy_flag][1] == 0L &&
-             grepl("keyed_hierarchy", prep_scope_keyed$variable_lookup[variable == "tv", hierarchy_blocker_reason][1]))
+             prep_scope_keyed$variable_lookup[variable == "tv", coef_hierarchy_mode][1] == 2L &&
+             prep_scope_keyed$variable_lookup[variable == "tv", sample_coef_hierarchy_flag][1] == 1L &&
+             prep_scope_keyed$stan_data$K_coef_hierarchy_keys == 2L &&
+             all(sort(prep_scope_keyed$coef_hierarchy_key_lookup$coef_hierarchy_key_value) == c("chips", "pretzels")) &&
+             length(prep_scope_keyed$stan_data$group_coef_hierarchy_key_id) == prep_scope_keyed$stan_data$G &&
+             any(c(
+               prep_scope_keyed$stan_data$coef_hierarchy_mode_pos,
+               prep_scope_keyed$stan_data$coef_hierarchy_mode_neg,
+               prep_scope_keyed$stan_data$coef_hierarchy_mode_lower,
+               prep_scope_keyed$stan_data$coef_hierarchy_mode_upper,
+               prep_scope_keyed$stan_data$coef_hierarchy_mode_bounded,
+               prep_scope_keyed$stan_data$coef_hierarchy_mode_free
+             ) == 2L))
 prep_scope_global <- prepare_stan_data_hier_mmm(
   data = make_panel(groups = c("G1", "G2", "G3"), n = 20L),
   metadata_input = {

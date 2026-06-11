@@ -72,6 +72,8 @@ data {
   array[N] int<lower=1, upper=G> group_id;
   array[G] int<lower=1, upper=N> start_idx;
   array[G] int<lower=1, upper=N> end_idx;
+  int<lower=1> K_coef_hierarchy_keys;
+  array[G] int<lower=1, upper=K_coef_hierarchy_keys> group_coef_hierarchy_key_id;
   int<lower=0> N_state_innov;
 
   array[J] int<lower=0, upper=1> has_curve;
@@ -178,6 +180,7 @@ data {
   vector<lower=0>[J_pos] coef_sd_pos_log;
   vector<lower=0>[J_pos] tau_scale_pos;
   array[J_pos] int<lower=0, upper=1> sample_pos_hierarchy;
+  array[J_pos] int<lower=0, upper=2> coef_hierarchy_mode_pos; // 0 none, 1 global, 2 keyed family
   array[J_pos] int<lower=0, upper=1> coef_centered_pos;
   int<lower=0> J_pos_hier;
   array[J_pos_hier] int<lower=1, upper=J_pos> pos_hier_pos;
@@ -186,6 +189,7 @@ data {
   vector<lower=0>[J_neg] coef_sd_neg_log;
   vector<lower=0>[J_neg] tau_scale_neg;
   array[J_neg] int<lower=0, upper=1> sample_neg_hierarchy;
+  array[J_neg] int<lower=0, upper=2> coef_hierarchy_mode_neg;
   array[J_neg] int<lower=0, upper=1> coef_centered_neg;
   int<lower=0> J_neg_hier;
   array[J_neg_hier] int<lower=1, upper=J_neg> neg_hier_pos;
@@ -194,6 +198,7 @@ data {
   vector<lower=0>[J_lower] coef_sd_lower_log;
   vector<lower=0>[J_lower] tau_scale_lower;
   array[J_lower] int<lower=0, upper=1> sample_lower_hierarchy;
+  array[J_lower] int<lower=0, upper=2> coef_hierarchy_mode_lower;
   array[J_lower] int<lower=0, upper=1> coef_centered_lower;
   int<lower=0> J_lower_hier;
   array[J_lower_hier] int<lower=1, upper=J_lower> lower_hier_pos;
@@ -202,6 +207,7 @@ data {
   vector<lower=0>[J_upper] coef_sd_upper_log;
   vector<lower=0>[J_upper] tau_scale_upper;
   array[J_upper] int<lower=0, upper=1> sample_upper_hierarchy;
+  array[J_upper] int<lower=0, upper=2> coef_hierarchy_mode_upper;
   array[J_upper] int<lower=0, upper=1> coef_centered_upper;
   int<lower=0> J_upper_hier;
   array[J_upper_hier] int<lower=1, upper=J_upper> upper_hier_pos;
@@ -210,6 +216,7 @@ data {
   vector<lower=0>[J_bounded] coef_raw_sd_bounded;
   vector<lower=0>[J_bounded] tau_scale_bounded;
   array[J_bounded] int<lower=0, upper=1> sample_bounded_hierarchy;
+  array[J_bounded] int<lower=0, upper=2> coef_hierarchy_mode_bounded;
   array[J_bounded] int<lower=0, upper=1> coef_centered_bounded;
   int<lower=0> J_bounded_hier;
   array[J_bounded_hier] int<lower=1, upper=J_bounded> bounded_hier_pos;
@@ -218,6 +225,7 @@ data {
   vector<lower=0>[J_free] coef_sd_free;
   vector<lower=0>[J_free] tau_scale_free;
   array[J_free] int<lower=0, upper=1> sample_free_hierarchy;
+  array[J_free] int<lower=0, upper=2> coef_hierarchy_mode_free;
   array[J_free] int<lower=0, upper=1> coef_centered_free;
   int<lower=0> J_free_hier;
   array[J_free_hier] int<lower=1, upper=J_free> free_hier_pos;
@@ -232,26 +240,38 @@ parameters {
   vector[J_curve_sampled] dvalue_raw;
 
   vector[J_pos] mu_log_pos;
+  vector<lower=0>[J_pos_hier] tau_pos_key;
+  matrix[K_coef_hierarchy_keys, J_pos_hier] z_pos_key;
   vector<lower=0>[J_pos_hier] tau_pos;
   matrix[G, J_pos_hier] z_pos;
 
   vector[J_neg] mu_log_neg;
+  vector<lower=0>[J_neg_hier] tau_neg_key;
+  matrix[K_coef_hierarchy_keys, J_neg_hier] z_neg_key;
   vector<lower=0>[J_neg_hier] tau_neg;
   matrix[G, J_neg_hier] z_neg;
 
   vector[J_lower] mu_log_lower;
+  vector<lower=0>[J_lower_hier] tau_lower_key;
+  matrix[K_coef_hierarchy_keys, J_lower_hier] z_lower_key;
   vector<lower=0>[J_lower_hier] tau_lower;
   matrix[G, J_lower_hier] z_lower;
 
   vector[J_upper] mu_log_upper;
+  vector<lower=0>[J_upper_hier] tau_upper_key;
+  matrix[K_coef_hierarchy_keys, J_upper_hier] z_upper_key;
   vector<lower=0>[J_upper_hier] tau_upper;
   matrix[G, J_upper_hier] z_upper;
 
   vector[J_bounded] mu_raw_bounded;
+  vector<lower=0>[J_bounded_hier] tau_bounded_key;
+  matrix[K_coef_hierarchy_keys, J_bounded_hier] z_bounded_key;
   vector<lower=0>[J_bounded_hier] tau_bounded;
   matrix[G, J_bounded_hier] z_bounded;
 
   vector[J_free] mu_free;
+  vector<lower=0>[J_free_hier] tau_free_key;
+  matrix[K_coef_hierarchy_keys, J_free_hier] z_free_key;
   vector<lower=0>[J_free_hier] tau_free;
   matrix[G, J_free_hier] z_free;
 
@@ -320,7 +340,14 @@ transformed parameters {
     for (h in 1:J_pos_hier) {
       int k = pos_hier_pos[h];
       for (g in 1:G) {
-        real raw = coef_centered_pos[k] == 1 ? z_pos[g, h] : mu_log_pos[k] + tau_pos[h] * z_pos[g, h];
+        real raw;
+        if (coef_hierarchy_mode_pos[k] == 2) {
+          int key_id = group_coef_hierarchy_key_id[g];
+          real key_raw = mu_log_pos[k] + tau_pos_key[h] * z_pos_key[key_id, h];
+          raw = key_raw + tau_pos[h] * z_pos[g, h];
+        } else {
+          raw = coef_centered_pos[k] == 1 ? z_pos[g, h] : mu_log_pos[k] + tau_pos[h] * z_pos[g, h];
+        }
         beta[g, pos_idx[k]] = log1p_exp(raw);
       }
     }
@@ -334,7 +361,14 @@ transformed parameters {
     for (h in 1:J_neg_hier) {
       int k = neg_hier_pos[h];
       for (g in 1:G) {
-        real raw = coef_centered_neg[k] == 1 ? z_neg[g, h] : mu_log_neg[k] + tau_neg[h] * z_neg[g, h];
+        real raw;
+        if (coef_hierarchy_mode_neg[k] == 2) {
+          int key_id = group_coef_hierarchy_key_id[g];
+          real key_raw = mu_log_neg[k] + tau_neg_key[h] * z_neg_key[key_id, h];
+          raw = key_raw + tau_neg[h] * z_neg[g, h];
+        } else {
+          raw = coef_centered_neg[k] == 1 ? z_neg[g, h] : mu_log_neg[k] + tau_neg[h] * z_neg[g, h];
+        }
         beta[g, neg_idx[k]] = -log1p_exp(raw);
       }
     }
@@ -348,7 +382,14 @@ transformed parameters {
     for (h in 1:J_lower_hier) {
       int k = lower_hier_pos[h];
       for (g in 1:G) {
-        real raw = coef_centered_lower[k] == 1 ? z_lower[g, h] : mu_log_lower[k] + tau_lower[h] * z_lower[g, h];
+        real raw;
+        if (coef_hierarchy_mode_lower[k] == 2) {
+          int key_id = group_coef_hierarchy_key_id[g];
+          real key_raw = mu_log_lower[k] + tau_lower_key[h] * z_lower_key[key_id, h];
+          raw = key_raw + tau_lower[h] * z_lower[g, h];
+        } else {
+          raw = coef_centered_lower[k] == 1 ? z_lower[g, h] : mu_log_lower[k] + tau_lower[h] * z_lower[g, h];
+        }
         beta[g, lower_idx[k]] = lower_only_lower[k] + log1p_exp(raw);
       }
     }
@@ -362,7 +403,14 @@ transformed parameters {
     for (h in 1:J_upper_hier) {
       int k = upper_hier_pos[h];
       for (g in 1:G) {
-        real raw = coef_centered_upper[k] == 1 ? z_upper[g, h] : mu_log_upper[k] + tau_upper[h] * z_upper[g, h];
+        real raw;
+        if (coef_hierarchy_mode_upper[k] == 2) {
+          int key_id = group_coef_hierarchy_key_id[g];
+          real key_raw = mu_log_upper[k] + tau_upper_key[h] * z_upper_key[key_id, h];
+          raw = key_raw + tau_upper[h] * z_upper[g, h];
+        } else {
+          raw = coef_centered_upper[k] == 1 ? z_upper[g, h] : mu_log_upper[k] + tau_upper[h] * z_upper[g, h];
+        }
         beta[g, upper_idx[k]] = upper_only_upper[k] - log1p_exp(raw);
       }
     }
@@ -376,7 +424,14 @@ transformed parameters {
     for (h in 1:J_bounded_hier) {
       int k = bounded_hier_pos[h];
       for (g in 1:G) {
-        real raw = coef_centered_bounded[k] == 1 ? z_bounded[g, h] : mu_raw_bounded[k] + tau_bounded[h] * z_bounded[g, h];
+        real raw;
+        if (coef_hierarchy_mode_bounded[k] == 2) {
+          int key_id = group_coef_hierarchy_key_id[g];
+          real key_raw = mu_raw_bounded[k] + tau_bounded_key[h] * z_bounded_key[key_id, h];
+          raw = key_raw + tau_bounded[h] * z_bounded[g, h];
+        } else {
+          raw = coef_centered_bounded[k] == 1 ? z_bounded[g, h] : mu_raw_bounded[k] + tau_bounded[h] * z_bounded[g, h];
+        }
         beta[g, bounded_idx[k]] = bounded_lower[k] + (bounded_upper[k] - bounded_lower[k]) * inv_logit(raw);
       }
     }
@@ -390,7 +445,15 @@ transformed parameters {
     for (h in 1:J_free_hier) {
       int k = free_hier_pos[h];
       for (g in 1:G) {
-        beta[g, free_idx[k]] = coef_centered_free[k] == 1 ? z_free[g, h] : mu_free[k] + tau_free[h] * z_free[g, h];
+        real raw;
+        if (coef_hierarchy_mode_free[k] == 2) {
+          int key_id = group_coef_hierarchy_key_id[g];
+          real key_raw = mu_free[k] + tau_free_key[h] * z_free_key[key_id, h];
+          raw = key_raw + tau_free[h] * z_free[g, h];
+        } else {
+          raw = coef_centered_free[k] == 1 ? z_free[g, h] : mu_free[k] + tau_free[h] * z_free[g, h];
+        }
+        beta[g, free_idx[k]] = raw;
       }
     }
 
@@ -645,8 +708,13 @@ model {
     if (J_pos_hier > 0) {
       for (h in 1:J_pos_hier) {
         int k = pos_hier_pos[h];
-        tau_pos[h] ~ normal(0, fmax(tau_scale_pos[k], 1e-4));
-        if (coef_centered_pos[k] == 1)
+        real tau_scale = coef_hierarchy_mode_pos[k] == 2 ? fmax(tau_scale_pos[k] * 0.7071068, 1e-4) : fmax(tau_scale_pos[k], 1e-4);
+        tau_pos_key[h] ~ normal(0, tau_scale);
+        z_pos_key[, h] ~ std_normal();
+        tau_pos[h] ~ normal(0, tau_scale);
+        if (coef_hierarchy_mode_pos[k] == 2)
+          z_pos[, h] ~ std_normal();
+        else if (coef_centered_pos[k] == 1)
           z_pos[, h] ~ normal(mu_log_pos[k], fmax(tau_pos[h], 1e-6));
         else
           z_pos[, h] ~ std_normal();
@@ -658,8 +726,13 @@ model {
     if (J_neg_hier > 0) {
       for (h in 1:J_neg_hier) {
         int k = neg_hier_pos[h];
-        tau_neg[h] ~ normal(0, fmax(tau_scale_neg[k], 1e-4));
-        if (coef_centered_neg[k] == 1)
+        real tau_scale = coef_hierarchy_mode_neg[k] == 2 ? fmax(tau_scale_neg[k] * 0.7071068, 1e-4) : fmax(tau_scale_neg[k], 1e-4);
+        tau_neg_key[h] ~ normal(0, tau_scale);
+        z_neg_key[, h] ~ std_normal();
+        tau_neg[h] ~ normal(0, tau_scale);
+        if (coef_hierarchy_mode_neg[k] == 2)
+          z_neg[, h] ~ std_normal();
+        else if (coef_centered_neg[k] == 1)
           z_neg[, h] ~ normal(mu_log_neg[k], fmax(tau_neg[h], 1e-6));
         else
           z_neg[, h] ~ std_normal();
@@ -671,8 +744,13 @@ model {
     if (J_lower_hier > 0) {
       for (h in 1:J_lower_hier) {
         int k = lower_hier_pos[h];
-        tau_lower[h] ~ normal(0, fmax(tau_scale_lower[k], 1e-4));
-        if (coef_centered_lower[k] == 1)
+        real tau_scale = coef_hierarchy_mode_lower[k] == 2 ? fmax(tau_scale_lower[k] * 0.7071068, 1e-4) : fmax(tau_scale_lower[k], 1e-4);
+        tau_lower_key[h] ~ normal(0, tau_scale);
+        z_lower_key[, h] ~ std_normal();
+        tau_lower[h] ~ normal(0, tau_scale);
+        if (coef_hierarchy_mode_lower[k] == 2)
+          z_lower[, h] ~ std_normal();
+        else if (coef_centered_lower[k] == 1)
           z_lower[, h] ~ normal(mu_log_lower[k], fmax(tau_lower[h], 1e-6));
         else
           z_lower[, h] ~ std_normal();
@@ -684,8 +762,13 @@ model {
     if (J_upper_hier > 0) {
       for (h in 1:J_upper_hier) {
         int k = upper_hier_pos[h];
-        tau_upper[h] ~ normal(0, fmax(tau_scale_upper[k], 1e-4));
-        if (coef_centered_upper[k] == 1)
+        real tau_scale = coef_hierarchy_mode_upper[k] == 2 ? fmax(tau_scale_upper[k] * 0.7071068, 1e-4) : fmax(tau_scale_upper[k], 1e-4);
+        tau_upper_key[h] ~ normal(0, tau_scale);
+        z_upper_key[, h] ~ std_normal();
+        tau_upper[h] ~ normal(0, tau_scale);
+        if (coef_hierarchy_mode_upper[k] == 2)
+          z_upper[, h] ~ std_normal();
+        else if (coef_centered_upper[k] == 1)
           z_upper[, h] ~ normal(mu_log_upper[k], fmax(tau_upper[h], 1e-6));
         else
           z_upper[, h] ~ std_normal();
@@ -697,8 +780,13 @@ model {
     if (J_bounded_hier > 0) {
       for (h in 1:J_bounded_hier) {
         int k = bounded_hier_pos[h];
-        tau_bounded[h] ~ normal(0, fmax(tau_scale_bounded[k], 1e-4));
-        if (coef_centered_bounded[k] == 1)
+        real tau_scale = coef_hierarchy_mode_bounded[k] == 2 ? fmax(tau_scale_bounded[k] * 0.7071068, 1e-4) : fmax(tau_scale_bounded[k], 1e-4);
+        tau_bounded_key[h] ~ normal(0, tau_scale);
+        z_bounded_key[, h] ~ std_normal();
+        tau_bounded[h] ~ normal(0, tau_scale);
+        if (coef_hierarchy_mode_bounded[k] == 2)
+          z_bounded[, h] ~ std_normal();
+        else if (coef_centered_bounded[k] == 1)
           z_bounded[, h] ~ normal(mu_raw_bounded[k], fmax(tau_bounded[h], 1e-6));
         else
           z_bounded[, h] ~ std_normal();
@@ -710,8 +798,13 @@ model {
     if (J_free_hier > 0) {
       for (h in 1:J_free_hier) {
         int k = free_hier_pos[h];
-        tau_free[h] ~ normal(0, fmax(tau_scale_free[k], 1e-4));
-        if (coef_centered_free[k] == 1)
+        real tau_scale = coef_hierarchy_mode_free[k] == 2 ? fmax(tau_scale_free[k] * 0.7071068, 1e-4) : fmax(tau_scale_free[k], 1e-4);
+        tau_free_key[h] ~ normal(0, tau_scale);
+        z_free_key[, h] ~ std_normal();
+        tau_free[h] ~ normal(0, tau_scale);
+        if (coef_hierarchy_mode_free[k] == 2)
+          z_free[, h] ~ std_normal();
+        else if (coef_centered_free[k] == 1)
           z_free[, h] ~ normal(mu_free[k], fmax(tau_free[h], 1e-6));
         else
           z_free[, h] ~ std_normal();

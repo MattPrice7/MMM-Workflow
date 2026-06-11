@@ -28,6 +28,7 @@ venv/
 nmmm_research/outputs/
 
 # Local-only scratch outputs
+hier_mmm_outputs/
 full_package_scripts/test_outputs/tmp/
 full_package_scripts/test_outputs/deck_optimizer_outputs/
 public_data_pilot/outputs/

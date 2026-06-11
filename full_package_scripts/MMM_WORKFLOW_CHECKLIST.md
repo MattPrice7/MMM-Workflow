@@ -84,8 +84,9 @@ Active / Next:
 - [ ] Future / maybe: evaluate optional time-varying effectiveness multipliers, tightly regularized around 1.0 with smooth random-walk or AR(1) structure, gated per channel and off by default.
 - [ ] Future / maybe: extend the context modifier to true smooth AR/random-walk time variation only if needed; keep current context-key version as the safer default.
 - [ ] Future / maybe: evaluate brand-equity or long-run media-stock states only when external signals exist, such as awareness, organic search, branded search, consideration, or other demand indicators.
-- [ ] Future / maybe: add optional `model_id_parts` metadata, e.g. `model_id`, `dimension_name`, `dimension_value`, so analysts can describe flexible model-cell pieces such as DMA, product, LOB, retailer, store type, segment, or platform. Keep the core model generic; use this only for rollups, diagnostics, optional hierarchy/shrinkage instructions, and future “pool across this dimension but not that one” settings.
-- [ ] Future / maybe: add explicit hierarchy/pooling keys derived from arbitrary model-ID parts, e.g. "pool within product" or "pool within product + retailer". This is separate from `source_entity`; do not overload halo/source metadata as the hierarchy-family key.
+- [x] Add explicit single-level hierarchy/pooling keys derived from arbitrary composite model-ID parts, e.g. "pool within product" or "pool within product + retailer". This is separate from `source_entity`; do not overload halo/source metadata as the hierarchy-family key. Current implementation uses per-variable `coef_hierarchy_scope = "keyed"` plus one-time `coef_hierarchy_part_indices` and supports one keyed hierarchy definition per model run. Indices are R-style one-based by default.
+- [ ] Future / maybe: add optional richer `model_id_parts` metadata, e.g. `model_id`, `dimension_name`, `dimension_value`, so analysts can document flexible model-cell pieces such as DMA, product, LOB, retailer, store type, segment, or platform. The core model remains generic and uses part indices rather than hardcoded dimension names.
+- [ ] Future / maybe: add true multi-level nested/crossed hierarchy, e.g. global -> product -> region-product -> group. Do this only after single-level keyed pooling is stable and tested on larger panels.
 
 Important interpretation:
 

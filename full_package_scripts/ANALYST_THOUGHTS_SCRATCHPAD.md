@@ -10,8 +10,8 @@ Workflow:
 5. After acknowledgement / implementation review, Codex can archive the raw notes and clear this scratchpad back to this template.
 
 Latest archive:
-- Raw notes: `analyst_note_archives/2026-06-10_scratchpad_raw.md`
-- Cleaned review: `analyst_note_reviews/2026-06-10_scratchpad_review.md`
+- Raw notes: `analyst_note_archives/2026-06-11_scratchpad_raw.md`
+- Cleaned review: `analyst_note_reviews/2026-06-11_scratchpad_review.md`
 
 ## Inbox
 

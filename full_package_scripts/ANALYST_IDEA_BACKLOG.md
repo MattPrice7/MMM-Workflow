@@ -36,7 +36,7 @@ This is the cleaned, non-train-of-thought backlog promoted from the scratchpad. 
   - campaign or platform labels
 - Extend chart-builder slicers to use `rollup_path` plus optional semantic metadata.
 - Add optional `model_id_parts` metadata for flexible model-cell descriptions such as geo, product, line of business, retailer, store type, segment, platform, or any future modeling dimension.
-- Add hierarchy-family metadata for opt-in pooling across products, channels, or model ID parts.
+- Add true multi-level hierarchy only if larger panels justify it. Single-level keyed pooling across arbitrary group/model-ID parts is now implemented in Stan; multi-level nesting/crossing remains future research.
 - Add explicit explanations and validators for metadata fields that are easy to confuse:
   - `source_entity` = source/halo metadata, not the hierarchy key
   - `coef_hierarchy_scale` = group-level pooling strength multiplier
