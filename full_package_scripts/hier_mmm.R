@@ -913,7 +913,14 @@ standardize_role <- function(x) {
   x[x %in% c("consumer_promo", "promotion")] <- "promo"
   x[x %in% c("reach_frequency", "reach_freq", "rf", "reach/frequency")] <- "reach_frequency"
   x[x %in% c("control", "fixed_effect", "fixed")] <- "control"
+  x[x %in% c("organic_media", "organic")] <- "organic_media"
+  x[x %in% c("organic_reach_frequency", "organic_rf", "organic_reach_freq")] <- "organic_reach_frequency"
+  x[x %in% c("non_media_treatment", "non_media_treatments", "nonmedia_treatment", "nonmedia_treatments")] <- "non_media_treatment"
   x
+}
+
+auto_coef_hierarchy_roles_hier_mmm <- function() {
+  c("media", "reach_frequency")
 }
 
 standardize_row_type_legacy <- function(x) {
@@ -1271,66 +1278,82 @@ build_coef_hierarchy_key_map <- function(group_lookup,
                                          hierarchy_part_indices = NULL,
                                          hierarchy_index_base = c("one", "zero")) {
   hierarchy_index_base <- match.arg(hierarchy_index_base)
+  n_g <- nrow(group_lookup)
+  n_j <- nrow(variable_lookup)
+  key_lookup <- data.table(coef_hierarchy_key_id = 1L, coef_hierarchy_key_value = "GLOBAL")
+  group_key_id <- matrix(1L, nrow = n_g, ncol = n_j)
+  variable_key_audit <- data.table(
+    variable = as.character(variable_lookup$variable),
+    keyed_family_count = NA_integer_,
+    hierarchy_part_indices_effective = NA_character_,
+    keyed_single_family = FALSE
+  )
   keyed <- variable_lookup[coef_hierarchy_scope == "keyed" & coef_hierarchy_scale > 0]
   if (!nrow(keyed)) {
-    out_groups <- copy(group_lookup)
-    out_groups[, coef_hierarchy_key_value := "GLOBAL"]
     return(list(
-      key_lookup = data.table(coef_hierarchy_key_id = 1L, coef_hierarchy_key_value = "GLOBAL"),
-      group_key_id = rep(1L, nrow(group_lookup)),
-      group_lookup = out_groups,
+      key_lookup = key_lookup[],
+      group_key_id = group_key_id,
+      group_lookup = copy(group_lookup),
+      variable_key_audit = variable_key_audit[],
       active = FALSE,
-      part_indices = integer(),
       note = "No active keyed coefficient hierarchy requested."
     ))
   }
-  if (!is.null(hierarchy_part_indices) && length(hierarchy_part_indices)) {
-    idx_values <- paste(as.character(hierarchy_part_indices), collapse = ",")
+  default_idx_value <- if (!is.null(hierarchy_part_indices) && length(hierarchy_part_indices)) {
+    paste(as.character(hierarchy_part_indices), collapse = ",")
   } else {
-    idx_values <- unique(na.omit(trimws(as.character(keyed$hierarchy_part_indices))))
-    idx_values <- idx_values[nzchar(idx_values)]
+    NA_character_
   }
-  if (!length(idx_values)) {
-    stop("coef_hierarchy_scope = 'keyed' requires one-time coef_hierarchy_part_indices or metadata hierarchy_part_indices so Stan can map groups to pooling families. ",
-         "Example with one-based indexing: coef_hierarchy_part_indices = 3 pools groups sharing the third group/model-id part.",
-         call. = FALSE)
-  }
-  if (length(idx_values) > 1L) {
-    stop("Only one active keyed hierarchy definition is supported per model run. Conflicting hierarchy_part_indices: ",
-         paste(idx_values, collapse = ", "), call. = FALSE)
-  }
-  part_idx <- parse_hierarchy_part_indices(idx_values[1], index_base = hierarchy_index_base)
   group_values <- as.character(group_lookup$group_value)
-  labels <- vapply(group_values, function(gv) {
-    parts <- split_model_id_parts_hier_mmm(gv)
-    if (!length(parts) || max(part_idx) > length(parts)) {
-      stop("Could not derive keyed hierarchy family from group value '", gv,
-           "' using hierarchy_part_indices = '", idx_values[1],
-           "'. Group IDs must contain enough separator-delimited parts, e.g. product_dma_retailer.",
+  for (ii in seq_len(nrow(keyed))) {
+    v <- keyed$variable[ii]
+    j <- match(v, variable_lookup$variable)
+    idx_value <- trimws(as.character(keyed$hierarchy_part_indices[ii] %||% ""))
+    if (is.na(idx_value) || !nzchar(idx_value)) idx_value <- default_idx_value
+    if (is.na(idx_value) || !nzchar(idx_value)) {
+      stop("coef_hierarchy_scope = 'keyed' for variable '", v,
+           "' requires one-time coef_hierarchy_part_indices or metadata hierarchy_part_indices. ",
+           "Example with one-based indexing: coef_hierarchy_part_indices = 3 pools groups sharing the third group/model-id part.",
            call. = FALSE)
     }
-    paste(parts[part_idx], collapse = "|")
-  }, character(1))
-  key_lookup <- data.table(coef_hierarchy_key_value = unique(labels))
-  key_lookup[, coef_hierarchy_key_id := .I]
-  setcolorder(key_lookup, c("coef_hierarchy_key_id", "coef_hierarchy_key_value"))
-  group_key_id <- match(labels, key_lookup$coef_hierarchy_key_value)
-  out_groups <- copy(group_lookup)
-  out_groups[, `:=`(
-    coef_hierarchy_key_id = as.integer(group_key_id),
-    coef_hierarchy_key_value = labels
-  )]
+    part_idx <- parse_hierarchy_part_indices(idx_value, index_base = hierarchy_index_base)
+    labels <- vapply(group_values, function(gv) {
+      parts <- split_model_id_parts_hier_mmm(gv)
+      if (!length(parts) || max(part_idx) > length(parts)) {
+        stop("Could not derive keyed hierarchy family for variable '", v,
+             "' from group value '", gv,
+             "' using hierarchy_part_indices = '", idx_value,
+             "'. Group IDs must contain enough separator-delimited parts, e.g. product_dma_retailer.",
+             call. = FALSE)
+      }
+      paste(parts[part_idx], collapse = "|")
+    }, character(1))
+    fam <- unique(labels)
+    variable_key_audit[variable == v, `:=`(
+      keyed_family_count = length(fam),
+      hierarchy_part_indices_effective = idx_value,
+      keyed_single_family = length(fam) <= 1L
+    )]
+    if (length(fam) <= 1L) next
+    missing_labels <- setdiff(fam, key_lookup$coef_hierarchy_key_value)
+    if (length(missing_labels)) {
+      add <- data.table(coef_hierarchy_key_value = missing_labels)
+      key_lookup <- rbind(key_lookup, add, fill = TRUE)
+      key_lookup[, coef_hierarchy_key_id := .I]
+      setcolorder(key_lookup, c("coef_hierarchy_key_id", "coef_hierarchy_key_value"))
+    }
+    group_key_id[, j] <- match(labels, key_lookup$coef_hierarchy_key_value)
+  }
   list(
     key_lookup = key_lookup[],
-    group_key_id = as.integer(group_key_id),
-    group_lookup = out_groups[],
+    group_key_id = group_key_id,
+    group_lookup = copy(group_lookup),
+    variable_key_audit = variable_key_audit[],
     active = TRUE,
-    part_indices = part_idx,
     note = paste0(
       "Active keyed coefficient hierarchy using ",
       hierarchy_index_base,
-      "-based group/model-id part index(es): ",
-      idx_values[1]
+      "-based group/model-id part index(es), with metadata overrides allowed per variable."
     )
   )
 }
@@ -2802,19 +2825,27 @@ prepare_stan_data_hier_mmm <- function(data,
     hierarchy_index_base = coef_hierarchy_index_base
   )
   group_lookup <- coef_hierarchy_key$group_lookup
-  keyed_single_family <- isTRUE(coef_hierarchy_key$active) && nrow(coef_hierarchy_key$key_lookup) <= 1L
+  variable_lookup[coef_hierarchy_key$variable_key_audit, on = "variable", `:=`(
+    keyed_family_count = i.keyed_family_count,
+    hierarchy_part_indices_effective = i.hierarchy_part_indices_effective,
+    keyed_single_family = i.keyed_single_family
+  )]
+  variable_lookup[is.na(keyed_single_family), keyed_single_family := FALSE]
   variable_lookup[, coef_hierarchy_mode := fifelse(
     coef_hierarchy_scope == "keyed" & !keyed_single_family, 2L,
     fifelse(coef_hierarchy_scope %in% c("auto", "global") | (coef_hierarchy_scope == "keyed" & keyed_single_family), 1L, 0L)
   )]
-  variable_lookup[coef_hierarchy_scope == "keyed" & keyed_single_family,
+  variable_lookup[coef_hierarchy_scope == "keyed" & keyed_single_family == TRUE,
                   hierarchy_note := paste0(hierarchy_note, " Keyed mapping produced one family, so Stan collapses it to the regular global hierarchy to avoid an unnecessary extra latent layer.")]
   variable_lookup[, hierarchy_blocker_reason := NA_character_]
   variable_lookup[coef_hierarchy_scope == "none", hierarchy_blocker_reason := "coef_hierarchy_scope_none"]
+  auto_hierarchy_roles <- auto_coef_hierarchy_roles_hier_mmm()
   variable_lookup[, sample_coef_hierarchy_flag := {
     eligible_scope <- coef_hierarchy_scope %in% c("auto", "global", "keyed") & coef_hierarchy_scale > 0
     if (sample_coef_hierarchy == "always") {
-      as.integer(nrow(group_lookup) > 1L & eligible_scope)
+      explicit_scope <- coef_hierarchy_scope %in% c("global", "keyed")
+      auto_scope <- coef_hierarchy_scope == "auto" & role %in% auto_hierarchy_roles
+      as.integer(nrow(group_lookup) > 1L & eligible_scope & (explicit_scope | auto_scope))
     } else if (sample_coef_hierarchy == "never") {
       0L
     } else {
@@ -2826,12 +2857,16 @@ prepare_stan_data_hier_mmm <- function(data,
           coef_hierarchy_scale >= coef_hierarchy_auto_min_scale &
           geo_variation_week_share >= coef_hierarchy_auto_min_geo_variation_share &
           eligible_scope &
-          coef_hierarchy_scope == "auto"
+          coef_hierarchy_scope == "auto" &
+          role %in% auto_hierarchy_roles
       )
       as.integer(global_flag | keyed_flag | auto_flag)
     }
   }]
-  variable_lookup[coef_hierarchy_scope == "keyed" & keyed_single_family & sample_coef_hierarchy_flag == 1L,
+  variable_lookup[sample_coef_hierarchy_flag == 0L & is.na(hierarchy_blocker_reason) &
+                    coef_hierarchy_scope == "auto" & !(role %in% auto_hierarchy_roles),
+                  hierarchy_blocker_reason := "auto_hierarchy_role_not_media_treatment"]
+  variable_lookup[coef_hierarchy_scope == "keyed" & keyed_single_family == TRUE & sample_coef_hierarchy_flag == 1L,
                   hierarchy_blocker_reason := NA_character_]
   variable_lookup[sample_coef_hierarchy_flag == 0L & is.na(hierarchy_blocker_reason) & coef_hierarchy_scope == "keyed",
                   hierarchy_blocker_reason := "keyed_hierarchy_inactive_by_sample_coef_hierarchy_or_group_count"]
@@ -2874,7 +2909,7 @@ prepare_stan_data_hier_mmm <- function(data,
     start_idx = as.integer(ranges$start_idx),
     end_idx = as.integer(ranges$end_idx),
     K_coef_hierarchy_keys = nrow(coef_hierarchy_key$key_lookup),
-    group_coef_hierarchy_key_id = as.integer(coef_hierarchy_key$group_key_id),
+    group_coef_hierarchy_key_id = matrix(as.integer(coef_hierarchy_key$group_key_id), nrow = nrow(group_lookup), ncol = nrow(variable_lookup)),
     N_state_innov = if (intercept_spec$use_level == 1L) nrow(dt) - nrow(ranges) else 0L,
 
     has_curve = as.integer(variable_lookup$has_curve),
@@ -3032,7 +3067,9 @@ prepare_stan_data_hier_mmm <- function(data,
   # Prep-level Stan data contract checks catch mapping/dimension failures before compile/sampling.
   if (length(stan_data$group_id) != stan_data$N) stop("Internal error: group_id length does not equal N.")
   if (length(stan_data$is_train) != stan_data$N) stop("Internal error: is_train length does not equal N.")
-  if (length(stan_data$group_coef_hierarchy_key_id) != stan_data$G) stop("Internal error: group_coef_hierarchy_key_id length does not equal G.")
+  if (nrow(stan_data$group_coef_hierarchy_key_id) != stan_data$G || ncol(stan_data$group_coef_hierarchy_key_id) != stan_data$J) {
+    stop("Internal error: group_coef_hierarchy_key_id dimensions do not match G/J.")
+  }
   if (anyNA(stan_data$group_coef_hierarchy_key_id) || any(stan_data$group_coef_hierarchy_key_id < 1L | stan_data$group_coef_hierarchy_key_id > stan_data$K_coef_hierarchy_keys)) {
     stop("Internal error: invalid group_coef_hierarchy_key_id mapping.")
   }
@@ -3095,7 +3132,8 @@ prepare_stan_data_hier_mmm <- function(data,
       possible_halo_somewhere,
       geo_variation_week_share, geo_variation_median_cv,
       coef_hierarchy_scale, coef_hierarchy_scope, hierarchy_key,
-      model_id_parts, hierarchy_part_indices, hierarchy_note,
+      model_id_parts, hierarchy_part_indices, hierarchy_part_indices_effective,
+      keyed_family_count, keyed_single_family, hierarchy_note,
       coef_hierarchy_mode, sample_coef_hierarchy_flag, hierarchy_blocker_reason
     )],
     variable_lookup = variable_lookup,

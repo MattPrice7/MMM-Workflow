@@ -600,9 +600,10 @@ add_result("keyed hierarchy maps group model-id parts into Stan pooling families
            prep_scope_keyed$variable_lookup[variable == "tv", coef_hierarchy_scope][1] == "keyed" &&
              prep_scope_keyed$variable_lookup[variable == "tv", coef_hierarchy_mode][1] == 2L &&
              prep_scope_keyed$variable_lookup[variable == "tv", sample_coef_hierarchy_flag][1] == 1L &&
-             prep_scope_keyed$stan_data$K_coef_hierarchy_keys == 2L &&
-             all(sort(prep_scope_keyed$coef_hierarchy_key_lookup$coef_hierarchy_key_value) == c("chips", "pretzels")) &&
-             length(prep_scope_keyed$stan_data$group_coef_hierarchy_key_id) == prep_scope_keyed$stan_data$G &&
+             prep_scope_keyed$stan_data$K_coef_hierarchy_keys == 3L &&
+             all(c("GLOBAL", "chips", "pretzels") %in% prep_scope_keyed$coef_hierarchy_key_lookup$coef_hierarchy_key_value) &&
+             nrow(prep_scope_keyed$stan_data$group_coef_hierarchy_key_id) == prep_scope_keyed$stan_data$G &&
+             ncol(prep_scope_keyed$stan_data$group_coef_hierarchy_key_id) == prep_scope_keyed$stan_data$J &&
              any(c(
                prep_scope_keyed$stan_data$coef_hierarchy_mode_pos,
                prep_scope_keyed$stan_data$coef_hierarchy_mode_neg,
@@ -646,6 +647,70 @@ add_result("single keyed family collapses to regular global hierarchy",
              prep_scope_keyed_single$variable_lookup[variable == "tv", sample_coef_hierarchy_flag][1] == 1L &&
              any(single_modes == 1L) &&
              !any(single_modes == 2L))
+prep_auto_control <- prepare_stan_data_hier_mmm(
+  data = make_panel(groups = c("G1", "G2", "G3", "G4", "G5"), n = 24L),
+  metadata_input = {
+    z <- make_meta(c("tv", "price"), curve = "tv", coef = c(0.05, -0.10), coef_bound = c("pos", "neg"))
+    z[variable == "price", role := "control"]
+    z
+  },
+  dep_var_col = "y",
+  group_col = "geo",
+  time_col = "week",
+  entity_col = "entity",
+  intercept_type = "flat",
+  x_mean_index_scope = "global",
+  sample_coef_hierarchy = "auto",
+  coef_hierarchy_auto_min_geo_variation_share = 0.01
+)
+add_result("auto hierarchy defaults to media treatment roles only",
+           prep_auto_control$variable_lookup[variable == "tv", sample_coef_hierarchy_flag][1] == 1L &&
+             prep_auto_control$variable_lookup[variable == "price", sample_coef_hierarchy_flag][1] == 0L &&
+             prep_auto_control$variable_lookup[variable == "price", hierarchy_blocker_reason][1] == "auto_hierarchy_role_not_media_treatment")
+prep_global_control <- prepare_stan_data_hier_mmm(
+  data = make_panel(groups = c("G1", "G2", "G3"), n = 20L),
+  metadata_input = {
+    z <- make_meta("price", curve = character(), coef = -0.10, coef_bound = "neg")
+    z[, `:=`(role = "control", coef_hierarchy_scope = "global")]
+    z
+  },
+  dep_var_col = "y",
+  group_col = "geo",
+  time_col = "week",
+  entity_col = "entity",
+  intercept_type = "flat",
+  sample_coef_hierarchy = "always"
+)
+add_result("explicit global hierarchy can opt non-media controls into pooling",
+           prep_global_control$variable_lookup[variable == "price", sample_coef_hierarchy_flag][1] == 1L &&
+             prep_global_control$variable_lookup[variable == "price", coef_hierarchy_mode][1] == 1L)
+prep_key_override <- prepare_stan_data_hier_mmm(
+  data = make_panel(groups = c(
+    "east_walmart_chips",
+    "east_target_chips",
+    "west_walmart_chips",
+    "east_walmart_pretzels",
+    "west_target_pretzels"
+  ), n = 20L),
+  metadata_input = {
+    z <- make_meta(c("tv", "lower_var"), curve = "tv")
+    z[, coef_hierarchy_scope := "keyed"]
+    z[variable == "lower_var", hierarchy_part_indices := "1,3"]
+    z
+  },
+  dep_var_col = "y",
+  group_col = "geo",
+  time_col = "week",
+  entity_col = "entity",
+  intercept_type = "flat",
+  sample_coef_hierarchy = "always",
+  coef_hierarchy_part_indices = 3
+)
+add_result("metadata hierarchy_part_indices can override global keyed hierarchy by variable",
+           prep_key_override$variable_lookup[variable == "tv", hierarchy_part_indices_effective][1] == "3" &&
+             prep_key_override$variable_lookup[variable == "lower_var", hierarchy_part_indices_effective][1] == "1,3" &&
+             prep_key_override$variable_lookup[variable == "tv", keyed_family_count][1] == 2L &&
+             prep_key_override$variable_lookup[variable == "lower_var", keyed_family_count][1] == 4L)
 prep_scope_global <- prepare_stan_data_hier_mmm(
   data = make_panel(groups = c("G1", "G2", "G3"), n = 20L),
   metadata_input = {

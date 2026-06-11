@@ -73,7 +73,7 @@ data {
   array[G] int<lower=1, upper=N> start_idx;
   array[G] int<lower=1, upper=N> end_idx;
   int<lower=1> K_coef_hierarchy_keys;
-  array[G] int<lower=1, upper=K_coef_hierarchy_keys> group_coef_hierarchy_key_id;
+  array[G, J] int<lower=1, upper=K_coef_hierarchy_keys> group_coef_hierarchy_key_id;
   int<lower=0> N_state_innov;
 
   array[J] int<lower=0, upper=1> has_curve;
@@ -342,7 +342,7 @@ transformed parameters {
       for (g in 1:G) {
         real raw;
         if (coef_hierarchy_mode_pos[k] == 2) {
-          int key_id = group_coef_hierarchy_key_id[g];
+          int key_id = group_coef_hierarchy_key_id[g, pos_idx[k]];
           real key_raw = mu_log_pos[k] + tau_pos_key[h] * z_pos_key[key_id, h];
           raw = key_raw + tau_pos[h] * z_pos[g, h];
         } else {
@@ -363,7 +363,7 @@ transformed parameters {
       for (g in 1:G) {
         real raw;
         if (coef_hierarchy_mode_neg[k] == 2) {
-          int key_id = group_coef_hierarchy_key_id[g];
+          int key_id = group_coef_hierarchy_key_id[g, neg_idx[k]];
           real key_raw = mu_log_neg[k] + tau_neg_key[h] * z_neg_key[key_id, h];
           raw = key_raw + tau_neg[h] * z_neg[g, h];
         } else {
@@ -384,7 +384,7 @@ transformed parameters {
       for (g in 1:G) {
         real raw;
         if (coef_hierarchy_mode_lower[k] == 2) {
-          int key_id = group_coef_hierarchy_key_id[g];
+          int key_id = group_coef_hierarchy_key_id[g, lower_idx[k]];
           real key_raw = mu_log_lower[k] + tau_lower_key[h] * z_lower_key[key_id, h];
           raw = key_raw + tau_lower[h] * z_lower[g, h];
         } else {
@@ -405,7 +405,7 @@ transformed parameters {
       for (g in 1:G) {
         real raw;
         if (coef_hierarchy_mode_upper[k] == 2) {
-          int key_id = group_coef_hierarchy_key_id[g];
+          int key_id = group_coef_hierarchy_key_id[g, upper_idx[k]];
           real key_raw = mu_log_upper[k] + tau_upper_key[h] * z_upper_key[key_id, h];
           raw = key_raw + tau_upper[h] * z_upper[g, h];
         } else {
@@ -426,7 +426,7 @@ transformed parameters {
       for (g in 1:G) {
         real raw;
         if (coef_hierarchy_mode_bounded[k] == 2) {
-          int key_id = group_coef_hierarchy_key_id[g];
+          int key_id = group_coef_hierarchy_key_id[g, bounded_idx[k]];
           real key_raw = mu_raw_bounded[k] + tau_bounded_key[h] * z_bounded_key[key_id, h];
           raw = key_raw + tau_bounded[h] * z_bounded[g, h];
         } else {
@@ -447,7 +447,7 @@ transformed parameters {
       for (g in 1:G) {
         real raw;
         if (coef_hierarchy_mode_free[k] == 2) {
-          int key_id = group_coef_hierarchy_key_id[g];
+          int key_id = group_coef_hierarchy_key_id[g, free_idx[k]];
           real key_raw = mu_free[k] + tau_free_key[h] * z_free_key[key_id, h];
           raw = key_raw + tau_free[h] * z_free[g, h];
         } else {
