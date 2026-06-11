@@ -121,7 +121,7 @@ Active / Next:
 - [ ] Add blocked pre-period cross-validation for ridge synthetic-control lambda selection.
 - [x] Report donor weight concentration and flag if one donor dominates.
 - [ ] Expand placebo lift distribution diagnostics and multiple-testing warnings.
-- [ ] Add explicit event overlap detection across variables/geos/windows.
+- [x] Add explicit event overlap detection across variables/geos/windows.
 - [ ] Future / separate from quasi-geo: optional national interrupted-time-series/TBR diagnostic for all-market media shocks, clearly labeled as lower-tier time-series context and never routed as geo-lift calibration.
 - [ ] Add a dedicated quasi-geo evidence report pack for analysts.
 - [ ] Future / maybe: evaluate rollup-level quasi-geo estimands only when the rollup has identifiable variation. `rollup_path` is currently reporting metadata; it should not silently turn branded + non-branded search into a causal total-search estimand unless the event design supports that rollup.

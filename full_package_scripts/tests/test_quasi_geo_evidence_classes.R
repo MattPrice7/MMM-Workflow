@@ -204,6 +204,10 @@ bundle_rows <- bundle$event_estimates_all[estimand_level == "bundle"]
 add_result("multi-channel shock becomes bundle estimand", nrow(bundle_rows) > 0 && all(bundle_rows$channel_specific_usable == FALSE))
 add_result("bundle shock returns bundle economics", nrow(bundle_rows[is.finite(bundle_incremental_outcome) & is.finite(bundle_incremental_spend) &
                                                                       abs(bundle_incremental_spend) > abs(incremental_spend)]) > 0)
+add_result("quasi geo reports overlapping event diagnostics", nrow(bundle$event_estimates_all) > 0 &&
+             all(c("overlap_event_n", "same_geo_overlap_event_n", "overlap_contamination_score") %in% names(bundle$event_estimates_all)) &&
+             any(bundle$event_estimates_all$overlap_event_n > 0, na.rm = TRUE) &&
+             any(grepl("overlapping_events", bundle$event_estimates_all$diagnostic_reason, fixed = TRUE)))
 add_result("moved channel list is clean channel names", nrow(bundle_rows) > 0 &&
              !any(grepl(":", bundle_rows$moved_channels, fixed = TRUE)))
 add_result("bundle events stay out of channel coef priors", nrow(bundle$prior_recommendations) > 0 &&
