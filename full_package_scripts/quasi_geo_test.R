@@ -502,6 +502,9 @@ qgt_event_not_estimable <- function(event,
     media_cutoff_flag = qgt_event_value(e, "media_cutoff_flag", FALSE),
     donor_n = 0L,
     donor_weight_max = NA_real_,
+    donor_weight_hhi = NA_real_,
+    donor_effective_n = NA_real_,
+    donor_dominant_flag = NA,
     scaled_l2_imbalance = NA_real_,
     pre_fit_score = NA_real_,
     recent_pre_fit_score = NA_real_,
@@ -1340,7 +1343,13 @@ qgt_estimate_event <- function(dt,
     }, numeric(1))
     holiday_contam <- max(vals[is.finite(vals)], 0, na.rm = TRUE)
   }
-  donor_concentration <- if (length(weights) && any(is.finite(weights))) max(weights[is.finite(weights)], na.rm = TRUE) else NA_real_
+  donor_weight_vec <- weights[is.finite(weights) & weights > 0]
+  donor_weight_sum <- sum(donor_weight_vec, na.rm = TRUE)
+  if (is.finite(donor_weight_sum) && donor_weight_sum > 1e-12) donor_weight_vec <- donor_weight_vec / donor_weight_sum
+  donor_concentration <- if (length(donor_weight_vec)) max(donor_weight_vec, na.rm = TRUE) else NA_real_
+  donor_weight_hhi <- if (length(donor_weight_vec)) sum(donor_weight_vec ^ 2, na.rm = TRUE) else NA_real_
+  donor_effective_n <- if (is.finite(donor_weight_hhi) && donor_weight_hhi > 1e-12) 1 / donor_weight_hhi else NA_real_
+  donor_dominant_flag <- is.finite(donor_concentration) && donor_concentration >= 0.70
   donor_shortage_penalty <- if (length(donor_cols) < min_donors) 1 else 0
   donor_contam_penalty <- if (isTRUE(donor_contamination_flag) || is.infinite(donor_contamination_max)) 1 else qgt_clip(donor_contamination_max / donor_contamination_pct, 0, 1)
   pre_period_placebo_penalty <- if (is.finite(placebo_lift_abs_ratio)) qgt_clip(placebo_lift_abs_ratio, 0, 1) else 0.5
@@ -1392,6 +1401,7 @@ qgt_estimate_event <- function(dt,
   if (is.finite(placebo_lift_abs_ratio) && placebo_lift_abs_ratio > 0.50) diagnostic_parts <- c(diagnostic_parts, "large_pre_period_placebo_lift")
   if (is.finite(donor_placebo_p_value) && donor_placebo_p_value >= 0.25) diagnostic_parts <- c(diagnostic_parts, "donor_placebo_false_positive_risk")
   if (is.finite(leave_one_donor_out_stability_score) && leave_one_donor_out_stability_score < 0.50) diagnostic_parts <- c(diagnostic_parts, "donor_leave_one_out_sensitive")
+  if (isTRUE(donor_dominant_flag)) diagnostic_parts <- c(diagnostic_parts, "dominant_donor_weight")
   if (is.finite(lift_z) && abs(lift_z) < 1.00) diagnostic_parts <- c(diagnostic_parts, "weak_lift_signal")
   if (is.finite(marginal_response) && marginal_response < 0) diagnostic_parts <- c(diagnostic_parts, "effect_direction_opposes_media")
   if (nrow(co_moving) && any(co_moving$abs_pct_change >= other_media_contamination_pct, na.rm = TRUE)) diagnostic_parts <- c(diagnostic_parts, "co_moving_media_signal")
@@ -1475,6 +1485,9 @@ qgt_estimate_event <- function(dt,
     clean_donor_geo_n = unaffected_donor_n,
     donor_contaminated_geo_n = donor_contaminated_geo_n,
     donor_weight_max = donor_concentration,
+    donor_weight_hhi = donor_weight_hhi,
+    donor_effective_n = donor_effective_n,
+    donor_dominant_flag = donor_dominant_flag,
     scaled_l2_imbalance = scaled_l2_imbalance,
     pre_fit_score = pre_fit_score,
     recent_pre_fit_score = recent_pre_fit_score,

@@ -97,6 +97,12 @@ add_result("quasi geo returns donor placebo and leave-one-donor-out diagnostics"
              all(c("donor_placebo_p_value", "donor_placebo_strength", "leave_one_donor_out_stability_score") %in% names(up_tv)) &&
              any(is.finite(up_tv$donor_placebo_p_value)) &&
              any(is.finite(up_tv$leave_one_donor_out_stability_score)))
+add_result("quasi geo reports donor weight concentration diagnostics", nrow(up_tv) > 0 &&
+             all(c("donor_weight_max", "donor_weight_hhi", "donor_effective_n", "donor_dominant_flag") %in% names(up_tv)) &&
+             any(is.finite(up_tv$donor_weight_hhi)) &&
+             all(up_tv[is.finite(donor_effective_n), donor_effective_n] >= 1 - 1e-8) &&
+             all(up_tv[is.finite(donor_effective_n), donor_effective_n] <= up_tv[is.finite(donor_effective_n), donor_n] + 1e-8) &&
+             all(up_tv[is.finite(donor_weight_max) & donor_weight_max >= 0.70, donor_dominant_flag] %in% TRUE))
 tbr_dt <- make_panel(geos = paste0("G", 1:4))
 tbr_week <- sort(unique(tbr_dt$week))[34]
 tbr_dt[geo == "G1" & week >= tbr_week & week < tbr_week + 28, `:=`(tv = tv + 55, tv_spend = tv_spend + 550, y = y + 80)]

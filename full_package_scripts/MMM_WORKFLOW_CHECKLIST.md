@@ -119,7 +119,7 @@ Active / Next:
 - [ ] Add multi-market treated-cell estimation when several markets move together and other markets remain untreated.
 - [ ] Add prospective matched-market design simulator and required-ramp / MDE planning.
 - [ ] Add blocked pre-period cross-validation for ridge synthetic-control lambda selection.
-- [ ] Report donor weight concentration and flag if one donor dominates.
+- [x] Report donor weight concentration and flag if one donor dominates.
 - [ ] Expand placebo lift distribution diagnostics and multiple-testing warnings.
 - [ ] Add explicit event overlap detection across variables/geos/windows.
 - [ ] Future / separate from quasi-geo: optional national interrupted-time-series/TBR diagnostic for all-market media shocks, clearly labeled as lower-tier time-series context and never routed as geo-lift calibration.

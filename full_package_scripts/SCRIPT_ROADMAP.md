@@ -19,7 +19,7 @@ This file is the working backlog for the script bundle. It separates production-
    - Future cleanup: split internals into modules for metadata, validation, Stan data creation, transforms, UCM/baseline, execution, posterior extraction, decomposition, diagnostics, decisioning, and export.
 
 2. `quasi_geo_test.R`
-   - Current status: signed event detection, synthetic control, TBR/DiD fallback, donor placebo, leave-one-donor-out sensitivity, overlap diagnostics, bundle handling, raw-scale economics, and analyst evidence summaries are implemented.
+   - Current status: signed event detection, synthetic control, TBR/DiD fallback, donor placebo, leave-one-donor-out sensitivity, donor concentration diagnostics, overlap diagnostics, bundle handling, raw-scale economics, and analyst evidence summaries are implemented.
    - Done: carry optional `channel` / `rollup_path` metadata from `variable_map` into quasi-geo events, summaries, and prior recommendation tables for reporting rollups such as total Media or total Social. This is reporting metadata, not a pooled causal estimand by itself.
    - Future: only estimate rollup-level quasi-geo effects when the rollup itself has identifiable variation. Do not allocate or pool causal evidence by rollup name alone.
    - Refine evidence classification so fallback methods are not unfairly blocked. A failed synthetic-control attempt should downgrade evidence only if TBR/DiD also fail or diagnostics are too weak.
