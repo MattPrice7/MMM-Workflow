@@ -2,6 +2,8 @@
 
 ## Checkpoints
 
+- `rolling_latest_core_context_effect_modifiers`
+  - Current rolling state after adding opt-in context-varying effectiveness modifiers directly to the Stan workflow. Analysts can define context effects in metadata with tuple syntax such as `(time, 0, 0.10, +-)` or `(context_col, 0.02, 0.03, +)`, or pass a `context_effects` table to `fit_hier_mmm()` / `prepare_stan_data_hier_mmm()`. Context drivers are standardized on training rows only; `time` is a special key generated as a within-group row-order trend; positive/negative/free signs map to constrained Stan parameter blocks; and the same multiplier is used by fitted transforms, decomposition, ROI/mROI, and optimizer contribution helpers. This remains off by default and is intended for named hypotheses, not free time-varying coefficients. Validated with Stan source, workflow source, Stan compile, and 39 Stan contract checks.
 - `rolling_latest_core_quasi_donor_concentration`
   - Current rolling state after adding synthetic-control donor concentration diagnostics to quasi-geo outputs and confirming overlap diagnostics are covered. Event estimates now report maximum donor weight, donor-weight HHI, effective donor count, and a dominant-donor flag/reason when one donor carries most of the synthetic control; overlap fields identify concurrent events across variables/geos/windows. This strengthens GeoLift-style pre-fit and donor-quality review without changing the causal estimand. Validated with quasi-geo source and 45 quasi-geo evidence-class regression checks.
 - `rolling_latest_core_optimizer_cost_flighting`

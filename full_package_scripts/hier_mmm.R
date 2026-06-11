@@ -1631,6 +1631,180 @@ clean_metadata <- function(meta_input,
   ))
   dt[]
 }
+
+normalize_context_sign_hier_mmm <- function(x) {
+  z <- tolower(trimws(as.character(x %||% "+-")))
+  z[is.na(z) | !nzchar(z)] <- "+-"
+  out <- rep("free", length(z))
+  out[z %in% c("+", "pos", "positive", "nonnegative", "non-negative", "up")] <- "positive"
+  out[z %in% c("-", "neg", "negative", "nonpositive", "non-positive", "down")] <- "negative"
+  out[z %in% c("+-", "-+", "free", "both", "any", "unbounded", "two_sided", "two-sided")] <- "free"
+  bad <- !(z %in% c("+", "pos", "positive", "nonnegative", "non-negative", "up",
+                    "-", "neg", "negative", "nonpositive", "non-positive", "down",
+                    "+-", "-+", "free", "both", "any", "unbounded", "two_sided", "two-sided"))
+  if (any(bad)) stop("Unknown context sign value(s): ", paste(unique(z[bad]), collapse = ", "))
+  out
+}
+
+parse_context_effect_cell_hier_mmm <- function(cell, variable) {
+  raw <- trimws(as.character(cell %||% ""))
+  if (is.na(raw) || !nzchar(raw)) return(data.table())
+  pieces <- regmatches(raw, gregexpr("\\([^()]+\\)", raw, perl = TRUE))[[1]]
+  if (!length(pieces)) pieces <- unlist(strsplit(raw, ";", fixed = TRUE), use.names = FALSE)
+  pieces <- trimws(pieces)
+  pieces <- pieces[nzchar(pieces)]
+  if (!length(pieces)) return(data.table())
+
+  rows <- lapply(pieces, function(piece) {
+    inner <- trimws(gsub("^\\(|\\)$", "", piece))
+    toks <- trimws(strsplit(inner, ",", fixed = TRUE)[[1]])
+    toks <- toks[nzchar(toks)]
+    if (!length(toks)) return(NULL)
+    num_at <- function(i, default = NA_real_) {
+      if (length(toks) < i) return(default)
+      z <- suppressWarnings(as.numeric(toks[i]))
+      if (is.finite(z)) z else default
+    }
+    sign_raw <- "+-"
+    if (length(toks) >= 8L) {
+      sign_raw <- toks[8L]
+    } else if (length(toks) >= 4L && grepl("^(\\+|-|\\+-|-\\+|pos|positive|neg|negative|free|both|any)$", tolower(toks[4L]))) {
+      sign_raw <- toks[4L]
+    }
+    context_key <- toks[1L]
+    data.table(
+      variable = as.character(variable),
+      context_key = as.character(context_key),
+      context_coef_mean = num_at(2L, 0),
+      context_coef_sd = num_at(3L, if (tolower(context_key) == "time") 0.10 else 0.05),
+      context_change_mean = if (length(toks) >= 5L) num_at(4L, NA_real_) else NA_real_,
+      context_change_sd = if (length(toks) >= 5L) num_at(5L, NA_real_) else NA_real_,
+      context_rho_mean = if (length(toks) >= 7L) num_at(6L, NA_real_) else NA_real_,
+      context_rho_sd = if (length(toks) >= 7L) num_at(7L, NA_real_) else NA_real_,
+      context_sign = normalize_context_sign_hier_mmm(sign_raw),
+      raw_context_spec = piece
+    )
+  })
+  rbindlist(rows[!vapply(rows, is.null, logical(1))], use.names = TRUE, fill = TRUE)
+}
+
+clean_context_effects_hier_mmm <- function(context_effects = NULL, metadata = NULL) {
+  rows <- list()
+  if (!is.null(metadata)) {
+    md <- as.data.table(copy(metadata))
+    context_col <- pick_first_existing_col(
+      md,
+      c("context", "context_effects", "context_modifiers", "effect_modifiers", "effect_context", "context_multiplier")
+    )
+    if (!is.na(context_col)) {
+      parsed <- rbindlist(lapply(seq_len(nrow(md)), function(i) {
+        parse_context_effect_cell_hier_mmm(md[[context_col]][i], md$variable[i])
+      }), use.names = TRUE, fill = TRUE)
+      if (nrow(parsed)) rows[[length(rows) + 1L]] <- parsed[, source := paste0("metadata.", context_col)][]
+    }
+  }
+
+  if (!is.null(context_effects)) {
+    ce <- read_input_table(context_effects)
+    ce <- as.data.table(copy(ce))
+    if (nrow(ce)) {
+      if (!"variable" %in% names(ce)) stop("context_effects must include variable.")
+      ce[, variable := as.character(variable)]
+      cell_col <- pick_first_existing_col(
+        ce,
+        c("context", "context_effects", "context_modifiers", "effect_modifiers", "effect_context", "context_multiplier")
+      )
+      key_col <- pick_first_existing_col(ce, c("context_key", "context_col", "context_variable", "context_driver", "driver", "context_name"))
+      if (!is.na(cell_col) && is.na(key_col)) {
+        parsed <- rbindlist(lapply(seq_len(nrow(ce)), function(i) {
+          parse_context_effect_cell_hier_mmm(ce[[cell_col]][i], ce$variable[i])
+        }), use.names = TRUE, fill = TRUE)
+        if (nrow(parsed)) rows[[length(rows) + 1L]] <- parsed[, source := "context_effects.cell"][]
+      } else {
+        if (is.na(key_col)) stop("context_effects must include context_key/context_col or a context tuple column.")
+        mean_col <- pick_first_existing_col(ce, c("context_coef_mean", "gamma_prior", "gamma_mean", "coef_mean", "mean"))
+        sd_col <- pick_first_existing_col(ce, c("context_coef_sd", "gamma_sd", "coef_sd", "sd"))
+        sign_col <- pick_first_existing_col(ce, c("context_sign", "sign", "direction"))
+        out <- data.table(
+          variable = ce$variable,
+          context_key = as.character(ce[[key_col]]),
+          context_coef_mean = if (!is.na(mean_col)) suppressWarnings(as.numeric(ce[[mean_col]])) else 0,
+          context_coef_sd = if (!is.na(sd_col)) suppressWarnings(as.numeric(ce[[sd_col]])) else NA_real_,
+          context_change_mean = NA_real_,
+          context_change_sd = NA_real_,
+          context_rho_mean = NA_real_,
+          context_rho_sd = NA_real_,
+          context_sign = normalize_context_sign_hier_mmm(if (!is.na(sign_col)) ce[[sign_col]] else "+-"),
+          raw_context_spec = NA_character_,
+          source = "context_effects.table"
+        )
+        rows[[length(rows) + 1L]] <- out
+      }
+    }
+  }
+
+  out <- rbindlist(rows, use.names = TRUE, fill = TRUE)
+  if (!nrow(out)) return(data.table())
+  out[, `:=`(
+    variable = trimws(as.character(variable)),
+    context_key = trimws(as.character(context_key)),
+    context_key_normalized = tolower(trimws(as.character(context_key))),
+    context_coef_mean = suppressWarnings(as.numeric(context_coef_mean)),
+    context_coef_sd = suppressWarnings(as.numeric(context_coef_sd))
+  )]
+  out <- out[nzchar(variable) & nzchar(context_key)]
+  if (!nrow(out)) return(data.table())
+  out[!is.finite(context_coef_mean) | is.na(context_coef_mean), context_coef_mean := 0]
+  out[!is.finite(context_coef_sd) | is.na(context_coef_sd) | context_coef_sd <= 0,
+      context_coef_sd := fifelse(context_key_normalized == "time", 0.10, 0.05)]
+  out[, context_coef_sd := pmax(context_coef_sd, 1e-4)]
+  if (out[context_sign == "positive" & context_coef_mean < 0, .N] > 0L) {
+    stop("Positive context effects cannot have negative context_coef_mean/gamma_prior.")
+  }
+  if (out[context_sign == "negative" & context_coef_mean > 0, .N] > 0L) {
+    stop("Negative context effects cannot have positive context_coef_mean/gamma_prior.")
+  }
+  if (out[context_key_normalized == "time", .N] > 0L) {
+    out[context_key_normalized == "time", context_key := "time"]
+  }
+  if (anyDuplicated(out[, .(variable, context_key_normalized)])) {
+    dup <- out[duplicated(out[, .(variable, context_key_normalized)]) | duplicated(out[, .(variable, context_key_normalized)], fromLast = TRUE),
+               paste0(variable, ":", context_key)]
+    stop("Duplicate context effect definitions are not allowed: ", paste(unique(dup), collapse = ", "))
+  }
+  out[, context_idx := .I]
+  out[, context_type := fifelse(context_key_normalized == "time", "time", "column")]
+  out[, context_sign_code := fifelse(context_sign == "positive", 1L, fifelse(context_sign == "negative", -1L, 0L))]
+  setcolorder(out, c(
+    "context_idx", "variable", "context_key", "context_type", "context_sign", "context_sign_code",
+    "context_coef_mean", "context_coef_sd", "context_change_mean", "context_change_sd",
+    "context_rho_mean", "context_rho_sd", "source", "raw_context_spec"
+  ))
+  out[]
+}
+
+context_effect_multiplier_hier_mmm <- function(stan_data,
+                                               variable_idx,
+                                               row_idx = NULL,
+                                               context_coef = NULL) {
+  k_context <- as.integer(stan_data$K_context %||% 0L)
+  if (!k_context) {
+    n <- if (is.null(row_idx)) stan_data$N else length(row_idx)
+    return(rep(1, n))
+  }
+  if (is.null(row_idx)) row_idx <- seq_len(stan_data$N)
+  row_idx <- as.integer(row_idx)
+  context_coef <- context_coef %||% stan_data$context_coef_mu
+  context_coef <- as.numeric(context_coef)
+  hit <- which(as.integer(stan_data$context_variable_idx) == as.integer(variable_idx)[1])
+  if (!length(hit)) return(rep(1, length(row_idx)))
+  x <- stan_data$X_context[row_idx, hit, drop = FALSE]
+  log_mult <- as.numeric(x %*% context_coef[hit])
+  bound <- as.numeric(stan_data$context_log_multiplier_bound %||% 2)[1]
+  if (is.finite(bound) && bound > 0) log_mult <- clip_numeric(log_mult, -bound, bound)
+  exp(log_mult)
+}
+
 build_curve_priors <- function(meta, estimate_dvalue = FALSE, curve_prior_relax = 2, min_sd_frac = 0.08) {
   md <- copy(meta)
   first_num_col <- function(dt, cols, default = NA_real_) {
@@ -1912,6 +2086,8 @@ prepare_stan_data_hier_mmm <- function(data,
                                        default_negative_coef_lower = -3,
                                        default_one_sided_coef_span = 6,
                                        coef_override_input = NULL,
+                                       context_effects = NULL,
+                                       context_log_multiplier_bound = 2,
                                        intercept_type = "fourier",
                                        ucm_spec = NULL,
                                        use_ucm_metadata = FALSE,
@@ -1979,6 +2155,10 @@ prepare_stan_data_hier_mmm <- function(data,
   if (!is.finite(sigma_y_upper) || is.na(sigma_y_upper) || sigma_y_upper <= sigma_y_floor) {
     stop("sigma_y_upper must be finite and greater than sigma_y_floor.")
   }
+  context_log_multiplier_bound <- as.numeric(context_log_multiplier_bound)[1]
+  if (!is.finite(context_log_multiplier_bound) || is.na(context_log_multiplier_bound) || context_log_multiplier_bound <= 0) {
+    stop("context_log_multiplier_bound must be finite and > 0.")
+  }
   likelihood_family <- if (likelihood == "student_t") 2L else 1L
 
   dt <- as.data.table(copy(data))
@@ -2041,6 +2221,18 @@ prepare_stan_data_hier_mmm <- function(data,
   )
   dt <- holiday_controls$data
   extra_control_cols <- holiday_controls$extra_control_cols
+  context_effects_clean <- clean_context_effects_hier_mmm(context_effects = context_effects, metadata = md)
+  if (nrow(context_effects_clean)) {
+    missing_context_vars <- setdiff(context_effects_clean$variable, md$variable)
+    if (length(missing_context_vars)) {
+      stop("context_effects references modeled variables missing from metadata: ", paste(missing_context_vars, collapse = ", "))
+    }
+    column_contexts <- context_effects_clean[context_type == "column", unique(context_key)]
+    missing_context_cols <- setdiff(column_contexts, names(dt))
+    if (length(missing_context_cols)) {
+      stop("context_effects references context columns missing from data: ", paste(missing_context_cols, collapse = ", "))
+    }
+  }
   holdout_last_n <- as.integer(holdout_last_n %||% 0L)
   if (!is.finite(holdout_last_n) || is.na(holdout_last_n) || holdout_last_n < 0L) {
     stop("holdout_last_n must be a non-negative integer.")
@@ -2061,7 +2253,8 @@ prepare_stan_data_hier_mmm <- function(data,
   if (anyNA(dt[[group_col]])) stop("group_col contains NA values.")
   if (anyNA(dt[[time_col]])) stop("time_col contains NA values.")
 
-  keep_cols <- unique(c(group_col, time_col, entity_col, dep_var_col, md$variable, extra_control_cols, dep_scale_col, holdout_col))
+  context_keep_cols <- if (nrow(context_effects_clean)) context_effects_clean[context_type == "column", unique(context_key)] else character()
+  keep_cols <- unique(c(group_col, time_col, entity_col, dep_var_col, md$variable, extra_control_cols, context_keep_cols, dep_scale_col, holdout_col))
   ignored_data_cols <- setdiff(names(dt), keep_cols)
   dt <- dt[, ..keep_cols]
 
@@ -2219,6 +2412,44 @@ prepare_stan_data_hier_mmm <- function(data,
   variable_lookup[, variable_idx := .I]
   variable_lookup[, curve_param_idx := 0L]
   variable_lookup[has_curve == 1L, curve_param_idx := seq_len(.N)]
+
+  context_effect_audit <- copy(context_effects_clean)
+  X_context <- matrix(0, nrow = nrow(dt), ncol = nrow(context_effect_audit))
+  if (nrow(context_effect_audit)) {
+    context_effect_audit[, variable_idx := match(variable, variable_lookup$variable)]
+    if (anyNA(context_effect_audit$variable_idx)) {
+      stop("Internal error: failed to map context_effects variable to variable_lookup.")
+    }
+    for (h in seq_len(nrow(context_effect_audit))) {
+      ck <- context_effect_audit$context_key[h]
+      if (identical(context_effect_audit$context_type[h], "time")) {
+        raw_vec <- dt[, seq_len(.N), by = group_col]$V1
+      } else {
+        raw_vec <- suppressWarnings(as.numeric(dt[[ck]]))
+      }
+      if (any(!is.finite(raw_vec) | is.na(raw_vec))) {
+        stop("Context driver '", ck, "' for variable '", context_effect_audit$variable[h],
+             "' contains NA/non-finite values. Clean or impute it before fitting.")
+      }
+      m <- mean(raw_vec[train_idx], na.rm = TRUE)
+      s <- safe_sd(raw_vec[train_idx])
+      if (!is.finite(s) || is.na(s) || s <= 1e-8) {
+        stop("Context driver '", ck, "' for variable '", context_effect_audit$variable[h],
+             "' has zero/nearly-zero training variance.")
+      }
+      X_context[, h] <- (raw_vec - m) / s
+      context_effect_audit[h, `:=`(
+        context_train_mean = m,
+        context_train_sd = s,
+        context_note = fifelse(
+          context_type == "time",
+          "time special key: generated as within-group row index, then standardized on training rows",
+          "named data column: standardized on training rows"
+        )
+      )]
+    }
+  }
+  storage.mode(X_context) <- "double"
 
   curve_priors <- build_curve_priors(
     md,
@@ -2431,6 +2662,10 @@ prepare_stan_data_hier_mmm <- function(data,
     metadata = md,
     group_lookup = group_lookup
   )
+  context_sign_code <- if (nrow(context_effect_audit)) as.integer(context_effect_audit$context_sign_code) else integer()
+  context_pos_pos <- which(context_sign_code == 1L)
+  context_neg_pos <- which(context_sign_code == -1L)
+  context_free_pos <- which(context_sign_code == 0L)
 
   stan_data <- list(
     N = nrow(dt),
@@ -2460,6 +2695,19 @@ prepare_stan_data_hier_mmm <- function(data,
     curve_type = variable_lookup[has_curve == 1L, as.integer(fifelse(curve_type == "hill", 2L, 1L))],
     X_curve_fixed = X_curve_fixed,
     X_curve_fixed_center = X_curve_fixed_center,
+    K_context = ncol(X_context),
+    X_context = X_context,
+    context_variable_idx = if (nrow(context_effect_audit)) as.integer(context_effect_audit$variable_idx) else integer(),
+    context_coef_mu = if (nrow(context_effect_audit)) as.numeric(context_effect_audit$context_coef_mean) else numeric(),
+    context_coef_sd = if (nrow(context_effect_audit)) as.numeric(context_effect_audit$context_coef_sd) else numeric(),
+    context_sign = context_sign_code,
+    K_context_pos = length(context_pos_pos),
+    K_context_neg = length(context_neg_pos),
+    K_context_free = length(context_free_pos),
+    context_pos_pos = as.integer(context_pos_pos),
+    context_neg_pos = as.integer(context_neg_pos),
+    context_free_pos = as.integer(context_free_pos),
+    context_log_multiplier_bound = as.numeric(context_log_multiplier_bound),
 
     intercept_mode = as.integer(intercept_spec$intercept_mode),
     intercept_use_level = as.integer(intercept_spec$use_level),
@@ -2596,6 +2844,14 @@ prepare_stan_data_hier_mmm <- function(data,
   if (length(stan_data$curve_type) != stan_data$J_curve) stop("Internal error: curve_type length does not match J_curve.")
   if (nrow(stan_data$X_curve_fixed) != stan_data$N || ncol(stan_data$X_curve_fixed) != stan_data$J_curve) stop("Internal error: X_curve_fixed dimensions do not match N/J_curve.")
   if (nrow(stan_data$X_curve_fixed_center) != stan_data$G || ncol(stan_data$X_curve_fixed_center) != stan_data$J_curve) stop("Internal error: X_curve_fixed_center dimensions do not match G/J_curve.")
+  if (nrow(stan_data$X_context) != stan_data$N || ncol(stan_data$X_context) != stan_data$K_context) stop("Internal error: X_context dimensions do not match N/K_context.")
+  if (length(stan_data$context_variable_idx) != stan_data$K_context) stop("Internal error: context_variable_idx length does not match K_context.")
+  if (length(stan_data$context_coef_mu) != stan_data$K_context || length(stan_data$context_coef_sd) != stan_data$K_context) stop("Internal error: context coefficient prior lengths do not match K_context.")
+  if (length(stan_data$context_sign) != stan_data$K_context) stop("Internal error: context_sign length does not match K_context.")
+  if (length(stan_data$context_pos_pos) != stan_data$K_context_pos) stop("Internal error: context_pos_pos length does not match K_context_pos.")
+  if (length(stan_data$context_neg_pos) != stan_data$K_context_neg) stop("Internal error: context_neg_pos length does not match K_context_neg.")
+  if (length(stan_data$context_free_pos) != stan_data$K_context_free) stop("Internal error: context_free_pos length does not match K_context_free.")
+  if (stan_data$K_context && any(stan_data$context_variable_idx < 1L | stan_data$context_variable_idx > stan_data$J)) stop("Internal error: invalid context_variable_idx values.")
   if (length(stan_data$sample_curve_parameter) != stan_data$J_curve) stop("Internal error: sample_curve_parameter length does not match J_curve.")
   if (length(stan_data$curve_sampled_pos) != stan_data$J_curve_sampled) stop("Internal error: curve_sampled_pos length does not match J_curve_sampled.")
   if (stan_data$J_curve_sampled && any(stan_data$curve_sampled_pos < 1L | stan_data$curve_sampled_pos > stan_data$J_curve)) stop("Internal error: invalid curve_sampled_pos values.")
@@ -2637,6 +2893,7 @@ prepare_stan_data_hier_mmm <- function(data,
       sample_coef_hierarchy_flag, hierarchy_blocker_reason
     )],
     variable_lookup = variable_lookup,
+    context_effects = context_effect_audit,
     group_lookup = group_lookup,
     intercept_spec = intercept_spec$label,
     intercept_use_level = intercept_spec$use_level,
@@ -2671,6 +2928,7 @@ prepare_stan_data_hier_mmm <- function(data,
     min_coef_sd_abs = min_coef_sd_abs,
     min_coef_sd_frac = min_coef_sd_frac,
     hard_prior_precision_threshold = hard_prior_precision_threshold,
+    context_log_multiplier_bound = context_log_multiplier_bound,
     use_ucm_metadata = use_ucm_metadata,
     ucm_metadata = if (isTRUE(use_ucm_metadata)) ucm_cfg$ucm_metadata else data.table(),
     ucm_prior_controls = list(
@@ -2747,7 +3005,12 @@ prior_non_intercept_mu <- function(sd, beta = NULL) {
       if (isTRUE(sd$center_predictors_for_sampling == 1L)) {
         x_val <- x_val - sd$X_center_mean[g, sd$linear_idx]
       }
-      mu[n] <- mu[n] + sum(beta[g, sd$linear_idx] * x_val)
+      context_mult <- vapply(
+        sd$linear_idx,
+        function(j) context_effect_multiplier_hier_mmm(sd, variable_idx = j, row_idx = n, context_coef = sd$context_coef_mu)[1],
+        numeric(1)
+      )
+      mu[n] <- mu[n] + sum(beta[g, sd$linear_idx] * context_mult * x_val)
     }
   }
 
@@ -2775,7 +3038,8 @@ prior_non_intercept_mu <- function(sd, beta = NULL) {
         )
         trans <- tr$transformed
         center_value <- if (isTRUE(sd$center_predictors_for_sampling == 1L)) tr$center_value else 0
-        mu[idx] <- mu[idx] + beta[g, j] * (trans - center_value)
+        context_mult <- context_effect_multiplier_hier_mmm(sd, variable_idx = j, row_idx = idx, context_coef = sd$context_coef_mu)
+        mu[idx] <- mu[idx] + beta[g, j] * context_mult * (trans - center_value)
       }
     }
   }
@@ -2962,6 +3226,10 @@ build_ucm_warm_start_init <- function(prep,
     cycle_sd = cycle_init$sd,
     cycle_raw = cycle_init$raw,
 
+    context_coef_pos = pmax(as.numeric(sd$context_coef_mu[sd$context_pos_pos]), 1e-6),
+    context_coef_neg = pmin(as.numeric(sd$context_coef_mu[sd$context_neg_pos]), -1e-6),
+    context_coef_free = as.numeric(sd$context_coef_mu[sd$context_free_pos]),
+
     gamma = rep(0, sd$K_extra),
     sigma_y = sigma_y_init
   )
@@ -3056,7 +3324,7 @@ extract_posterior_means_hier_mmm <- function(fit, prep) {
   sm <- summarize_fit_vars(
     fit,
     variables = c(
-      "beta", "rrate", "cvalue", "dvalue", "alpha_flat", "gamma",
+      "beta", "rrate", "cvalue", "dvalue", "context_coef", "alpha_flat", "gamma",
       "level_component", "cycle_component", "season_component", "level_state", "sigma_y"
     )
   )
@@ -3073,6 +3341,7 @@ extract_posterior_means_hier_mmm <- function(fit, prep) {
   J <- prep$stan_data$J
   G <- prep$stan_data$G
   K_extra <- prep$stan_data$K_extra
+  K_context <- as.integer(prep$stan_data$K_context %||% 0L)
 
   beta <- matrix(0, nrow = G, ncol = J)
   for (g in seq_len(G)) {
@@ -3095,6 +3364,9 @@ extract_posterior_means_hier_mmm <- function(fit, prep) {
 
   alpha_flat <- vapply(seq_len(G), function(g) get_mean(sprintf("alpha_flat[%d]", g), 0), numeric(1))
   gamma <- if (K_extra > 0) vapply(seq_len(K_extra), function(k) get_mean(sprintf("gamma[%d]", k), 0), numeric(1)) else numeric()
+  context_coef <- if (K_context > 0) {
+    vapply(seq_len(K_context), function(k) get_mean(sprintf("context_coef[%d]", k), prep$stan_data$context_coef_mu[k] %||% 0), numeric(1))
+  } else numeric()
   level_component <- vapply(seq_len(prep$stan_data$N), function(i) get_mean(sprintf("level_component[%d]", i), 0), numeric(1))
   cycle_component <- vapply(seq_len(prep$stan_data$N), function(i) get_mean(sprintf("cycle_component[%d]", i), 0), numeric(1))
   season_component <- vapply(seq_len(prep$stan_data$N), function(i) get_mean(sprintf("season_component[%d]", i), 0), numeric(1))
@@ -3108,6 +3380,7 @@ extract_posterior_means_hier_mmm <- function(fit, prep) {
     dvalue = dvalue,
     alpha_flat = alpha_flat,
     gamma = gamma,
+    context_coef = context_coef,
     level_component = level_component,
     cycle_component = cycle_component,
     season_component = season_component,
@@ -3187,10 +3460,16 @@ build_outputs_hier_mmm <- function(fit, prep, extra_control_cols = NULL) {
     for (v in linear_vars) {
       j <- vl[variable == v, variable_idx]
       beta_vec <- pm$beta[cbind(dt$group_idx, j)]
+      context_mult <- context_effect_multiplier_hier_mmm(
+        prep$stan_data,
+        variable_idx = j,
+        row_idx = seq_len(nrow(dt)),
+        context_coef = pm$context_coef
+      )
       if (isTRUE(center_predictors)) {
-        center_offset_model <- center_offset_model + beta_vec * prep$stan_data$X_center_mean[dt$group_idx, j]
+        center_offset_model <- center_offset_model + beta_vec * context_mult * prep$stan_data$X_center_mean[dt$group_idx, j]
       }
-      dt[, (v) := get(v) * beta_vec]
+      dt[, (v) := get(v) * beta_vec * context_mult]
     }
     contrib_cols <- c(contrib_cols, linear_vars)
   }
@@ -3219,10 +3498,16 @@ build_outputs_hier_mmm <- function(fit, prep, extra_control_cols = NULL) {
         )
         trans_vec <- tr$transformed
         center_value <- tr$center_value
+        context_mult <- context_effect_multiplier_hier_mmm(
+          prep$stan_data,
+          variable_idx = j,
+          row_idx = idx,
+          context_coef = pm$context_coef
+        )
         if (isTRUE(center_predictors)) {
-          center_offset_model[idx] <- center_offset_model[idx] + pm$beta[g, j] * center_value
+          center_offset_model[idx] <- center_offset_model[idx] + pm$beta[g, j] * context_mult * center_value
         }
-        tmp[idx] <- pm$beta[g, j] * trans_vec
+        tmp[idx] <- pm$beta[g, j] * context_mult * trans_vec
       }
       dt[, (v) := tmp]
     }
@@ -4102,6 +4387,8 @@ fit_hier_mmm_engine <- function(data,
                          default_negative_coef_lower = -3,
                          default_one_sided_coef_span = 6,
                          coef_override_input = NULL,
+                         context_effects = NULL,
+                         context_log_multiplier_bound = 2,
                          intercept_type = "fourier",
                          ucm_spec = list(
                            level = FALSE,
@@ -4231,6 +4518,8 @@ fit_hier_mmm_engine <- function(data,
     default_negative_coef_lower = default_negative_coef_lower,
     default_one_sided_coef_span = default_one_sided_coef_span,
     coef_override_input = coef_override_input,
+    context_effects = context_effects,
+    context_log_multiplier_bound = context_log_multiplier_bound,
     intercept_type = intercept_type,
     ucm_spec = ucm_spec,
     use_ucm_metadata = use_ucm_metadata,
@@ -4340,7 +4629,7 @@ fit_hier_mmm_engine <- function(data,
   if (!is.null(output_variables) && !identical(output_variables, "all")) {
     if (identical(output_variables, "lean")) {
       output_variables <- c(
-        "beta", "rrate", "cvalue", "dvalue", "alpha_flat", "gamma",
+        "beta", "rrate", "cvalue", "dvalue", "context_coef", "alpha_flat", "gamma",
         "level_component", "cycle_component", "season_component", "level_state",
         "sigma_y", "y_hat", "log_lik"
       )
@@ -4436,6 +4725,7 @@ fit_hier_mmm_engine <- function(data,
     metadata = prep$metadata,
     curve_priors = prep$curve_priors,
     variable_lookup = prep$variable_lookup,
+    context_effects = prep$context_effects,
     group_lookup = prep$group_lookup,
     data = prep$data,
     intercept_type = prep$intercept_type,
@@ -4473,6 +4763,7 @@ fit_hier_mmm_engine <- function(data,
     min_coef_sd_abs = prep$min_coef_sd_abs,
     min_coef_sd_frac = prep$min_coef_sd_frac,
     hard_prior_precision_threshold = prep$hard_prior_precision_threshold,
+    context_log_multiplier_bound = prep$context_log_multiplier_bound,
     checkpoint_file = checkpoint_file,
     ucm_prior_controls = prep$ucm_prior_controls,
     holiday_control_audit = prep$holiday_control_audit,
@@ -4787,7 +5078,13 @@ variable_contribution_rows_hier_mmm <- function(fit_obj, variable, multiplier = 
 
   if (!has_curve) {
     beta_vec <- pm$beta[dt$group_idx, j]
-    out <- beta_vec * (dt[[var_name]] * multiplier) * scale
+    context_mult <- context_effect_multiplier_hier_mmm(
+      fit_obj$stan_data,
+      variable_idx = j,
+      row_idx = seq_len(nrow(dt)),
+      context_coef = pm$context_coef
+    )
+    out <- beta_vec * context_mult * (dt[[var_name]] * multiplier) * scale
     return(out)
   }
 
@@ -4812,7 +5109,13 @@ variable_contribution_rows_hier_mmm <- function(fit_obj, variable, multiplier = 
       multiplier = multiplier
     )
     trans <- tr$transformed
-    out[idx] <- pm$beta[g, j] * trans * scale[idx]
+    context_mult <- context_effect_multiplier_hier_mmm(
+      fit_obj$stan_data,
+      variable_idx = j,
+      row_idx = idx,
+      context_coef = pm$context_coef
+    )
+    out[idx] <- pm$beta[g, j] * context_mult * trans * scale[idx]
   }
   out
 }
@@ -5850,6 +6153,7 @@ fit_hier_mmm <- function(data,
                          business_prior_max_precision = Inf,
                          calibration_input = NULL,
                          budget_optimizer_config = NULL,
+                         context_effects = NULL,
                          raw_output_data = NULL,
                          create_response_curves = TRUE,
                          create_response_curve_draws = FALSE,
@@ -5891,6 +6195,7 @@ fit_hier_mmm <- function(data,
     group_col = group_col,
     time_col = time_col,
     entity_col = entity_col,
+    context_effects = context_effects,
     holiday_config = holiday_config,
     output_dir = output_dir,
     output_prefix = output_prefix

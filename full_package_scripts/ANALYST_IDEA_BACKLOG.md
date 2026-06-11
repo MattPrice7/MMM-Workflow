@@ -54,7 +54,7 @@ This is the cleaned, non-train-of-thought backlog promoted from the scratchpad. 
 ## Maybe / Research
 
 - Time-varying media coefficients with tight smoothing priors.
-- Context-varying effectiveness multipliers for named hypotheses, off by default and tightly regularized.
+- Future extension to the implemented context-varying effectiveness multipliers: smooth AR/random-walk time variation if the safer train-standardized `time` context key is not enough.
 - Neural curve estimation metadata experiments: compare "media-only metadata" versus richer channel/context labels, but prevent memorizing channel names as fixed truth through randomized simulation labels and channel permutations.
 - Crossed random effects across product, geo, retailer, and other model ID dimensions.
 - Latent mediation from non-interactable channels into interactable channels.

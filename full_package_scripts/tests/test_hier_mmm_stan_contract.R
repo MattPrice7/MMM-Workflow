@@ -37,6 +37,7 @@ make_panel <- function(groups = c("G1", "G2"), n = 24L) {
   dt[, national_tv := pmax(1, 90 + 8 * sin(idx / 5))]
   dt[, price := 1 + 0.03 * cos(idx / 6)]
   dt[, promo := as.numeric(idx %% 9L == 0L)]
+  dt[, context_signal := 0.5 * sin(idx / 5) + 0.1 * gidx]
   dt[, lower_var := pmax(0.1, 5 + 0.2 * idx + gidx)]
   dt[, upper_var := pmax(0.1, 7 + 0.1 * idx - 0.2 * gidx)]
   dt[, bounded_var := pmax(0.1, 4 + sin(idx / 3) + 0.5 * gidx)]
@@ -111,6 +112,41 @@ curve_helper_check <- media_transform_hier_mmm(
 add_result("fixed-curve Stan input precomputes canonical transform",
            max(abs(sd1$X_curve_fixed[, 1] - curve_helper_check$transformed), na.rm = TRUE) < 1e-12 &&
              abs(sd1$X_curve_fixed_center[1, 1] - curve_helper_check$center_value) < 1e-12)
+
+context_panel <- make_panel(groups = c("G1", "G2"), n = 18L)
+context_meta <- make_meta("tv")
+context_meta[, context := "(time, 0, 0.10, +-);(context_signal, 0.02, 0.03, +)"]
+prep_context <- prepare_stan_data_hier_mmm(
+  data = context_panel,
+  metadata_input = context_meta,
+  dep_var_col = "y",
+  group_col = "geo",
+  time_col = "week",
+  entity_col = "entity",
+  holdout_last_n = 2L,
+  intercept_type = "flat",
+  normalize_curve_x = TRUE,
+  sample_curve_parameters = "never",
+  context_log_multiplier_bound = 1.5
+)
+sd_context <- prep_context$stan_data
+context_train <- sd_context$is_train == 1L
+add_result("context metadata tuples build Stan context contract",
+           sd_context$K_context == 2L &&
+             ncol(sd_context$X_context) == 2L &&
+             sd_context$K_context_pos == 1L &&
+             sd_context$K_context_free == 1L &&
+             sd_context$context_log_multiplier_bound == 1.5 &&
+             all(sd_context$context_variable_idx == prep_context$variable_lookup[variable == "tv", variable_idx][1]))
+add_result("context drivers are standardized on training rows",
+           max(abs(colMeans(sd_context$X_context[context_train, , drop = FALSE])), na.rm = TRUE) < 1e-12 &&
+             max(abs(apply(sd_context$X_context[context_train, , drop = FALSE], 2, sd) - 1), na.rm = TRUE) < 1e-12 &&
+             prep_context$context_effects[context_key == "time", grepl("time special key", context_note)][1])
+context_init <- build_ucm_warm_start_init(prep_context, chains = 1L, seed = 123)
+add_result("context warm-start init respects sign-constrained parameter blocks",
+           length(context_init[[1]]$context_coef_pos) == 1L &&
+             length(context_init[[1]]$context_coef_free) == 1L &&
+             context_init[[1]]$context_coef_pos[1] > 0)
 
 generic_panel <- make_panel(groups = c("north", "south"), n = 10L)
 generic_panel[, model_id := paste(entity, geo, sep = "|")]

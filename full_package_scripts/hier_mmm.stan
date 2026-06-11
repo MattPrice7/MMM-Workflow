@@ -33,6 +33,27 @@
 // - R wrapper uses explicit index mapping before this Stan data is built
 // =============================================================================
 
+functions {
+  real context_multiplier_hier_mmm(int n,
+                                   int j,
+                                   int K_context,
+                                   matrix X_context,
+                                   array[] int context_variable_idx,
+                                   vector context_coef,
+                                   real context_log_multiplier_bound) {
+    real log_mult = 0;
+    if (K_context > 0) {
+      for (h in 1:K_context) {
+        if (context_variable_idx[h] == j)
+          log_mult += context_coef[h] * X_context[n, h];
+      }
+    }
+    if (context_log_multiplier_bound > 0)
+      log_mult = fmin(fmax(log_mult, -context_log_multiplier_bound), context_log_multiplier_bound);
+    return exp(log_mult);
+  }
+}
+
 data {
   int<lower=1> N;
   int<lower=1> J;
@@ -64,6 +85,19 @@ data {
   // train-only scaling path. This keeps fixed curves out of the autodiff graph.
   matrix[N, J_curve] X_curve_fixed;
   matrix[G, J_curve] X_curve_fixed_center;
+  int<lower=0> K_context;
+  matrix[N, K_context] X_context;
+  array[K_context] int<lower=1, upper=J> context_variable_idx;
+  vector[K_context] context_coef_mu;
+  vector<lower=0>[K_context] context_coef_sd;
+  array[K_context] int<lower=-1, upper=1> context_sign;
+  int<lower=0> K_context_pos;
+  int<lower=0> K_context_neg;
+  int<lower=0> K_context_free;
+  array[K_context_pos] int<lower=1, upper=K_context> context_pos_pos;
+  array[K_context_neg] int<lower=1, upper=K_context> context_neg_pos;
+  array[K_context_free] int<lower=1, upper=K_context> context_free_pos;
+  real<lower=0> context_log_multiplier_bound;
 
   int<lower=0, upper=2> intercept_mode; // 0 none, 1 flat, 2 structured intercept
   int<lower=0, upper=1> intercept_use_level;
@@ -241,6 +275,9 @@ parameters {
   matrix[G, K_cycle] cycle_raw;
 
   vector[K_extra] gamma;
+  vector<lower=0>[K_context_pos] context_coef_pos;
+  vector<upper=0>[K_context_neg] context_coef_neg;
+  vector[K_context_free] context_coef_free;
   real<lower=sigma_y_floor, upper=sigma_y_upper> sigma_y;
 }
 transformed parameters {
@@ -248,6 +285,7 @@ transformed parameters {
   vector[J_curve] cvalue;
   vector[J_curve] dvalue;
   matrix[G, J] beta;
+  vector[K_context] context_coef;
   vector[G] alpha_flat;
   vector[N] level_component;
   vector[N] season_component;
@@ -356,6 +394,19 @@ transformed parameters {
       }
     }
 
+  context_coef = rep_vector(0, K_context);
+  if (K_context > 0) {
+    if (K_context_pos > 0)
+      for (h in 1:K_context_pos)
+        context_coef[context_pos_pos[h]] = context_coef_pos[h];
+    if (K_context_neg > 0)
+      for (h in 1:K_context_neg)
+        context_coef[context_neg_pos[h]] = context_coef_neg[h];
+    if (K_context_free > 0)
+      for (h in 1:K_context_free)
+        context_coef[context_free_pos[h]] = context_coef_free[h];
+  }
+
   if (alpha_parameterization == 3) {
     alpha_flat = rep_vector(alpha_mu, G);
   } else if (alpha_parameterization == 2) {
@@ -433,10 +484,13 @@ transformed parameters {
       real lin = 0;
       for (k in 1:J_linear)
         if (center_predictors_for_sampling == 1) {
+          real context_mult = context_multiplier_hier_mmm(n, linear_idx[k], K_context, X_context, context_variable_idx, context_coef, context_log_multiplier_bound);
           lin += beta[group_id[n], linear_idx[k]]
+                 * context_mult
                  * (X[n, linear_idx[k]] - X_center_mean[group_id[n], linear_idx[k]]);
         } else {
-          lin += beta[group_id[n], linear_idx[k]] * X[n, linear_idx[k]];
+          real context_mult = context_multiplier_hier_mmm(n, linear_idx[k], K_context, X_context, context_variable_idx, context_coef, context_log_multiplier_bound);
+          lin += beta[group_id[n], linear_idx[k]] * context_mult * X[n, linear_idx[k]];
         }
       mu[n] += lin;
     }
@@ -448,8 +502,10 @@ transformed parameters {
         int j = curve_idx[k];
         if (sample_curve_parameter[k] == 0) {
           real center_value = center_predictors_for_sampling == 1 ? X_curve_fixed_center[g, k] : 0;
-          for (n in start_idx[g]:end_idx[g])
-            mu[n] += beta[g, j] * (X_curve_fixed[n, k] - center_value);
+          for (n in start_idx[g]:end_idx[g]) {
+            real context_mult = context_multiplier_hier_mmm(n, j, K_context, X_context, context_variable_idx, context_coef, context_log_multiplier_bound);
+            mu[n] += beta[g, j] * context_mult * (X_curve_fixed[n, k] - center_value);
+          }
         } else {
         real rr = rrate[k];
         real cv = cvalue[k];
@@ -539,7 +595,10 @@ transformed parameters {
               trans_model = trans;
               if (center_predictors_for_sampling == 1) center_value = trans_mean;
             }
-            mu[n] += beta[g, j] * (trans_model - center_value);
+            {
+              real context_mult = context_multiplier_hier_mmm(n, j, K_context, X_context, context_variable_idx, context_coef, context_log_multiplier_bound);
+              mu[n] += beta[g, j] * context_mult * (trans_model - center_value);
+            }
           }
         }
         }
@@ -559,6 +618,25 @@ model {
         dvalue_raw[h] ~ normal(dvalue_raw_mu[k], dvalue_raw_sd[k]);
       else
         dvalue_raw[h] ~ normal(dvalue_raw_mu[k], 0.05);
+    }
+  }
+
+  if (K_context_pos > 0) {
+    for (h in 1:K_context_pos) {
+      int k = context_pos_pos[h];
+      context_coef_pos[h] ~ normal(context_coef_mu[k], context_coef_sd[k]);
+    }
+  }
+  if (K_context_neg > 0) {
+    for (h in 1:K_context_neg) {
+      int k = context_neg_pos[h];
+      context_coef_neg[h] ~ normal(context_coef_mu[k], context_coef_sd[k]);
+    }
+  }
+  if (K_context_free > 0) {
+    for (h in 1:K_context_free) {
+      int k = context_free_pos[h];
+      context_coef_free[h] ~ normal(context_coef_mu[k], context_coef_sd[k]);
     }
   }
 

@@ -79,10 +79,10 @@ Active / Next:
 - [ ] Add diagnostics for baseline/UCM absorbing too much unexplained shock.
 - [ ] Validate brand-equity KPIs such as awareness, consideration, subscriptions, leads, or other non-revenue outcomes. Report KPI economics as cost per KPI / outcome per cost unless a value per KPI is supplied.
 - [ ] Add reach/frequency modeling when reach, frequency, impressions, or population are available.
-- [ ] Future / maybe: evaluate explicit interaction or effect-modifier helpers before adding time-varying coefficients. Examples include upper-funnel media modifying search response or seasonally varying channel effectiveness.
+- [x] Add optional context/effect-modifier helpers before adding time-varying coefficients. Implemented in Stan as off-by-default train-standardized context multipliers with sign constraints, including special `time` key support.
 - [ ] Future / maybe: evaluate highly regularized time-varying media coefficients only after simpler interactions, controls, and baseline diagnostics are mature.
 - [ ] Future / maybe: evaluate optional time-varying effectiveness multipliers, tightly regularized around 1.0 with smooth random-walk or AR(1) structure, gated per channel and off by default.
-- [ ] Future / maybe: evaluate optional context-varying effectiveness modifiers for named business hypotheses such as seasonal TV effectiveness or TV/social synergy, with explicit metadata, tight priors, sign constraints where justified, and min/max multiplier bounds.
+- [ ] Future / maybe: extend the context modifier to true smooth AR/random-walk time variation only if needed; keep current context-key version as the safer default.
 - [ ] Future / maybe: evaluate brand-equity or long-run media-stock states only when external signals exist, such as awareness, organic search, branded search, consideration, or other demand indicators.
 - [ ] Future / maybe: add optional `model_id_parts` metadata, e.g. `model_id`, `dimension_name`, `dimension_value`, so analysts can describe flexible model-cell pieces such as DMA, product, LOB, retailer, store type, segment, or platform. Keep the core model generic; use this only for rollups, diagnostics, optional hierarchy/shrinkage instructions, and future “pool across this dimension but not that one” settings.
 - [ ] Future / maybe: add explicit hierarchy/pooling keys derived from arbitrary model-ID parts, e.g. "pool within product" or "pool within product + retailer". This is separate from `source_entity`; do not overload halo/source metadata as the hierarchy-family key.
