@@ -611,6 +611,41 @@ add_result("keyed hierarchy maps group model-id parts into Stan pooling families
                prep_scope_keyed$stan_data$coef_hierarchy_mode_bounded,
                prep_scope_keyed$stan_data$coef_hierarchy_mode_free
              ) == 2L))
+prep_scope_keyed_single <- prepare_stan_data_hier_mmm(
+  data = make_panel(groups = c(
+    "east_walmart_chips",
+    "east_target_chips",
+    "west_walmart_chips"
+  ), n = 20L),
+  metadata_input = {
+    z <- make_meta("tv")
+    z[, `:=`(
+      coef_hierarchy_scope = "keyed",
+      hierarchy_key = "product"
+    )]
+    z
+  },
+  dep_var_col = "y",
+  group_col = "geo",
+  time_col = "week",
+  entity_col = "entity",
+  intercept_type = "flat",
+  sample_coef_hierarchy = "always",
+  coef_hierarchy_part_indices = 3
+)
+single_modes <- unlist(prep_scope_keyed_single$stan_data[c(
+  "coef_hierarchy_mode_pos",
+  "coef_hierarchy_mode_neg",
+  "coef_hierarchy_mode_lower",
+  "coef_hierarchy_mode_upper",
+  "coef_hierarchy_mode_bounded",
+  "coef_hierarchy_mode_free"
+)], use.names = FALSE)
+add_result("single keyed family collapses to regular global hierarchy",
+           prep_scope_keyed_single$stan_data$K_coef_hierarchy_keys == 1L &&
+             prep_scope_keyed_single$variable_lookup[variable == "tv", sample_coef_hierarchy_flag][1] == 1L &&
+             any(single_modes == 1L) &&
+             !any(single_modes == 2L))
 prep_scope_global <- prepare_stan_data_hier_mmm(
   data = make_panel(groups = c("G1", "G2", "G3"), n = 20L),
   metadata_input = {

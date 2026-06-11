@@ -2802,10 +2802,13 @@ prepare_stan_data_hier_mmm <- function(data,
     hierarchy_index_base = coef_hierarchy_index_base
   )
   group_lookup <- coef_hierarchy_key$group_lookup
+  keyed_single_family <- isTRUE(coef_hierarchy_key$active) && nrow(coef_hierarchy_key$key_lookup) <= 1L
   variable_lookup[, coef_hierarchy_mode := fifelse(
-    coef_hierarchy_scope == "keyed", 2L,
-    fifelse(coef_hierarchy_scope %in% c("auto", "global"), 1L, 0L)
+    coef_hierarchy_scope == "keyed" & !keyed_single_family, 2L,
+    fifelse(coef_hierarchy_scope %in% c("auto", "global") | (coef_hierarchy_scope == "keyed" & keyed_single_family), 1L, 0L)
   )]
+  variable_lookup[coef_hierarchy_scope == "keyed" & keyed_single_family,
+                  hierarchy_note := paste0(hierarchy_note, " Keyed mapping produced one family, so Stan collapses it to the regular global hierarchy to avoid an unnecessary extra latent layer.")]
   variable_lookup[, hierarchy_blocker_reason := NA_character_]
   variable_lookup[coef_hierarchy_scope == "none", hierarchy_blocker_reason := "coef_hierarchy_scope_none"]
   variable_lookup[, sample_coef_hierarchy_flag := {
@@ -2828,6 +2831,8 @@ prepare_stan_data_hier_mmm <- function(data,
       as.integer(global_flag | keyed_flag | auto_flag)
     }
   }]
+  variable_lookup[coef_hierarchy_scope == "keyed" & keyed_single_family & sample_coef_hierarchy_flag == 1L,
+                  hierarchy_blocker_reason := NA_character_]
   variable_lookup[sample_coef_hierarchy_flag == 0L & is.na(hierarchy_blocker_reason) & coef_hierarchy_scope == "keyed",
                   hierarchy_blocker_reason := "keyed_hierarchy_inactive_by_sample_coef_hierarchy_or_group_count"]
   variable_lookup[sample_coef_hierarchy_flag == 0L & is.na(hierarchy_blocker_reason) & coef_hierarchy_scale <= 0,
