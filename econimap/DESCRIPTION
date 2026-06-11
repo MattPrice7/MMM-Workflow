@@ -1,0 +1,29 @@
+Package: econimap
+Title: Analyst-Facing MMM Workflow Tools
+Version: 0.1.0
+Authors@R: person("Matt", "Price", role = c("aut", "cre"), email = "matt@example.com")
+Author: Matt Price [aut, cre]
+Maintainer: Matt Price <matt@example.com>
+Description: A script-compatible MMM workflow toolkit for hierarchical Stan MMM,
+    quasi-geo evidence, response curves, scenario planning, and deck-ready outputs.
+    The package shell keeps the current analyst scripts available while providing
+    a cleaner installation and loading surface.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Depends:
+    R (>= 4.1.0)
+Imports:
+    data.table
+Suggests:
+    cmdstanr,
+    posterior,
+    ggplot2,
+    readxl,
+    openxlsx,
+    shiny,
+    plotly,
+    DT,
+    loo,
+    jsonlite

@@ -20,6 +20,7 @@ venv/
 # Generated archives/checkpoints
 *.zip
 *.tar.gz
+*.Rcheck/
 *.pt
 *.pth
 *.ckpt
