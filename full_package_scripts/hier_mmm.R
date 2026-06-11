@@ -1213,6 +1213,30 @@ normalize_source_entity <- function(x) {
   x
 }
 
+normalize_coef_hierarchy_scope <- function(x) {
+  x <- trimws(tolower(as.character(x)))
+  x[is.na(x) | !nzchar(x)] <- "auto"
+  x <- gsub("-", "_", x)
+  x <- gsub("\\s+", "_", x)
+  out <- x
+  out[x %in% c("default", "automatic", "auto_global", "auto_all")] <- "auto"
+  out[x %in% c("all", "global", "across_all", "all_groups", "shared")] <- "global"
+  out[x %in% c("none", "no", "false", "fixed", "local", "within_group", "no_hierarchy", "off")] <- "none"
+  out[x %in% c("key", "keyed", "family", "pooling_key", "hier_key", "within_key", "within_family")] <- "keyed"
+  bad <- setdiff(unique(out), c("auto", "global", "none", "keyed"))
+  if (length(bad)) {
+    stop("Unsupported coef_hierarchy_scope values: ", paste(bad, collapse = ", "),
+         ". Use auto, global, none, or keyed.", call. = FALSE)
+  }
+  out
+}
+
+normalize_hierarchy_key <- function(x) {
+  x <- trimws(as.character(x))
+  x[is.na(x) | !nzchar(x) | tolower(x) %in% c("na", "n/a", "none", "0")] <- NA_character_
+  x
+}
+
 inv_logit_bounded <- function(x, lower, upper, eps = 1e-6) {
   p <- (x - lower) / (upper - lower)
   p <- pmin(pmax(p, eps), 1 - eps)
@@ -1418,6 +1442,27 @@ clean_metadata <- function(meta_input,
   dt[, source_entity := normalize_source_entity(source_entity)]
   dt[, role := standardize_role(role)]
   dt[, effect_type := role]
+  if (!"coef_hierarchy_scope" %in% names(dt)) {
+    scope_col <- pick_first_existing_col(dt, c("hierarchy_scope", "hier_scope", "pooling_scope", "coef_pooling_scope"))
+    if (!is.na(scope_col)) dt[, coef_hierarchy_scope := get(scope_col)] else dt[, coef_hierarchy_scope := "auto"]
+  }
+  if (!"hierarchy_key" %in% names(dt)) {
+    key_col <- pick_first_existing_col(dt, c("hier_key", "pooling_key", "hierarchy_family", "pooling_family", "coef_hierarchy_key"))
+    if (!is.na(key_col)) dt[, hierarchy_key := get(key_col)] else dt[, hierarchy_key := NA_character_]
+  }
+  if (!"model_id_parts" %in% names(dt)) dt[, model_id_parts := NA_character_]
+  if (!"hierarchy_part_indices" %in% names(dt)) {
+    idx_col <- pick_first_existing_col(dt, c("hier_part_indices", "pooling_part_indices", "hierarchy_parts", "pooling_parts"))
+    if (!is.na(idx_col)) dt[, hierarchy_part_indices := get(idx_col)] else dt[, hierarchy_part_indices := NA_character_]
+  }
+  dt[, `:=`(
+    coef_hierarchy_scope = normalize_coef_hierarchy_scope(coef_hierarchy_scope),
+    hierarchy_key = normalize_hierarchy_key(hierarchy_key),
+    model_id_parts = as.character(model_id_parts),
+    hierarchy_part_indices = as.character(hierarchy_part_indices)
+  )]
+  dt[is.na(model_id_parts) | !nzchar(model_id_parts), model_id_parts := NA_character_]
+  dt[is.na(hierarchy_part_indices) | !nzchar(hierarchy_part_indices), hierarchy_part_indices := NA_character_]
 
   num_cols <- c(
     "rrate", "rrate_precision",
@@ -1443,6 +1488,16 @@ clean_metadata <- function(meta_input,
   dt[, coef_hierarchy_scale := suppressWarnings(as.numeric(coef_hierarchy_scale))]
   dt[!is.finite(coef_hierarchy_scale) | is.na(coef_hierarchy_scale) | coef_hierarchy_scale < 0, coef_hierarchy_scale := 1]
   dt[, coef_hierarchy_scale := clip_numeric(coef_hierarchy_scale, 0, 5)]
+  dt[coef_hierarchy_scope == "none", coef_hierarchy_scale := 0]
+  dt[, hierarchy_note := data.table::fifelse(
+    coef_hierarchy_scope == "keyed",
+    "Keyed/family pooling metadata was supplied, but the current Stan backend supports one global group coefficient hierarchy. This variable is not globally pooled unless metadata is changed to auto/global.",
+    data.table::fifelse(
+      coef_hierarchy_scope == "none",
+      "Group coefficient hierarchy disabled for this variable.",
+      "Eligible for the current global group coefficient hierarchy subject to sample_coef_hierarchy and geo-variation gates."
+    )
+  )]
 
   dt[, has_curve := as.integer(!(rrate == 0 & cvalue == 0 & dvalue == 0))]
 
@@ -1567,7 +1622,9 @@ clean_metadata <- function(meta_input,
   setcolorder(dt, c(
     "variable", "effect_type", "source_entity", "role", "has_curve",
     "curve_type", "rrate", "rrate_precision", "cvalue", "cvalue_precision", "dvalue", "dvalue_precision",
-    "coef", "coef_precision", "coef_hierarchy_scale", "coef_bound", "bound_type", "coef_lower", "coef_upper",
+    "coef", "coef_precision", "coef_hierarchy_scale", "coef_hierarchy_scope", "hierarchy_key",
+    "model_id_parts", "hierarchy_part_indices", "hierarchy_note",
+    "coef_bound", "bound_type", "coef_lower", "coef_upper",
     "coef_default_bound_applied",
     "curve_bound", "rrate_bound", "cvalue_bound", "dvalue_bound",
     "rrate_lower", "rrate_upper", "cvalue_lower", "cvalue_upper", "dvalue_lower", "dvalue_upper"
@@ -2154,7 +2211,9 @@ prepare_stan_data_hier_mmm <- function(data,
 
   variable_lookup <- copy(md)[, .(
     variable, source_entity, role, has_curve, coef_bound, bound_type, coef_lower, coef_upper,
-    coef_hierarchy_scale, curve_type, curve_bound, rrate_bound, cvalue_bound, dvalue_bound,
+    coef_hierarchy_scale, coef_hierarchy_scope, hierarchy_key, model_id_parts,
+    hierarchy_part_indices, hierarchy_note,
+    curve_type, curve_bound, rrate_bound, cvalue_bound, dvalue_bound,
     anchor_saturation, anchor_source, cvalue_from_anchor
   )]
   variable_lookup[, variable_idx := .I]
@@ -2336,20 +2395,35 @@ prepare_stan_data_hier_mmm <- function(data,
   )]
   variable_lookup[!is.finite(geo_variation_week_share) | is.na(geo_variation_week_share), geo_variation_week_share := 0]
   variable_lookup[!is.finite(geo_variation_median_cv) | is.na(geo_variation_median_cv), geo_variation_median_cv := 0]
+  variable_lookup[, hierarchy_blocker_reason := NA_character_]
+  variable_lookup[coef_hierarchy_scope == "none", hierarchy_blocker_reason := "coef_hierarchy_scope_none"]
+  variable_lookup[coef_hierarchy_scope == "keyed", hierarchy_blocker_reason := "keyed_hierarchy_metadata_only_current_stan_global_hierarchy"]
   variable_lookup[, sample_coef_hierarchy_flag := {
+    eligible_scope <- coef_hierarchy_scope %in% c("auto", "global") & coef_hierarchy_scale > 0
     if (sample_coef_hierarchy == "always") {
-      as.integer(nrow(group_lookup) > 1L)
+      as.integer(nrow(group_lookup) > 1L & eligible_scope)
     } else if (sample_coef_hierarchy == "never") {
       0L
     } else {
-      as.integer(
+      global_flag <- coef_hierarchy_scope == "global" & nrow(group_lookup) > 1L & eligible_scope
+      auto_flag <- (
         nrow(group_lookup) > 1L &
           nrow(group_lookup) >= coef_hierarchy_auto_min_groups &
           coef_hierarchy_scale >= coef_hierarchy_auto_min_scale &
-          geo_variation_week_share >= coef_hierarchy_auto_min_geo_variation_share
+          geo_variation_week_share >= coef_hierarchy_auto_min_geo_variation_share &
+          eligible_scope
       )
+      as.integer(global_flag | auto_flag)
     }
   }]
+  variable_lookup[sample_coef_hierarchy_flag == 0L & is.na(hierarchy_blocker_reason) & coef_hierarchy_scale <= 0,
+                  hierarchy_blocker_reason := "coef_hierarchy_scale_zero"]
+  variable_lookup[sample_coef_hierarchy_flag == 0L & is.na(hierarchy_blocker_reason) &
+                    geo_variation_week_share < coef_hierarchy_auto_min_geo_variation_share,
+                  hierarchy_blocker_reason := "insufficient_geo_media_variation_for_auto_hierarchy"]
+  variable_lookup[sample_coef_hierarchy_flag == 0L & is.na(hierarchy_blocker_reason) &
+                    nrow(group_lookup) < coef_hierarchy_auto_min_groups & sample_coef_hierarchy == "auto",
+                  hierarchy_blocker_reason := "insufficient_group_count_for_auto_hierarchy"]
 
   coef_overrides <- clean_coef_override_input(
     coef_override_input = coef_override_input,
@@ -2557,7 +2631,10 @@ prepare_stan_data_hier_mmm <- function(data,
       dvalue_raw_mu, dvalue_raw_sd,
       rrate_lower, rrate_upper, cvalue_lower, cvalue_upper, dvalue_lower, dvalue_upper,
       possible_halo_somewhere,
-      geo_variation_week_share, geo_variation_median_cv, sample_coef_hierarchy_flag
+      geo_variation_week_share, geo_variation_median_cv,
+      coef_hierarchy_scale, coef_hierarchy_scope, hierarchy_key,
+      model_id_parts, hierarchy_part_indices, hierarchy_note,
+      sample_coef_hierarchy_flag, hierarchy_blocker_reason
     )],
     variable_lookup = variable_lookup,
     group_lookup = group_lookup,

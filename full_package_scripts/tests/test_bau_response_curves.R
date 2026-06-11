@@ -105,5 +105,53 @@ add_result("BAU shape-only curves are clearly not optimizer-ready",
            !any(no_scale$response_curves$optimizer_ready) &&
              all(is.na(no_scale$response_curves$contribution)))
 
+no_dep_manual_rrate <- create_bau_response_curves(
+  data = dt,
+  variable_map = vm[, .(variable, support_col, spend_col, curve_type, anchor_saturation, rrate)],
+  group_col = "group",
+  date_col = "week",
+  curve_scope = "both",
+  multiplier_grid = c(0, 1, 2)
+)
+add_result("BAU does not estimate rrate without dependent variable",
+           all(no_dep_manual_rrate$rrate_diagnostics$rrate_estimation_status == "not_estimated_supplied_rrate") &&
+             all(abs(no_dep_manual_rrate$curve_metadata[variable == "tv", adstock_decay] - 0.35) < 1e-12) &&
+             all(abs(no_dep_manual_rrate$curve_metadata[variable == "search", adstock_decay] - 0.10) < 1e-12))
+
+rr_weeks <- seq.Date(as.Date("2023-01-02"), by = "week", length.out = 72)
+rr_dt <- CJ(week = rr_weeks, group = c("dma_a", "dma_b"))
+rr_dt[, pulse := as.numeric(week %in% rr_weeks[c(8, 9, 22, 23, 41, 42, 58, 59)])]
+rr_dt[, tv_support := fifelse(group == "dma_a", 80, 45) + fifelse(group == "dma_a", 180, 120) * pulse]
+rr_total <- rr_dt[, .(tv_total = sum(tv_support)), by = week][order(week)]
+rr_total[, y_total := 500 + 4.5 * bau_adstock(tv_total, decay = 0.55)]
+rr_dt[rr_total, y := i.y_total / 2, on = "week"]
+rr_vm <- data.table(
+  variable = "tv",
+  support_col = "tv_support",
+  spend_col = NA_character_,
+  curve_type = "hill",
+  anchor_saturation = 0.50,
+  dvalue = 1.00,
+  current_contribution = 100
+)
+rr_est <- create_bau_response_curves(
+  data = rr_dt,
+  variable_map = rr_vm,
+  group_col = "group",
+  date_col = "week",
+  dep_var_col = "y",
+  curve_scope = "both",
+  estimate_rrate = TRUE,
+  rrate_grid = seq(0, 0.80, by = 0.05),
+  rrate_min_improvement = 0,
+  multiplier_grid = c(0, 1, 2)
+)
+add_result("BAU can estimate one shared diagnostic rrate per variable when KPI is supplied",
+           nrow(rr_est$rrate_diagnostics) == 1L &&
+             rr_est$rrate_diagnostics$rrate_selected[1] > 0.20 &&
+             all(abs(rr_est$curve_metadata$adstock_decay - rr_est$rrate_diagnostics$rrate_selected[1]) < 1e-12) &&
+             length(unique(rr_est$curve_metadata$adstock_decay)) == 1L &&
+             grepl("diagnostic", rr_est$rrate_diagnostics$rrate_source[1], fixed = TRUE))
+
 data.table::fwrite(results, file.path(bundle_dir, "test_outputs", "bau_response_curves_results.csv"))
 message("BAU response-curve tests passed.")

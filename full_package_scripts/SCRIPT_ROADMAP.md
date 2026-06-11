@@ -8,12 +8,14 @@ This file is the working backlog for the script bundle. It separates production-
    - Keep as the top-priority production model layer.
    - Add channel-level median/half-saturation anchor overrides so each channel can use its own anchor, for example `median_anchor = 0.30` instead of a global 0.50 median non-zero support rule.
    - Current curve-parameter behavior: `rrate` and curve-rate are estimated by Stan when `sample_curve_parameters = "always"`; fixed-curve modes intentionally use R-precomputed transforms for speed and sampler geometry.
+   - Current hierarchy behavior: curve parameters (`rrate`, curve-rate, and shape) are shared variable-level values across groups. Stan does not estimate freely varying `rrate[group, variable]`, which is intentional because group-specific carry/saturation is usually weakly identified without strong experiments or very rich geo variation.
+   - Done: add metadata guardrails for group coefficient pooling through `coef_hierarchy_scope = auto/global/none/keyed`, `hierarchy_key`, `model_id_parts`, and `hierarchy_part_indices`. `auto` and `global` use the current global group coefficient hierarchy; `none` blocks hierarchy for the variable; `keyed` is preserved as metadata but not silently treated as global pooling until a future Stan backend supports independent hierarchy families.
    - Done: add `curve_normalization_scope = c("active_train", "all_train")`. Active-train is the default and uses training rows where raw current-period support is positive for carry scaling and transformed-mean scaling. This keeps the median active-support saturation anchor mathematically aligned with flighted media; all-train remains available for sensitivity/backward comparison.
    - Add a central prior-scale parser later so analyst-facing priors can be entered as SD or precision consistently, defaulting to SD while preserving true inverse-variance precision internally.
    - Revisit the default curve family. Meridian uses Hill + adstock as the standard media transform, with Hill applied after adstock by default. This bundle supports both `weibull` and `hill`; before changing the default, add tests that compare Weibull defaults to Hill slope-1 concave curves and verify response-curve/optimizer behavior.
    - Done: add holiday-control generation inside the Stan workflow so analysts can request holiday dummies without hand-building columns. Options include holiday week, week before, week after, country/region sets such as US major and EU major, and user-supplied holiday calendars.
    - Keep UCM inside Stan for joint estimation with media. A separate pre-fit UCM helper can be added later for diagnostics or initialization, but it should not replace the joint model path.
-   - Future: add optional hierarchy/pooling keys based on arbitrary model-ID parts. Keep `group_col` generic and avoid hardcoded names like DMA/product/LOB. `source_entity` should remain source/halo metadata, not the main hierarchy-family key.
+   - Future: implement true independent hierarchy-family pooling based on arbitrary model-ID parts. Keep `group_col` generic and avoid hardcoded names like DMA/product/LOB. `source_entity` should remain source/halo metadata, not the main hierarchy-family key.
    - Future cleanup: split internals into modules for metadata, validation, Stan data creation, transforms, UCM/baseline, execution, posterior extraction, decomposition, diagnostics, decisioning, and export.
 
 2. `quasi_geo_test.R`
@@ -41,7 +43,8 @@ This file is the working backlog for the script bundle. It separates production-
    - Add channel-level curve anchor overrides and audit fields.
    - Keep prior conversion formulas explicit for coefficient, ROI, mROI, IKPC, CPKPI, cost-per-KPI, contribution, and contribution-share inputs.
    - Keep true inverse-variance precision rather than replacing it with vague confidence labels.
-   - BAU response curves: evaluate safe optional rrate/adstock estimation only as a guarded diagnostic. Do not let a univariate rrate search tighten priors just because high adstock better explains trend.
+   - Done: BAU response curves now support guarded optional pooled rrate/adstock estimation when `dep_var_col` is supplied. It estimates one shared diagnostic rrate per variable across the available data cut, preserves supplied rrate by default, and does not estimate rrate when no dependent variable is provided.
+   - Keep BAU rrate/adstock estimation diagnostic. Do not let a univariate rrate search tighten priors just because high adstock better explains trend.
    - Consider splitting prior recovery into modules only after core Stan/quasi/deck work stabilizes.
 
 6. Future model extensions / maybe

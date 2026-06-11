@@ -464,6 +464,63 @@ prep_geo_media <- prepare_stan_data_hier_mmm(
 geo_flag <- prep_geo_media$variable_lookup[variable == "tv", sample_coef_hierarchy_flag][1]
 add_result("geo-varying media can auto-sample group hierarchy",
            identical(as.integer(geo_flag), 1L))
+prep_scope_none <- prepare_stan_data_hier_mmm(
+  data = make_panel(groups = c("G1", "G2", "G3"), n = 20L),
+  metadata_input = {
+    z <- make_meta("tv")
+    z[, coef_hierarchy_scope := "none"]
+    z
+  },
+  dep_var_col = "y",
+  group_col = "geo",
+  time_col = "week",
+  entity_col = "entity",
+  intercept_type = "flat",
+  sample_coef_hierarchy = "always"
+)
+add_result("coef_hierarchy_scope none blocks group coefficient hierarchy even when requested globally",
+           prep_scope_none$variable_lookup[variable == "tv", sample_coef_hierarchy_flag][1] == 0L &&
+             prep_scope_none$metadata[variable == "tv", coef_hierarchy_scale][1] == 0 &&
+             prep_scope_none$variable_lookup[variable == "tv", hierarchy_blocker_reason][1] == "coef_hierarchy_scope_none")
+prep_scope_keyed <- prepare_stan_data_hier_mmm(
+  data = make_panel(groups = c("G1", "G2", "G3"), n = 20L),
+  metadata_input = {
+    z <- make_meta("tv")
+    z[, `:=`(coef_hierarchy_scope = "keyed", hierarchy_key = "snacks")]
+    z
+  },
+  dep_var_col = "y",
+  group_col = "geo",
+  time_col = "week",
+  entity_col = "entity",
+  intercept_type = "flat",
+  sample_coef_hierarchy = "always"
+)
+add_result("keyed hierarchy metadata is preserved but not silently treated as global pooling",
+           prep_scope_keyed$variable_lookup[variable == "tv", coef_hierarchy_scope][1] == "keyed" &&
+             prep_scope_keyed$variable_lookup[variable == "tv", hierarchy_key][1] == "snacks" &&
+             prep_scope_keyed$variable_lookup[variable == "tv", sample_coef_hierarchy_flag][1] == 0L &&
+             grepl("keyed_hierarchy", prep_scope_keyed$variable_lookup[variable == "tv", hierarchy_blocker_reason][1]))
+prep_scope_global <- prepare_stan_data_hier_mmm(
+  data = make_panel(groups = c("G1", "G2", "G3"), n = 20L),
+  metadata_input = {
+    z <- make_meta("tv")
+    z[, coef_hierarchy_scope := "global"]
+    z
+  },
+  dep_var_col = "y",
+  group_col = "geo",
+  time_col = "week",
+  entity_col = "entity",
+  intercept_type = "flat",
+  sample_coef_hierarchy = "always"
+)
+add_result("global hierarchy scope keeps current explicit all-group coefficient pooling behavior",
+           prep_scope_global$variable_lookup[variable == "tv", sample_coef_hierarchy_flag][1] == 1L)
+add_result("Stan curve parameters remain shared variable-level values across groups",
+           prep_scope_global$stan_data$J_curve == 1L &&
+             prep_scope_global$stan_data$G == 3L &&
+             nrow(prep_scope_global$curve_priors[variable == "tv"]) == 1L)
 prep_small_geo_auto <- prepare_stan_data_hier_mmm(
   data = make_panel(groups = c("G1", "G2", "G3"), n = 20L),
   metadata_input = make_meta("tv"),
