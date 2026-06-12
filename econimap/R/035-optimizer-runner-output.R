@@ -268,7 +268,40 @@ run_optimizer_scenario_planner <- function(fit_obj = NULL,
                                            spend_suffix = "_spend",
                                            support_cost_map = NULL,
                                            output_dir = NULL,
-                                           output_prefix = "") {
+                                           output_prefix = "",
+                                           model_fit = NULL,
+                                           response_curve_table = NULL,
+                                           response_curve_draw_table = NULL,
+                                           model_data = NULL,
+                                           drivers = NULL,
+                                           driver_constraints = NULL,
+                                           planning_group_map = NULL,
+                                           planning_group_constraints = NULL,
+                                           media_cost_map = NULL,
+                                           output_path = NULL) {
+  alias_used <- c(
+    !is.null(model_fit),
+    !is.null(response_curve_table),
+    !is.null(response_curve_draw_table),
+    !is.null(model_data),
+    !is.null(drivers),
+    !is.null(driver_constraints),
+    !is.null(planning_group_map),
+    !is.null(planning_group_constraints),
+    !is.null(media_cost_map),
+    !is.null(output_path)
+  )
+  fit_obj <- opsp_resolve_input_alias(fit_obj, model_fit, "fit_obj", "model_fit")
+  response_curves <- opsp_resolve_input_alias(response_curves, response_curve_table, "response_curves", "response_curve_table")
+  response_curve_draws <- opsp_resolve_input_alias(response_curve_draws, response_curve_draw_table, "response_curve_draws", "response_curve_draw_table")
+  raw_data <- opsp_resolve_input_alias(raw_data, model_data, "raw_data", "model_data")
+  variables <- opsp_resolve_input_alias(variables, drivers, "variables", "drivers")
+  constraints <- opsp_resolve_input_alias(constraints, driver_constraints, "constraints", "driver_constraints")
+  variable_group_map <- opsp_resolve_input_alias(variable_group_map, planning_group_map, "variable_group_map", "planning_group_map")
+  group_constraints <- opsp_resolve_input_alias(group_constraints, planning_group_constraints, "group_constraints", "planning_group_constraints")
+  support_cost_map <- opsp_resolve_input_alias(support_cost_map, media_cost_map, "support_cost_map", "media_cost_map")
+  output_dir <- opsp_resolve_input_alias(output_dir, output_path, "output_dir", "output_path")
+  input_alias_audit <- opsp_optimizer_input_alias_audit(alias_used)
   opsp_require_data_table()
   optimizer_method <- match.arg(optimizer_method)
   uncertainty <- match.arg(uncertainty)
@@ -479,9 +512,11 @@ run_optimizer_scenario_planner <- function(fit_obj = NULL,
     inputs_used = data.table::data.table(
       engine_mode = engine$mode,
       variable_count = length(engine$variables),
+      driver_count = length(engine$variables),
       kpi_label = kpi_label,
       value_per_kpi = suppressWarnings(as.numeric(value_per_kpi)[1])
     ),
+    input_alias_audit = input_alias_audit[],
     settings = data.table::data.table(
       total_budget = if (is.null(total_budget)) NA_real_ else suppressWarnings(as.numeric(total_budget)[1]),
       budget_change_pct = suppressWarnings(as.numeric(budget_change_pct)[1]),

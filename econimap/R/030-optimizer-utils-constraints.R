@@ -127,6 +127,63 @@ opsp_combine_notes <- function(base, extra) {
   out
 }
 
+opsp_resolve_input_alias <- function(primary,
+                                     alias,
+                                     primary_name,
+                                     alias_name) {
+  if (is.null(alias)) return(primary)
+  if (!is.null(primary)) {
+    stop(
+      "Pass either `", primary_name, "` or `", alias_name, "`, not both. ",
+      "`", alias_name, "` is the clearer analyst-facing alias for `", primary_name, "`.",
+      call. = FALSE
+    )
+  }
+  alias
+}
+
+opsp_optimizer_input_alias_audit <- function(alias_used) {
+  data.table::data.table(
+    canonical_input = c(
+      "fit_obj",
+      "response_curves",
+      "response_curve_draws",
+      "raw_data",
+      "variables",
+      "constraints",
+      "variable_group_map",
+      "group_constraints",
+      "support_cost_map",
+      "output_dir"
+    ),
+    preferred_input = c(
+      "model_fit",
+      "response_curve_table",
+      "response_curve_draw_table",
+      "model_data",
+      "drivers",
+      "driver_constraints",
+      "planning_group_map",
+      "planning_group_constraints",
+      "media_cost_map",
+      "output_path"
+    ),
+    alias_used = as.logical(alias_used),
+    note = c(
+      "Fitted econimap/Stan MMM object.",
+      "Response-curve table. This is the core optimizer input.",
+      "Draw-level response-curve table for uncertainty-aware scenario reads.",
+      "Raw/model-cut data used for spend/support lookup.",
+      "Modeled media drivers/channels to include.",
+      "Driver-level min/max/fixed spend or multiplier constraints.",
+      "Mapping from driver to planning group for rollups and group constraints.",
+      "Budget constraints by planning group.",
+      "Cost per support unit assumptions when spend is not already in the curve.",
+      "Folder where optimizer output tables are written."
+    )
+  )
+}
+
 opsp_interp_curve_value <- function(table, variable_name, multiplier, value_col, fallback = NA_real_) {
   if (is.null(table) || !nrow(table) || !(value_col %in% names(table))) return(fallback)
   vv <- as.character(variable_name)[1]
@@ -249,7 +306,9 @@ opsp_normalize_constraints <- function(variables, current_spend, constraints = N
   )
   if (!is.null(constraints) && nrow(opsp_as_dt(constraints))) {
     cs <- opsp_as_dt(constraints, "constraints")
-    if (!"variable" %in% names(cs)) stop("constraints must include variable.", call. = FALSE)
+    vcol <- opsp_pick_col(cs, c("variable", "driver", "channel", "media"))
+    if (is.na(vcol)) stop("constraints must include variable, driver, channel, or media.", call. = FALSE)
+    if (!identical(vcol, "variable")) data.table::setnames(cs, vcol, "variable")
     cs[, variable := as.character(variable)]
     opsp_check_unique_variables(cs, "constraints")
     for (cc in intersect(c("min_multiplier", "max_multiplier", "locked", "fixed_spend", "min_spend", "max_spend"), names(cs))) {
@@ -284,7 +343,9 @@ opsp_normalize_variable_group_map <- function(variables, variable_group_map = NU
   out <- data.table::data.table(variable = vars, planning_group = vars)
   if (is.null(variable_group_map) || !nrow(opsp_as_dt(variable_group_map))) return(out[])
   gm <- opsp_as_dt(variable_group_map, "variable_group_map")
-  if (!"variable" %in% names(gm)) stop("variable_group_map must include variable.", call. = FALSE)
+  vcol <- opsp_pick_col(gm, c("variable", "driver", "channel", "media"))
+  if (is.na(vcol)) stop("variable_group_map must include variable, driver, channel, or media.", call. = FALSE)
+  if (!identical(vcol, "variable")) data.table::setnames(gm, vcol, "variable")
   gcol <- opsp_pick_col(gm, c("planning_group", "constraint_group", "group", "reporting_channel", "channel", "parent_channel", "channel_group", "product", "portfolio", "line_of_business", "lob"))
   if (is.na(gcol) && !"rollup_path" %in% names(gm)) {
     stop("variable_group_map must include a group column such as planning_group, channel, parent_channel, product, line_of_business, or rollup_path.", call. = FALSE)
@@ -484,4 +545,3 @@ opsp_apply_support_costs_to_curves <- function(rc, support_cost_map = NULL) {
   }
   out[]
 }
-
