@@ -8,10 +8,14 @@
 \alias{econimap_script_path}
 \alias{econimap_stan_path}
 \alias{load_econimap_scripts}
+\alias{qgt_apply_stan_prior_handoff}
+\alias{qgt_build_stan_prior_handoff}
 \alias{fit_hier_mmm}
 \alias{prepare_stan_data_hier_mmm}
 \alias{variable_contribution_sum_hier_mmm}
 \alias{build_roi_mroi_hier_mmm}
+\alias{build_response_curves_hier_mmm}
+\alias{build_response_curves_draws_hier_mmm}
 \alias{run_hier_mmm_decisioning}
 \alias{run_quasi_geo_test}
 \alias{run_optimizer_scenario_planner}
