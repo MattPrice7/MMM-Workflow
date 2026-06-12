@@ -218,7 +218,7 @@ if (requireNamespace("openxlsx", quietly = TRUE)) {
   excel_sheets <- openxlsx::getSheetNames(files_excel$excel_path)
   add_result("deck builder writes analyst Excel dashboard workbook",
              file.exists(files_excel$excel_path) &&
-               all(c("Dashboard", "Fit", "Contributions", "Economics", "Curves", "Optimizer", "Rollups", "Workbook_Index") %in% excel_sheets))
+               all(c("Controls", "Dashboard", "Fit", "Contributions", "Economics", "Curve_Explorer", "Optimizer", "Posterior_Explorer", "Rollups", "Workbook_Index") %in% excel_sheets))
 
   direct_excel <- file.path(tempdir(), "direct_excel_dashboard.xlsx")
   direct_res <- build_mmm_excel_dashboard(

@@ -146,6 +146,39 @@ mdo_xlsx_bar <- function(x, max_abs = NULL, width = 18L) {
   paste0(prefix, vapply(n, function(k) paste(rep("|", k), collapse = ""), character(1)))
 }
 
+mdo_xlsx_density_table <- function(draws,
+                                   value_col,
+                                   variable_col = "variable",
+                                   source_label = "posterior",
+                                   metric_label = value_col,
+                                   n_points = 80L) {
+  if (is.null(draws) || !nrow(draws)) return(data.table::data.table())
+  dt <- data.table::as.data.table(data.table::copy(draws))
+  if (!all(c(variable_col, value_col) %in% names(dt))) return(data.table::data.table())
+  if (!identical(variable_col, "variable")) data.table::setnames(dt, variable_col, "variable")
+  if (!identical(value_col, "value")) data.table::setnames(dt, value_col, "value")
+  dt[, `:=`(variable = as.character(variable), value = suppressWarnings(as.numeric(value)))]
+  dt <- dt[nzchar(variable) & is.finite(value)]
+  if (!nrow(dt)) return(data.table::data.table())
+  dens <- dt[, {
+    x <- value[is.finite(value)]
+    if (length(x) < 3L || length(unique(x)) < 2L) {
+      data.table::data.table(value = NA_real_, density = NA_real_)
+    } else {
+      d <- stats::density(x, n = n_points, na.rm = TRUE)
+      data.table::data.table(value = d$x, density = d$y)
+    }
+  }, by = variable]
+  dens <- dens[is.finite(value) & is.finite(density)]
+  if (!nrow(dens)) return(data.table::data.table())
+  dens[, `:=`(
+    density_source = source_label,
+    metric = metric_label
+  )]
+  data.table::setcolorder(dens, c("density_source", "variable", "metric", "value", "density"))
+  dens[]
+}
+
 write_mmm_deck_excel <- function(report_tables,
                                  output_path,
                                  chart_files = NULL,
@@ -225,6 +258,58 @@ write_mmm_deck_excel <- function(report_tables,
     start_row + nrow(dt) + 4L
   }
 
+  all_variables <- sort(unique(c(
+    if ("contribution_by_variable" %in% names(report_tables)) as.character(report_tables$contribution_by_variable$variable) else character(),
+    if ("optimizer_response_curves" %in% names(report_tables)) as.character(report_tables$optimizer_response_curves$variable) else character(),
+    if ("stan_posterior_coef_draws" %in% names(report_tables)) as.character(report_tables$stan_posterior_coef_draws$variable) else character()
+  )))
+  all_variables <- all_variables[nzchar(all_variables)]
+  curve_metrics <- c("contribution", "contribution_vs_current", "roi", "mroi", "cost_per_kpi", "value_per_cost")
+  if ("optimizer_response_curves" %in% names(report_tables)) {
+    curve_metrics <- intersect(curve_metrics, names(report_tables$optimizer_response_curves))
+  }
+  if (!length(curve_metrics)) curve_metrics <- "contribution"
+  periods <- if ("period_slicer_index" %in% names(report_tables)) data.table::copy(report_tables$period_slicer_index) else data.table::data.table()
+
+  controls_sheet <- add_sheet("Controls", "#0F172A")
+  write_title(controls_sheet, "Dashboard Controls", "Use these dropdown cells and Excel table filters as the workbook-level control surface.")
+  control_rows <- data.table::data.table(
+    setting = c("Selected variable", "Curve metric", "Compare period A", "Compare period B", "Primary workflow note"),
+    value = c(
+      if (length(all_variables)) all_variables[1] else "",
+      curve_metrics[1],
+      if (nrow(periods)) periods$period_label[1] else "",
+      if (nrow(periods)) periods$period_label[nrow(periods)] else "",
+      "Use Excel table filters and the chart gallery for slicer-like exploration."
+    ),
+    meaning = c(
+      "Default variable for curve/posterior review.",
+      "Metric used when reviewing response or economics curve tables.",
+      "Start period for manual due-to comparison.",
+      "End period for manual due-to comparison.",
+      "Native Pivot slicers require a different workbook engine; this workbook uses tables, filters, dropdowns, and static chart panels."
+    )
+  )
+  write_block(controls_sheet, "Analyst controls", control_rows, 4, table_style = "TableStyleMedium13")
+  list_start <- 4L
+  if (length(all_variables)) {
+    openxlsx::writeData(wb, controls_sheet, "Variable list", startRow = list_start, startCol = 8)
+    openxlsx::writeData(wb, controls_sheet, data.table::data.table(variable = all_variables), startRow = list_start + 1L, startCol = 8, colNames = FALSE)
+    openxlsx::dataValidation(wb, controls_sheet, cols = 2, rows = 6, type = "list", value = paste0("'Controls'!$H$", list_start + 1L, ":$H$", list_start + length(all_variables)))
+  }
+  if (length(curve_metrics)) {
+    openxlsx::writeData(wb, controls_sheet, "Curve metric list", startRow = list_start, startCol = 10)
+    openxlsx::writeData(wb, controls_sheet, data.table::data.table(metric = curve_metrics), startRow = list_start + 1L, startCol = 10, colNames = FALSE)
+    openxlsx::dataValidation(wb, controls_sheet, cols = 2, rows = 7, type = "list", value = paste0("'Controls'!$J$", list_start + 1L, ":$J$", list_start + length(curve_metrics)))
+  }
+  if (nrow(periods)) {
+    openxlsx::writeData(wb, controls_sheet, "Period list", startRow = list_start, startCol = 12)
+    openxlsx::writeData(wb, controls_sheet, periods[, .(period_label)], startRow = list_start + 1L, startCol = 12, colNames = FALSE)
+    openxlsx::dataValidation(wb, controls_sheet, cols = 2, rows = 8:9, type = "list", value = paste0("'Controls'!$L$", list_start + 1L, ":$L$", list_start + nrow(periods)))
+  }
+  openxlsx::setColWidths(wb, controls_sheet, cols = 1:14, widths = "auto")
+  openxlsx::freezePane(wb, controls_sheet, firstRow = TRUE)
+
   dashboard <- add_sheet("Dashboard", "#111827")
   write_title(dashboard, workbook_title, "Analyst-facing Excel workbook built from MMM decomposition, spend/modcut, posterior, and optimizer outputs.")
   summary <- if ("executive_summary" %in% names(report_tables)) data.table::copy(report_tables$executive_summary) else data.table::data.table()
@@ -279,11 +364,22 @@ write_mmm_deck_excel <- function(report_tables,
   }
   openxlsx::freezePane(wb, econ_sheet, firstRow = TRUE)
 
-  curve_sheet <- add_sheet("Curves", "#7C3AED")
-  write_title(curve_sheet, "Response and Marginal Curves", "Use Excel filters on variable, group/model ID, and spend/support multiplier to review curve shape and current point.")
+  curve_sheet <- add_sheet("Curve_Explorer", "#7C3AED")
+  write_title(curve_sheet, "Response and Marginal Curve Explorer", "Filter the Excel tables by variable. q05/q95 uncertainty columns appear when posterior response-curve draws are provided.")
   row <- 4L
-  for (nm in c("optimizer_response_curves", "optimizer_saturation_headroom")) {
+  for (nm in c("optimizer_response_curves", "optimizer_response_curve_uncertainty", "optimizer_saturation_headroom")) {
     if (nm %in% names(report_tables)) row <- write_block(curve_sheet, nm, report_tables[[nm]], row)
+  }
+  if ("optimizer_response_curves" %in% names(report_tables) && nrow(report_tables$optimizer_response_curves)) {
+    note <- data.table::data.table(
+      readout = c("Current point", "Uncertainty", "How to use"),
+      detail = c(
+        "Rows where current_multiplier is 1 or spend_multiplier is closest to 1 represent current support/spend.",
+        "Use contribution_q05/q50/q95, roi_q05/q50/q95, mroi_q05/q50/q95, and cost_per_kpi_q05/q50/q95 when present.",
+        "For Excel-native filtering, click the table filter on variable or spend_multiplier. The Controls tab provides default selections."
+      )
+    )
+    row <- write_block(curve_sheet, "Curve readout guide", note, row, table_style = "TableStyleMedium5")
   }
   openxlsx::freezePane(wb, curve_sheet, firstRow = TRUE)
 
@@ -295,12 +391,33 @@ write_mmm_deck_excel <- function(report_tables,
   }
   openxlsx::freezePane(wb, opt_sheet, firstRow = TRUE)
 
-  posterior_sheet <- add_sheet("Posterior", "#DB2777")
-  write_title(posterior_sheet, "Posterior Diagnostics", "Contribution and coefficient posterior summaries, when posterior draw tables are supplied.")
+  posterior_sheet <- add_sheet("Posterior_Explorer", "#DB2777")
+  write_title(posterior_sheet, "Posterior and Uncertainty Explorer", "Contribution, coefficient, scenario, optimization, and curve uncertainty outputs. Use filters to inspect a single variable.")
   row <- 4L
-  for (nm in c("posterior_contribution_summary", "posterior_contribution_by_period_variable", "posterior_coef_summary", "posterior_coef_by_variable")) {
+  density_tables <- list()
+  if ("stan_posterior_coef_draws" %in% names(report_tables)) {
+    density_tables$coef_density <- mdo_xlsx_density_table(report_tables$stan_posterior_coef_draws, "coef", source_label = "stan_coef", metric_label = "coef")
+  }
+  if ("stan_posterior_variable_draws" %in% names(report_tables)) {
+    density_tables$contribution_density <- mdo_xlsx_density_table(report_tables$stan_posterior_variable_draws, "contribution", source_label = "stan_variable", metric_label = "contribution")
+    if ("roi" %in% names(report_tables$stan_posterior_variable_draws)) {
+      density_tables$roi_density <- mdo_xlsx_density_table(report_tables$stan_posterior_variable_draws, "roi", source_label = "stan_variable", metric_label = "roi")
+    }
+  }
+  density_all <- data.table::rbindlist(density_tables, use.names = TRUE, fill = TRUE)
+  posterior_names <- c(
+    "stan_posterior_variable_summary",
+    "stan_posterior_period_variable_summary",
+    "stan_posterior_coef_summary",
+    "optimizer_scenario_uncertainty_summary",
+    "optimizer_scenario_uncertainty_draws_by_variable",
+    "optimizer_optimization_uncertainty_summary",
+    "optimizer_optimization_uncertainty_draws_by_variable"
+  )
+  for (nm in posterior_names) {
     if (nm %in% names(report_tables)) row <- write_block(posterior_sheet, nm, report_tables[[nm]], row)
   }
+  if (nrow(density_all)) row <- write_block(posterior_sheet, "posterior_density_curves", density_all, row, table_style = "TableStyleMedium4")
   openxlsx::freezePane(wb, posterior_sheet, firstRow = TRUE)
 
   rollup_sheet <- add_sheet("Rollups", "#4B5563")
@@ -343,9 +460,12 @@ write_mmm_deck_excel <- function(report_tables,
     "period_kpi_change", "contribution_by_variable", "contribution_by_channel", "contribution_by_rollup_node",
     "contribution_by_period_variable", "period_due_to_variable", "kpi_economics", "kpi_economics_by_channel",
     "kpi_economics_by_rollup_node", "kpi_economics_by_period", "optimizer_response_curves",
-    "optimizer_saturation_headroom", "optimizer_summary", "optimizer_scenario_comparison", "optimizer_plan",
-    "optimizer_group_rollup", "optimizer_scenario_detail", "posterior_contribution_summary",
-    "posterior_contribution_by_period_variable", "posterior_coef_summary", "posterior_coef_by_variable",
+    "optimizer_response_curve_uncertainty", "optimizer_saturation_headroom", "optimizer_summary",
+    "optimizer_scenario_comparison", "optimizer_plan", "optimizer_group_rollup", "optimizer_scenario_detail",
+    "stan_posterior_variable_summary", "stan_posterior_period_variable_summary",
+    "stan_posterior_coef_summary", "optimizer_scenario_uncertainty_summary",
+    "optimizer_scenario_uncertainty_draws_by_variable", "optimizer_optimization_uncertainty_summary",
+    "optimizer_optimization_uncertainty_draws_by_variable",
     "rollup_performance_table", "variable_rollup_map", "channel_map_normalized"
   )
   table_names <- names(report_tables)[vapply(report_tables, function(x) data.table::is.data.table(x) || is.data.frame(x), logical(1))]

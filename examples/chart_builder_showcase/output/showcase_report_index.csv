@@ -57,6 +57,10 @@ chart,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showc
 chart,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/charts/optimizer_response_curves.png
 chart,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/charts/optimizer_mroi_curves.png
 chart,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/charts/optimizer_saturation_headroom.png
+chart,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/charts/optimizer_response_curve_uncertainty.png
+chart,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/charts/stan_coef_posterior_density.png
+chart,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/charts/stan_contribution_posterior_density.png
+chart,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/charts/stan_2d_posterior_roi_contribution.png
 html,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/showcase_mmm_deck_dashboard.html
 excel,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/showcase_mmm_deck_summary.xlsx
 shiny_app,/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase/output/shiny_app/app.R

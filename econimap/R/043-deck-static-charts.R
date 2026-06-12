@@ -193,6 +193,74 @@ write_mmm_deck_charts <- function(report_tables,
     }
   }
 
+  curve_unc <- if ("optimizer_response_curve_uncertainty" %in% names(report_tables)) data.table::copy(report_tables$optimizer_response_curve_uncertainty) else data.table::data.table()
+  if (nrow(curve_unc) && all(c("variable", "spend_multiplier", "contribution_q05", "contribution_q50", "contribution_q95") %in% names(curve_unc))) {
+    cu <- curve_unc[
+      is.finite(mdo_safe_num(spend_multiplier)) &
+        is.finite(mdo_safe_num(contribution_q05)) &
+        is.finite(mdo_safe_num(contribution_q50)) &
+        is.finite(mdo_safe_num(contribution_q95))
+    ]
+    if (nrow(cu)) {
+      cu[, `:=`(
+        spend_multiplier = mdo_safe_num(spend_multiplier),
+        contribution_q05 = mdo_safe_num(contribution_q05),
+        contribution_q50 = mdo_safe_num(contribution_q50),
+        contribution_q95 = mdo_safe_num(contribution_q95)
+      )]
+      keep_vars <- cu[, .(peak = max(contribution_q50, na.rm = TRUE)), by = variable][order(-abs(peak))][seq_len(min(.N, min(6L, top_n))), variable]
+      cu <- cu[variable %in% keep_vars]
+      p <- ggplot2::ggplot(cu, ggplot2::aes(x = spend_multiplier, y = contribution_q50, color = variable, fill = variable)) +
+        ggplot2::geom_ribbon(ggplot2::aes(ymin = contribution_q05, ymax = contribution_q95), alpha = 0.16, color = NA) +
+        ggplot2::geom_line(linewidth = 0.75) +
+        ggplot2::facet_wrap(~variable, scales = "free_y") +
+        ggplot2::labs(title = "Response curve uncertainty", x = "Spend/support multiplier", y = "KPI contribution") +
+        ggplot2::guides(fill = "none", color = "none") +
+        theme_deck
+      files <- c(files, mdo_save_plot(p, file.path(output_dir, "optimizer_response_curve_uncertainty.png"), 11, 7))
+    }
+  }
+
+  coef_draws <- if ("stan_posterior_coef_draws" %in% names(report_tables)) data.table::copy(report_tables$stan_posterior_coef_draws) else data.table::data.table()
+  if (nrow(coef_draws) && all(c("variable", "coef") %in% names(coef_draws))) {
+    cd <- coef_draws[is.finite(mdo_safe_num(coef))]
+    if (nrow(cd)) {
+      cd[, coef := mdo_safe_num(coef)]
+      keep_vars <- cd[, .(coef_abs = abs(stats::median(coef, na.rm = TRUE))), by = variable][order(-coef_abs)][seq_len(min(.N, min(8L, top_n))), variable]
+      cd <- cd[variable %in% keep_vars]
+      p <- ggplot2::ggplot(cd, ggplot2::aes(x = coef, color = variable, fill = variable)) +
+        ggplot2::geom_density(alpha = 0.16, linewidth = 0.8) +
+        ggplot2::labs(title = "Coefficient posterior density", x = "Coefficient", y = "Density") +
+        theme_deck
+      files <- c(files, mdo_save_plot(p, file.path(output_dir, "stan_coef_posterior_density.png"), 9.5, 5.6))
+    }
+  }
+
+  var_draws <- if ("stan_posterior_variable_draws" %in% names(report_tables)) data.table::copy(report_tables$stan_posterior_variable_draws) else data.table::data.table()
+  if (nrow(var_draws) && all(c("variable", "contribution") %in% names(var_draws))) {
+    vd <- var_draws[is.finite(mdo_safe_num(contribution))]
+    if (nrow(vd)) {
+      vd[, contribution := mdo_safe_num(contribution)]
+      keep_vars <- vd[, .(contribution_abs = abs(stats::median(contribution, na.rm = TRUE))), by = variable][order(-contribution_abs)][seq_len(min(.N, min(8L, top_n))), variable]
+      vd <- vd[variable %in% keep_vars]
+      p <- ggplot2::ggplot(vd, ggplot2::aes(x = contribution, color = variable, fill = variable)) +
+        ggplot2::geom_density(alpha = 0.14, linewidth = 0.8) +
+        ggplot2::labs(title = "Contribution posterior density", x = "KPI contribution", y = "Density") +
+        theme_deck
+      files <- c(files, mdo_save_plot(p, file.path(output_dir, "stan_contribution_posterior_density.png"), 9.5, 5.6))
+    }
+    if (all(c("roi", "contribution") %in% names(vd))) {
+      pd <- vd[is.finite(mdo_safe_num(roi)) & is.finite(mdo_safe_num(contribution))]
+      if (nrow(pd)) {
+        pd[, `:=`(roi = mdo_safe_num(roi), contribution = mdo_safe_num(contribution))]
+        p <- ggplot2::ggplot(pd, ggplot2::aes(x = roi, y = contribution, color = variable)) +
+          ggplot2::geom_point(alpha = 0.28, size = 1.5) +
+          ggplot2::labs(title = "2D posterior distribution: ROI vs contribution", x = "ROI / outcome per cost", y = "KPI contribution") +
+          theme_deck
+        files <- c(files, mdo_save_plot(p, file.path(output_dir, "stan_2d_posterior_roi_contribution.png"), 9.5, 5.6))
+      }
+    }
+  }
+
   files
 }
-
