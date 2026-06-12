@@ -526,6 +526,39 @@ add_result("fit_hier_mmm exposes direct business_priors front-door argument",
 add_result("fit_hier_mmm exposes holiday_config front-door argument",
            "holiday_config" %in% names(formals(fit_hier_mmm)))
 
+econ_fit <- list(
+  data = data.table(
+    geo = "G1",
+    week = as.Date("2024-01-01") + 7 * 0:2,
+    entity = "E1",
+    tv = c(10, 20, 30),
+    tv_spend = c(100, 100, 100),
+    group_idx = 1L,
+    is_holdout__ = FALSE,
+    rescale_factor__ = 1
+  ),
+  variable_lookup = data.table(variable = "tv", variable_idx = 1L, has_curve = 0L, role = "media"),
+  metadata = data.table(variable = "tv", spend_col = "tv_spend"),
+  stan_data = list(N = 3L, K_context = 0L),
+  posterior_means = list(beta = matrix(2, nrow = 1, ncol = 1), context_coef = numeric()),
+  long_decomp = data.table(variable = "tv", contribution = c(20, 40, 60)),
+  group_col = "geo",
+  time_col = "week",
+  entity_col = "entity"
+)
+econ_out <- build_roi_mroi_hier_mmm(
+  econ_fit,
+  spend_map = data.table(variable = "tv", spend_col = "tv_spend"),
+  kpi_value_per_outcome = 5,
+  step_pct = 0.01
+)
+add_result("Stan decisioning economics expose KPI and revenue ROI metrics",
+           abs(econ_out$outcome_per_cost[1] - 0.4) < 1e-12 &&
+             abs(econ_out$cost_per_kpi[1] - 2.5) < 1e-12 &&
+             abs(econ_out$revenue_roi[1] - 2.0) < 1e-12 &&
+             abs(econ_out$marginal_outcome_per_cost[1] - 0.4) < 1e-10 &&
+             abs(econ_out$marginal_revenue_roi[1] - 2.0) < 1e-10)
+
 prep_national_media <- prepare_stan_data_hier_mmm(
   data = make_panel(groups = c("G1", "G2", "G3"), n = 20L),
   metadata_input = make_meta("national_tv"),

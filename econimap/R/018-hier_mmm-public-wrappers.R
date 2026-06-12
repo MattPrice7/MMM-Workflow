@@ -340,7 +340,8 @@ fit_hier_mmm <- function(data,
       raw_data = raw_output_data %||% data,
       multiplier_grid = response_curve_multipliers,
       step_pct = response_curve_step_pct,
-      response_curve_scope = response_curve_scope
+      response_curve_scope = response_curve_scope,
+      value_per_kpi = kpi_value_per_outcome
     )
     if (!is.null(output_dir) && nzchar(output_dir) && nrow(fit_obj$response_curves)) {
       pfx <- if (nzchar(output_prefix %||% "")) paste0(output_prefix, "_") else ""
@@ -360,7 +361,8 @@ fit_hier_mmm <- function(data,
       step_pct = response_curve_step_pct,
       response_curve_scope = response_curve_scope,
       max_draws = response_curve_draw_count,
-      seed = response_curve_draw_seed
+      seed = response_curve_draw_seed,
+      value_per_kpi = kpi_value_per_outcome
     )
     if (!is.null(output_dir) && nzchar(output_dir) && nrow(fit_obj$response_curves_draws)) {
       pfx <- if (nzchar(output_prefix %||% "")) paste0(output_prefix, "_") else ""
@@ -379,6 +381,7 @@ fit_hier_mmm <- function(data,
       raw_data = raw_output_data %||% data,
       calibration_input = calibration_input,
       budget_optimizer_config = budget_optimizer_config,
+      kpi_value_per_outcome = kpi_value_per_outcome,
       output_dir = output_dir,
       output_prefix = output_prefix
     )

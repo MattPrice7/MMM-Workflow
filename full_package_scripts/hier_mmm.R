@@ -6141,13 +6141,15 @@ build_roi_mroi_hier_mmm <- function(fit_obj,
                                     raw_data = NULL,
                                     variables = NULL,
                                     step_pct = 0.01,
-                                    spend_suffix = "_spend") {
+                                    spend_suffix = "_spend",
+                                    kpi_value_per_outcome = NA_real_) {
   sm <- normalize_spend_map_hier_mmm(fit_obj, spend_map = spend_map, raw_data = raw_data,
                                      spend_suffix = spend_suffix, variables = variables)
   if (!nrow(sm)) stop("No spend mapping found. Pass spend_map or add cost_col/spend_col to metadata.")
   raw_aligned <- get_aligned_raw_data_hier_mmm(fit_obj, raw_data = raw_data)
   long <- copy(as.data.table(fit_obj$long_decomp))
   if (!is.null(variables)) sm <- sm[variable %in% variables]
+  kpi_value_per_outcome <- suppressWarnings(as.numeric(kpi_value_per_outcome)[1])
 
   rows <- lapply(seq_len(nrow(sm)), function(i) {
     v <- sm$variable[i]
@@ -6158,18 +6160,28 @@ build_roi_mroi_hier_mmm <- function(fit_obj,
     up_contribution <- variable_contribution_sum_hier_mmm(fit_obj, v, multiplier = 1 + step_pct)
     inc_contribution <- up_contribution - base_contribution
     inc_spend <- spend * step_pct
+    outcome_per_cost <- if (abs(spend) > 1e-8) contribution / spend else NA_real_
+    marginal_outcome_per_cost <- if (abs(inc_spend) > 1e-8) inc_contribution / inc_spend else NA_real_
     data.table(
       variable = v,
       spend_col = sc,
       spend = spend,
       contribution = contribution,
-      roi = fifelse(abs(spend) > 1e-8, contribution / spend, NA_real_),
+      outcome_per_cost = outcome_per_cost,
+      cost_per_kpi = fifelse(is.finite(contribution) & contribution > 1e-8, spend / contribution, NA_real_),
+      revenue_roi = fifelse(is.finite(kpi_value_per_outcome) & abs(spend) > 1e-8, contribution * kpi_value_per_outcome / spend, NA_real_),
+      roi = outcome_per_cost,
       mroi_step_pct = step_pct,
       incremental_spend = inc_spend,
       incremental_contribution = inc_contribution,
-      mroi = fifelse(abs(inc_spend) > 1e-8, inc_contribution / inc_spend, NA_real_),
+      marginal_outcome_per_cost = marginal_outcome_per_cost,
+      marginal_cost_per_kpi = fifelse(is.finite(inc_contribution) & inc_contribution > 1e-8, inc_spend / inc_contribution, NA_real_),
+      marginal_revenue_roi = fifelse(is.finite(kpi_value_per_outcome) & abs(inc_spend) > 1e-8, inc_contribution * kpi_value_per_outcome / inc_spend, NA_real_),
+      mroi = marginal_outcome_per_cost,
+      kpi_value_per_outcome = if (is.finite(kpi_value_per_outcome)) kpi_value_per_outcome else NA_real_,
       decisioning_basis = "posterior_mean_point_estimate",
-      uncertainty_note = "ROI/mROI are computed from posterior means only; use as decision support, not posterior uncertainty intervals."
+      economics_note = "roi/mroi are backward-compatible aliases for outcome_per_cost and marginal_outcome_per_cost. Use revenue_roi only when kpi_value_per_outcome is supplied.",
+      uncertainty_note = "KPI economics are computed from posterior means only; use as decision support, not posterior uncertainty intervals."
     )
   })
   rbindlist(rows, fill = TRUE)[order(-mroi)]
@@ -6354,11 +6366,17 @@ run_hier_mmm_decisioning <- function(fit_obj,
                                      raw_data = NULL,
                                      calibration_input = NULL,
                                      budget_optimizer_config = NULL,
+                                     kpi_value_per_outcome = NA_real_,
                                      output_dir = NULL,
                                      output_prefix = "") {
   out <- list()
   if (!is.null(spend_map)) {
-    out$roi_mroi <- build_roi_mroi_hier_mmm(fit_obj, spend_map = spend_map, raw_data = raw_data)
+    out$roi_mroi <- build_roi_mroi_hier_mmm(
+      fit_obj,
+      spend_map = spend_map,
+      raw_data = raw_data,
+      kpi_value_per_outcome = kpi_value_per_outcome
+    )
   }
   if (!is.null(calibration_input)) {
     out$calibration <- calibrate_lift_tests_hier_mmm(fit_obj, calibration_input = calibration_input)
@@ -6373,7 +6391,7 @@ run_hier_mmm_decisioning <- function(fit_obj,
     component = c("roi_mroi", "budget_optimizer"),
     basis = c("posterior_mean_point_estimate", "posterior_mean_point_estimate_prototype"),
     note = c(
-      "ROI/mROI are computed from posterior means only; posterior draw intervals are not included in this table.",
+      "KPI economics are computed from posterior means only; posterior draw intervals are not included in this table. roi/mroi are outcome-per-cost aliases unless revenue_roi is populated from kpi_value_per_outcome.",
       "Budget optimization uses posterior mean response only and should be treated as prototype decision support."
     )
   )
@@ -6720,7 +6738,8 @@ fit_hier_mmm <- function(data,
       raw_data = raw_output_data %||% data,
       multiplier_grid = response_curve_multipliers,
       step_pct = response_curve_step_pct,
-      response_curve_scope = response_curve_scope
+      response_curve_scope = response_curve_scope,
+      value_per_kpi = kpi_value_per_outcome
     )
     if (!is.null(output_dir) && nzchar(output_dir) && nrow(fit_obj$response_curves)) {
       pfx <- if (nzchar(output_prefix %||% "")) paste0(output_prefix, "_") else ""
@@ -6740,7 +6759,8 @@ fit_hier_mmm <- function(data,
       step_pct = response_curve_step_pct,
       response_curve_scope = response_curve_scope,
       max_draws = response_curve_draw_count,
-      seed = response_curve_draw_seed
+      seed = response_curve_draw_seed,
+      value_per_kpi = kpi_value_per_outcome
     )
     if (!is.null(output_dir) && nzchar(output_dir) && nrow(fit_obj$response_curves_draws)) {
       pfx <- if (nzchar(output_prefix %||% "")) paste0(output_prefix, "_") else ""
@@ -6759,6 +6779,7 @@ fit_hier_mmm <- function(data,
       raw_data = raw_output_data %||% data,
       calibration_input = calibration_input,
       budget_optimizer_config = budget_optimizer_config,
+      kpi_value_per_outcome = kpi_value_per_outcome,
       output_dir = output_dir,
       output_prefix = output_prefix
     )
