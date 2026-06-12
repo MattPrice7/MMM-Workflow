@@ -252,6 +252,8 @@ utils::globalVariables(c(
   "i.input_prior_mean",
   "i.input_prior_precision",
   "i.input_prior_sd",
+  "i.input_uncertainty_basis",
+  "i.input_uncertainty_source",
   "i.is_holdout__",
   "i.keyed_family_count",
   "i.keyed_single_family",

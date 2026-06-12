@@ -449,6 +449,7 @@ bp_direct_update <- apply_business_priors_to_metadata_hier_mmm(
 add_result("Stan business priors accept direct coefficient precision",
            bp_direct_update$metadata[variable == "tv", abs(coef - 0.08) < 1e-12] &&
              bp_direct_update$metadata[variable == "tv", abs(coef_precision - 100) < 1e-12] &&
+             bp_direct_update$business_prior_audit[variable == "tv", input_uncertainty_basis][1] == "precision" &&
              bp_direct_update$business_prior_audit[variable == "tv", input_precision_preserved][1] == TRUE)
 
 bp_cpkpi <- data.table(variable = "tv", prior_metric = "cpkpi", prior_mean = 10, prior_sd = 2)
@@ -476,9 +477,29 @@ bp_prep <- prepare_stan_data_hier_mmm(
 add_result("Stan business priors convert CPKPI to coefficient prior auditably",
            nrow(bp_cpkpi_update$business_prior_audit[variable == "tv" & is.na(warning)]) == 1L &&
              bp_cpkpi_update$metadata[variable == "tv", business_prior_metric][1] == "cpkpi" &&
+             bp_cpkpi_update$business_prior_audit[variable == "tv", input_uncertainty_basis][1] == "sd" &&
+             bp_cpkpi_update$business_prior_audit[variable == "tv", input_uncertainty_source][1] == "sd" &&
              is.finite(bp_cpkpi_update$metadata[variable == "tv", coef][1]) &&
              is.finite(bp_cpkpi_update$metadata[variable == "tv", coef_precision][1]) &&
              bp_prep$metadata[variable == "tv", business_prior_basis][1] == "average_metric_delta_method")
+
+bp_mroi <- data.table(variable = "tv", prior_metric = "mroi", prior_mean = 1.5, prior_sd = 0.3)
+bp_mroi_update <- apply_business_priors_to_metadata_hier_mmm(
+  data = bp_data,
+  metadata_input = bp_meta,
+  business_priors = bp_mroi,
+  dep_var_col = "y",
+  group_col = "geo",
+  time_col = "week",
+  entity_col = "entity",
+  spend_map = data.table(variable = "tv", spend_col = "tv_spend"),
+  holdout_last_n = 4L
+)
+add_result("Stan mROI business priors use marginal design conversion when available",
+           nrow(bp_mroi_update$business_prior_audit[variable == "tv" & is.na(warning)]) == 1L &&
+             bp_mroi_update$business_prior_audit[variable == "tv", economic_prior_basis][1] == "marginal_metric_delta_method" &&
+             is.finite(bp_mroi_update$business_prior_audit[variable == "tv", marginal_step_pct][1]) &&
+             bp_mroi_update$business_prior_audit[variable == "tv", input_uncertainty_basis][1] == "sd")
 
 bp_data_perturbed <- copy(bp_data)
 bp_data_perturbed[seq_len(.N) > .N - 4L, tv_spend := tv_spend * 1000]
@@ -500,7 +521,8 @@ add_result("Stan business-prior conversion ignores perturbed holdout spend",
                    bp_cpkpi_perturbed$metadata[variable == "tv", coef_precision][1]) < 1e-12)
 
 add_result("fit_hier_mmm exposes direct business_priors front-door argument",
-           all(c("business_priors", "kpi_value_per_outcome", "business_prior_default_relative_sd") %in% names(formals(fit_hier_mmm))))
+           all(c("business_priors", "kpi_value_per_outcome", "business_prior_default_relative_sd",
+                 "business_prior_uncertainty_basis", "business_prior_marginal_step_pct") %in% names(formals(fit_hier_mmm))))
 add_result("fit_hier_mmm exposes holiday_config front-door argument",
            "holiday_config" %in% names(formals(fit_hier_mmm)))
 

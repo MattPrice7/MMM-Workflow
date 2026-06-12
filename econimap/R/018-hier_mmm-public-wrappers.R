@@ -218,6 +218,8 @@ fit_hier_mmm <- function(data,
                          business_prior_default_relative_sd = 0.50,
                          business_prior_min_coef_sd = 1e-6,
                          business_prior_max_precision = Inf,
+                         business_prior_uncertainty_basis = "sd",
+                         business_prior_marginal_step_pct = 0.01,
                          calibration_input = NULL,
                          budget_optimizer_config = NULL,
                          context_effects = NULL,
@@ -254,6 +256,8 @@ fit_hier_mmm <- function(data,
       default_relative_sd = business_prior_default_relative_sd,
       min_coef_sd = business_prior_min_coef_sd,
       max_precision = business_prior_max_precision,
+      uncertainty_basis = business_prior_uncertainty_basis,
+      marginal_step_pct = business_prior_marginal_step_pct,
       prep_args = dots
     )
     metadata_input <- business_prior_update$metadata

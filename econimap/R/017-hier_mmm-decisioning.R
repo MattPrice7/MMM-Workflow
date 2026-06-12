@@ -583,6 +583,7 @@ make_hier_mmm_business_prior_template <- function(variables) {
     prior_mean = NA_real_,
     prior_sd = NA_real_,
     prior_precision = NA_real_,
+    prior_uncertainty_basis = "sd",      # sd by default; precision is accepted and converted
     prior_distribution = "normal",
     kpi_value_per_outcome = NA_real_,
     evidence_source = NA_character_,
@@ -641,16 +642,65 @@ business_prior_detect_metric_hier_mmm <- function(bp, i) {
   NA_character_
 }
 
-business_prior_sd_precision_hier_mmm <- function(bp, i, metric) {
+business_prior_uncertainty_basis_alias_hier_mmm <- function(x, default = "sd") {
+  x <- tolower(trimws(as.character(x %||% default)))
+  x <- gsub("[^a-z0-9]+", "_", x)
+  x <- gsub("^_|_$", "", x)
+  out <- rep(default, length(x))
+  out[x %in% c("sd", "stddev", "std_dev", "standard_deviation", "se", "standard_error")] <- "sd"
+  out[x %in% c("precision", "inverse_variance", "inv_variance", "inv_var", "tau")] <- "precision"
+  out[x %in% c("auto", "either")] <- "auto"
+  out
+}
+
+business_prior_row_chr_hier_mmm <- function(bp, i, candidates) {
+  candidates <- candidates[candidates %in% names(bp)]
+  for (cc in candidates) {
+    val <- trimws(as.character(bp[[cc]][i]))
+    if (nzchar(val) && !is.na(val)) return(val)
+  }
+  NA_character_
+}
+
+business_prior_sd_precision_hier_mmm <- function(bp,
+                                                 i,
+                                                 metric,
+                                                 default_uncertainty_basis = "sd") {
   base <- business_prior_metric_candidates_hier_mmm(metric)
   sd_cols <- unique(c("prior_sd", paste0(base, "_sd"), paste0(base, "_se")))
   precision_cols <- unique(c("prior_precision", paste0(base, "_precision")))
   sd <- business_prior_row_num_hier_mmm(bp, i, sd_cols)
   precision <- business_prior_row_num_hier_mmm(bp, i, precision_cols)
-  if ((!is.finite(sd) || sd <= 0) && is.finite(precision) && precision > 0) {
+  row_basis <- business_prior_row_chr_hier_mmm(
+    bp,
+    i,
+    c("prior_uncertainty_basis", "prior_uncertainty_type", "uncertainty_basis", "uncertainty_type", "variance_type", "prior_scale")
+  )
+  basis <- business_prior_uncertainty_basis_alias_hier_mmm(
+    if (is.na(row_basis)) default_uncertainty_basis else row_basis,
+    default = default_uncertainty_basis
+  )[1]
+  sd_valid <- is.finite(sd) && sd > 0
+  precision_valid <- is.finite(precision) && precision > 0
+  source <- NA_character_
+  if (identical(basis, "precision") && precision_valid) {
     sd <- 1 / sqrt(precision)
+    source <- "precision"
+  } else if (sd_valid) {
+    source <- "sd"
+  } else if (precision_valid) {
+    sd <- 1 / sqrt(precision)
+    source <- "precision"
+  } else {
+    source <- "default_relative_sd"
   }
-  list(sd = sd, precision = precision)
+  list(
+    sd = sd,
+    precision = precision,
+    basis = if (identical(source, "precision")) "precision" else "sd",
+    source = source,
+    requested_basis = basis
+  )
 }
 
 kpi_value_for_business_prior_hier_mmm <- function(kpi_value_per_outcome, bp, i, variable) {
@@ -703,6 +753,50 @@ business_design_sum_hier_mmm <- function(prep, variable) {
   sum(as.numeric(x)[train], na.rm = TRUE)
 }
 
+business_marginal_design_sum_hier_mmm <- function(prep, variable, step_pct = 0.01) {
+  sd <- prep$stan_data
+  vl <- prep$variable_lookup
+  vv <- as.character(variable)[1]
+  row <- vl[variable == vv][1]
+  if (!nrow(row)) return(NA_real_)
+  j <- row$variable_idx[1]
+  step_pct <- suppressWarnings(as.numeric(step_pct)[1])
+  if (!is.finite(step_pct) || step_pct <= 0) step_pct <- 0.01
+  train <- sd$is_train == 1L
+  if (row$has_curve[1] == 1L) {
+    k <- match(j, sd$curve_idx)
+    if (is.na(k)) return(NA_real_)
+    raw_to_value <- function(raw, lower, upper) {
+      lower + (upper - lower) * stats::plogis(raw)
+    }
+    rr <- raw_to_value(row$rrate_raw_mu[1], row$rrate_lower[1], row$rrate_upper[1])
+    cv <- raw_to_value(row$cvalue_raw_mu[1], row$cvalue_lower[1], row$cvalue_upper[1])
+    dv <- raw_to_value(row$dvalue_raw_mu[1], row$dvalue_lower[1], row$dvalue_upper[1])
+    curve_type <- row$curve_type[1] %||% "weibull"
+    up <- numeric(nrow(prep$data))
+    for (g in seq_len(nrow(prep$group_lookup))) {
+      idx <- which(prep$data$group_idx == g)
+      if (!length(idx)) next
+      tr <- media_transform_hier_mmm(
+        x = sd$X[idx, j],
+        rrate = rr,
+        cvalue = cv,
+        dvalue = dv,
+        curve_type = curve_type,
+        train_mask = !prep$data$is_holdout__[idx],
+        normalize_curve_x = isTRUE(prep$normalize_curve_x),
+        curve_normalization_scope = prep$curve_normalization_scope,
+        multiplier = 1 + step_pct
+      )
+      up[idx] <- tr$transformed
+    }
+    base <- sd$X_curve_fixed[, k]
+    return(sum(as.numeric(up[train] - base[train]), na.rm = TRUE))
+  }
+  x <- sd$X[, j]
+  sum(as.numeric(x)[train], na.rm = TRUE) * step_pct
+}
+
 apply_business_priors_to_metadata_hier_mmm <- function(data,
                                                        metadata_input,
                                                        business_priors,
@@ -715,6 +809,8 @@ apply_business_priors_to_metadata_hier_mmm <- function(data,
                                                        default_relative_sd = 0.50,
                                                        min_coef_sd = 1e-6,
                                                        max_precision = Inf,
+                                                       uncertainty_basis = "sd",
+                                                       marginal_step_pct = 0.01,
                                                        prep_args = list(),
                                                        ...) {
   bp <- as.data.table(copy(business_priors))
@@ -730,6 +826,9 @@ apply_business_priors_to_metadata_hier_mmm <- function(data,
   if (!is.finite(min_coef_sd) || min_coef_sd <= 0) min_coef_sd <- 1e-6
   max_precision <- suppressWarnings(as.numeric(max_precision)[1])
   if (!is.finite(max_precision) || max_precision <= 0) max_precision <- Inf
+  uncertainty_basis <- business_prior_uncertainty_basis_alias_hier_mmm(uncertainty_basis, default = "sd")[1]
+  marginal_step_pct <- suppressWarnings(as.numeric(marginal_step_pct)[1])
+  if (!is.finite(marginal_step_pct) || marginal_step_pct <= 0) marginal_step_pct <- 0.01
 
   prep_formals <- names(formals(prepare_stan_data_hier_mmm))
   extra_prep_args <- list(...)
@@ -763,7 +862,7 @@ apply_business_priors_to_metadata_hier_mmm <- function(data,
     v <- bp$variable[i]
     metric <- business_prior_detect_metric_hier_mmm(bp, i)
     input_mean <- business_prior_row_num_hier_mmm(bp, i, business_prior_metric_candidates_hier_mmm(metric))
-    sp <- business_prior_sd_precision_hier_mmm(bp, i, metric)
+    sp <- business_prior_sd_precision_hier_mmm(bp, i, metric, default_uncertainty_basis = uncertainty_basis)
     input_sd <- sp$sd
     input_precision <- sp$precision
     dist <- if ("prior_distribution" %in% names(bp)) as.character(bp$prior_distribution[i]) else "normal"
@@ -786,6 +885,9 @@ apply_business_priors_to_metadata_hier_mmm <- function(data,
         coef_precision_was_capped = is.finite(max_precision) && precision_uncapped > max_precision,
         prior_metric = metric, input_prior_mean = input_mean, input_prior_sd = coef_sd,
         input_prior_precision = if (is.finite(input_precision)) input_precision else precision_uncapped,
+        input_uncertainty_basis = sp$basis,
+        input_uncertainty_source = sp$source,
+        input_uncertainty_requested_basis = sp$requested_basis,
         input_precision_preserved = is.finite(input_precision) && input_precision > 0,
         prior_distribution = dist, stan_prior_distribution = "normal_on_coefficient",
         kpi_value_per_outcome = NA_real_, spend_col = NA_character_,
@@ -800,6 +902,17 @@ apply_business_priors_to_metadata_hier_mmm <- function(data,
       return(data.table(variable = v, warning = "missing_spend_col_for_business_prior_conversion"))
     }
     design_sum <- business_design_sum_hier_mmm(prep, v)
+    design_basis <- "average_metric_delta_method"
+    warning_msg <- NA_character_
+    if (metric == "mroi") {
+      marginal_design_sum <- business_marginal_design_sum_hier_mmm(prep, v, step_pct = marginal_step_pct)
+      if (is.finite(marginal_design_sum) && marginal_design_sum > 0) {
+        design_sum <- marginal_design_sum / marginal_step_pct
+        design_basis <- "marginal_metric_delta_method"
+      } else {
+        warning_msg <- "mroi_converted_with_average_scale_fallback_marginal_design_unusable"
+      }
+    }
     spend <- pmax(suppressWarnings(as.numeric(raw_train[[sc]])), 0)
     rescale <- suppressWarnings(as.numeric(raw_train$business_prior_rescale_factor__))
     rescale[!is.finite(rescale) | abs(rescale) <= 1e-8] <- 1
@@ -842,16 +955,21 @@ apply_business_priors_to_metadata_hier_mmm <- function(data,
       coef_precision_uncapped = precision_uncapped,
       coef_precision_was_capped = is.finite(max_precision) && precision_uncapped > max_precision,
       prior_metric = metric, input_prior_mean = input_mean, input_prior_sd = input_sd,
-      input_prior_precision = input_precision, input_precision_preserved = FALSE,
+      input_prior_precision = input_precision,
+      input_uncertainty_basis = sp$basis,
+      input_uncertainty_source = sp$source,
+      input_uncertainty_requested_basis = sp$requested_basis,
+      input_precision_preserved = FALSE,
       prior_distribution = dist, stan_prior_distribution = "normal_delta_method_on_coefficient",
       kpi_value_per_outcome = kpi_value, outcome_per_cost = outcome_per_cost,
       outcome_per_cost_sd = outcome_per_cost_sd,
       cost_per_outcome = if (is.finite(cost_per_outcome)) cost_per_outcome else 1 / outcome_per_cost,
       cost_per_outcome_sd = cost_per_outcome_sd,
       spend_col = sc, spend_total_train = spend_total, model_design_sum_train = design_sum,
-      economic_prior_basis = if (metric == "mroi") "marginal_metric_average_scale_fallback" else "average_metric_delta_method",
+      economic_prior_basis = design_basis,
+      marginal_step_pct = if (metric == "mroi") marginal_step_pct else NA_real_,
       evidence_source = evidence_source, evidence_notes = evidence_notes,
-      warning = if (metric == "mroi") "mroi_converted_with_average_scale_fallback_pending_true_marginal_conversion" else NA_character_
+      warning = warning_msg
     )
   })
   audit <- rbindlist(rows, fill = TRUE)
@@ -864,6 +982,8 @@ apply_business_priors_to_metadata_hier_mmm <- function(data,
       business_prior_input_mean = i.input_prior_mean,
       business_prior_input_sd = i.input_prior_sd,
       business_prior_input_precision = i.input_prior_precision,
+      business_prior_input_uncertainty_basis = i.input_uncertainty_basis,
+      business_prior_input_uncertainty_source = i.input_uncertainty_source,
       business_prior_coef_sd = i.coef_sd,
       business_prior_coef_precision_uncapped = i.coef_precision_uncapped,
       business_prior_precision_was_capped = i.coef_precision_was_capped,
@@ -1120,4 +1240,3 @@ run_hier_mmm_decisioning <- function(fit_obj,
   write_decision_outputs_hier_mmm(out, output_dir = output_dir, prefix = output_prefix)
   out
 }
-
