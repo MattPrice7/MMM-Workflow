@@ -4517,6 +4517,90 @@ build_prior_posterior_diagnostics <- function(fit, prep, outputs) {
   list(coef = coef_diag[], curve = curve_diag[], context = context_diag[])
 }
 
+build_hier_mmm_prior_audit <- function(prep, prior_post) {
+  coef <- copy(as.data.table(prior_post$coef %||% data.table()))
+  if (!nrow(coef)) return(data.table())
+  md <- copy(as.data.table(prep$metadata))
+  keep <- intersect(c(
+    "variable", "role", "source_entity", "curve_type", "has_curve",
+    "business_prior_metric", "business_prior_input_mean", "business_prior_input_sd",
+    "business_prior_input_precision", "business_prior_input_uncertainty_basis",
+    "business_prior_input_uncertainty_source", "business_prior_coef_sd",
+    "business_prior_coef_precision_uncapped", "business_prior_precision_was_capped",
+    "business_prior_distribution", "business_prior_basis", "business_prior_evidence_source",
+    "business_prior_evidence_notes", "coef_hierarchy_scope", "coef_hierarchy_key_id",
+    "hierarchy_note"
+  ), names(md))
+  if ("variable" %in% keep) {
+    md <- unique(md[, ..keep], by = "variable")
+    add_cols <- setdiff(names(md), "variable")
+    coef[md, on = "variable", (add_cols) := mget(paste0("i.", add_cols))]
+  }
+
+  for (cc in c(
+    "business_prior_metric", "business_prior_input_mean", "business_prior_input_sd",
+    "business_prior_input_precision", "business_prior_input_uncertainty_basis",
+    "business_prior_input_uncertainty_source", "business_prior_basis",
+    "business_prior_evidence_source", "business_prior_evidence_notes"
+  )) {
+    if (!(cc %in% names(coef))) coef[, (cc) := NA]
+  }
+
+  coef[, `:=`(
+    prior_audit_level = "group_coefficient",
+    prior_source = fifelse(!is.na(business_prior_metric) & nzchar(as.character(business_prior_metric)), "business_prior", "metadata_prior"),
+    input_prior_metric = as.character(business_prior_metric),
+    input_prior_mean = suppressWarnings(as.numeric(business_prior_input_mean)),
+    input_prior_sd = suppressWarnings(as.numeric(business_prior_input_sd)),
+    input_prior_precision = suppressWarnings(as.numeric(business_prior_input_precision)),
+    input_uncertainty_basis = as.character(business_prior_input_uncertainty_basis),
+    converted_stan_prior_mean = prior_center,
+    converted_stan_prior_sd = prior_sd_used,
+    converted_stan_prior_precision = coef_precision,
+    posterior_interval_excludes_prior_center = is.finite(posterior_q05) & is.finite(posterior_q95) &
+      is.finite(prior_center) & (prior_center < posterior_q05 | prior_center > posterior_q95),
+    posterior_stuck_to_prior_flag = is.finite(posterior_sd_to_prior_sd) &
+      is.finite(posterior_z_vs_prior) &
+      abs(posterior_z_vs_prior) <= 0.10 &
+      posterior_sd_to_prior_sd >= 0.80
+  )]
+  coef[, prior_posterior_status := fifelse(
+    far_from_prior_flag,
+    "posterior_shifted_from_prior_review",
+    fifelse(
+      posterior_stuck_to_prior_flag,
+      "posterior_still_prior_dominated_review",
+      fifelse(near_prior_flag, "posterior_close_to_prior", "posterior_updated_within_prior_width")
+    )
+  )]
+  coef[, recommended_action := fifelse(
+    far_from_prior_flag & prior_source == "business_prior",
+    "review_business_prior_or_model_identification",
+    fifelse(
+      posterior_stuck_to_prior_flag,
+      "check_whether_data_identify_this_coefficient_or_prior_is_too_tight",
+      fifelse(far_from_prior_flag, "review_metadata_prior_or_data_support", "no_immediate_action")
+    )
+  )]
+
+  cols <- intersect(c(
+    "prior_audit_level", "group_value", "model_id", "mod_id", "target_entity",
+    "variable", "role", "source_entity", "has_curve", "curve_type",
+    "prior_source", "input_prior_metric", "input_prior_mean", "input_prior_sd",
+    "input_prior_precision", "input_uncertainty_basis",
+    "business_prior_input_uncertainty_source", "business_prior_basis",
+    "business_prior_evidence_source", "business_prior_evidence_notes",
+    "converted_stan_prior_mean", "converted_stan_prior_sd", "converted_stan_prior_precision",
+    "coef_bound", "bound_type", "coef_lower", "coef_upper",
+    "posterior_mean", "posterior_sd", "posterior_q05", "posterior_q50", "posterior_q95",
+    "posterior_minus_prior", "posterior_z_vs_prior", "posterior_sd_to_prior_sd",
+    "near_prior_flag", "far_from_prior_flag", "posterior_interval_excludes_prior_center",
+    "posterior_stuck_to_prior_flag", "prior_posterior_status", "recommended_action",
+    "coef_hierarchy_scope", "coef_hierarchy_key_id", "hierarchy_note"
+  ), names(coef))
+  coef[, ..cols][]
+}
+
 
 build_collinearity_diagnostics <- function(prep, threshold = 0.85) {
   dt <- copy(prep$data)
@@ -4654,6 +4738,7 @@ write_outputs_hier_mmm <- function(outputs, diagnostics, output_dir, prefix = ""
   if (!is.null(diagnostics$prior_posterior_coef) && nrow(diagnostics$prior_posterior_coef)) fwrite(diagnostics$prior_posterior_coef, file.path(output_dir, paste0(pfx, "diagnostics_prior_vs_posterior_coef.csv")))
   if (!is.null(diagnostics$prior_posterior_curve) && nrow(diagnostics$prior_posterior_curve)) fwrite(diagnostics$prior_posterior_curve, file.path(output_dir, paste0(pfx, "diagnostics_prior_vs_posterior_curve.csv")))
   if (!is.null(diagnostics$prior_posterior_context) && nrow(diagnostics$prior_posterior_context)) fwrite(diagnostics$prior_posterior_context, file.path(output_dir, paste0(pfx, "diagnostics_prior_vs_posterior_context.csv")))
+  if (!is.null(diagnostics$prior_audit) && nrow(diagnostics$prior_audit)) fwrite(diagnostics$prior_audit, file.path(output_dir, paste0(pfx, "prior_audit.csv")))
 
   if (!is.null(diagnostics$collinearity_overall) && nrow(diagnostics$collinearity_overall)) fwrite(diagnostics$collinearity_overall, file.path(output_dir, paste0(pfx, "diagnostics_collinearity_overall.csv")))
   if (!is.null(diagnostics$collinearity_by_group) && nrow(diagnostics$collinearity_by_group)) fwrite(diagnostics$collinearity_by_group, file.path(output_dir, paste0(pfx, "diagnostics_collinearity_by_group.csv")))
@@ -5001,6 +5086,7 @@ fit_hier_mmm_engine <- function(data,
   diagnostics$prior_posterior_coef <- prior_post$coef
   diagnostics$prior_posterior_curve <- prior_post$curve
   diagnostics$prior_posterior_context <- prior_post$context
+  diagnostics$prior_audit <- build_hier_mmm_prior_audit(prep, prior_post)
 
   collinearity <- build_collinearity_diagnostics(prep, threshold = collinearity_threshold)
   diagnostics$collinearity_overall <- collinearity$overall
@@ -5101,6 +5187,7 @@ fit_hier_mmm_engine <- function(data,
     coef_long = outputs$coef_long,
     wide_decomp = outputs$wide_decomp,
     long_decomp = outputs$long_decomp,
+    prior_audit = diagnostics$prior_audit,
     diagnostics = diagnostics
   )
 }

@@ -77,7 +77,7 @@ Active / Next:
 - [x] Add `kpi_value_per_outcome` to Stan response-curve and decisioning economics so revenue ROI can be computed when appropriate while preserving outcome-per-cost and cost-per-KPI for non-revenue KPIs.
 - [ ] Add richer prior predictive simulation before sampling.
 - [ ] Add posterior contribution intervals by variable/group/period as optional draw-based output.
-- [ ] Add prior audit table comparing input prior, converted Stan prior, posterior estimate, and posterior interval.
+- [x] Add prior audit table comparing input prior, converted Stan prior, posterior estimate, posterior interval, and review flags for prior-dominated or shifted coefficients.
 - [ ] Add diagnostics for baseline/UCM absorbing too much unexplained shock.
 - [ ] Validate brand-equity KPIs such as awareness, consideration, subscriptions, leads, or other non-revenue outcomes. Report KPI economics as cost per KPI / outcome per cost unless a value per KPI is supplied.
 - [ ] Add reach/frequency modeling when reach, frequency, impressions, or population are available.

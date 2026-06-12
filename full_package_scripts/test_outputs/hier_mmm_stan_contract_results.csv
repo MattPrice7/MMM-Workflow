@@ -26,6 +26,7 @@ Stan direct metadata derives curve rate from anchor saturation without prior bui
 minimal media metadata defaults to 50 percent median-support saturation,PASS,""
 Stan business priors accept direct coefficient precision,PASS,""
 Stan business priors convert CPKPI to coefficient prior auditably,PASS,""
+"Stan prior audit joins input prior, converted prior, and posterior summary",PASS,""
 Stan mROI business priors use marginal design conversion when available,PASS,""
 Stan marginal CPKPI priors use marginal design conversion when explicit,PASS,""
 Stan business-prior conversion ignores perturbed holdout spend,PASS,""

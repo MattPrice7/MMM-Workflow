@@ -338,6 +338,7 @@ fit_hier_mmm_engine <- function(data,
   diagnostics$prior_posterior_coef <- prior_post$coef
   diagnostics$prior_posterior_curve <- prior_post$curve
   diagnostics$prior_posterior_context <- prior_post$context
+  diagnostics$prior_audit <- build_hier_mmm_prior_audit(prep, prior_post)
 
   collinearity <- build_collinearity_diagnostics(prep, threshold = collinearity_threshold)
   diagnostics$collinearity_overall <- collinearity$overall
@@ -439,6 +440,7 @@ fit_hier_mmm_engine <- function(data,
     coef_long = outputs$coef_long,
     wide_decomp = outputs$wide_decomp,
     long_decomp = outputs$long_decomp,
+    prior_audit = diagnostics$prior_audit,
     diagnostics = diagnostics
   )
 }

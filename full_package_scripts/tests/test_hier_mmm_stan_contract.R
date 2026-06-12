@@ -483,6 +483,41 @@ add_result("Stan business priors convert CPKPI to coefficient prior auditably",
              is.finite(bp_cpkpi_update$metadata[variable == "tv", coef_precision][1]) &&
              bp_prep$metadata[variable == "tv", business_prior_basis][1] == "average_metric_delta_method")
 
+fake_prior_post <- list(coef = data.table(
+  group_value = "G1",
+  model_id = "G1",
+  mod_id = "G1",
+  target_entity = "E1",
+  variable = "tv",
+  role = "media",
+  has_curve = 1L,
+  prior_center = bp_prep$metadata[variable == "tv", coef][1],
+  prior_sd_used = 1 / sqrt(bp_prep$metadata[variable == "tv", coef_precision][1]),
+  coef_precision = bp_prep$metadata[variable == "tv", coef_precision][1],
+  coef_bound = "pos",
+  bound_type = "pos",
+  coef_lower = 0,
+  coef_upper = Inf,
+  posterior_mean = bp_prep$metadata[variable == "tv", coef][1],
+  posterior_sd = 1 / sqrt(bp_prep$metadata[variable == "tv", coef_precision][1]),
+  posterior_q05 = bp_prep$metadata[variable == "tv", coef][1] - 0.1,
+  posterior_q50 = bp_prep$metadata[variable == "tv", coef][1],
+  posterior_q95 = bp_prep$metadata[variable == "tv", coef][1] + 0.1,
+  posterior_minus_prior = 0,
+  posterior_z_vs_prior = 0,
+  posterior_sd_to_prior_sd = 1,
+  near_prior_flag = TRUE,
+  far_from_prior_flag = FALSE
+))
+prior_audit_smoke <- build_hier_mmm_prior_audit(bp_prep, fake_prior_post)
+add_result("Stan prior audit joins input prior, converted prior, and posterior summary",
+           nrow(prior_audit_smoke) == 1L &&
+             prior_audit_smoke$prior_source[1] == "business_prior" &&
+             prior_audit_smoke$input_prior_metric[1] == "cpkpi" &&
+             is.finite(prior_audit_smoke$converted_stan_prior_sd[1]) &&
+             is.finite(prior_audit_smoke$posterior_q50[1]) &&
+             prior_audit_smoke$recommended_action[1] == "check_whether_data_identify_this_coefficient_or_prior_is_too_tight")
+
 bp_mroi <- data.table(variable = "tv", prior_metric = "mroi", prior_mean = 1.5, prior_sd = 0.3)
 bp_mroi_update <- apply_business_priors_to_metadata_hier_mmm(
   data = bp_data,
