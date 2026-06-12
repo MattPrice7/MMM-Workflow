@@ -10,6 +10,14 @@ Description: A script-compatible MMM workflow toolkit for hierarchical Stan MMM,
     a cleaner installation and loading surface.
 License: MIT + file LICENSE
 Encoding: UTF-8
+Collate:
+    '000-econimap-utils.R'
+    '001-data-table-globals.R'
+    '010-hier_mmm.R'
+    '020-quasi_geo_test.R'
+    '030-optimizer_scenario_planner.R'
+    '040-mmm_deck_output_builder.R'
+    '050-bau_response_curves.R'
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
 Depends:

@@ -6,6 +6,7 @@
 \alias{econimap_get_function}
 \alias{econimap_script_dir}
 \alias{econimap_script_path}
+\alias{econimap_stan_path}
 \alias{load_econimap_scripts}
 \alias{fit_hier_mmm}
 \alias{prepare_stan_data_hier_mmm}
@@ -26,39 +27,6 @@
 Light package wrappers around the bundled MMM Workflow scripts. The package
 loads quickly and sources the active scripts lazily when a core function is
 called. Full analyst scripts remain available under \code{inst/scripts}.
-}
-\usage{
-econimap_script_dir(must_work = TRUE)
-econimap_script_path(file = NULL, must_work = TRUE)
-econimap_available_scripts(pattern = NULL)
-load_econimap_scripts(envir = globalenv(), include_workflow = FALSE, quiet = TRUE)
-econimap_dependency_manifest()
-econimap_get_function(name)
-econimap_call(name, ...)
-fit_hier_mmm(...)
-prepare_stan_data_hier_mmm(...)
-variable_contribution_sum_hier_mmm(...)
-build_roi_mroi_hier_mmm(...)
-run_hier_mmm_decisioning(...)
-run_quasi_geo_test(...)
-run_optimizer_scenario_planner(...)
-run_mmm_optimizer(...)
-run_mmm_scenario_planner(...)
-run_mmm_deck_output_builder(...)
-build_mmm_deck_tables(...)
-create_bau_response_curves(...)
-build_bau_response_curves(...)
-create_baseline_response_curves(...)
-}
-\arguments{
-  \item{must_work}{Logical. If \code{TRUE}, missing bundled paths error.}
-  \item{file}{Optional bundled script or asset filename.}
-  \item{pattern}{Optional regular expression used to filter bundled script names.}
-  \item{envir}{Environment where scripts should be sourced for script-style use.}
-  \item{include_workflow}{Logical. Whether to include \code{mmm_workflow.R} when sourcing scripts manually.}
-  \item{quiet}{Logical. Whether to suppress source messages.}
-  \item{name}{Function name to retrieve or call from the lazy-loaded runtime.}
-  \item{...}{Arguments passed through to the underlying workflow function.}
 }
 \value{
 Workflow functions return the same objects as their underlying bundled scripts.
