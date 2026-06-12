@@ -181,6 +181,37 @@ opsp_optimizer_input_alias_audit <- function(alias_used) {
   )
 }
 
+opsp_add_driver_alias <- function(x) {
+  if (is.null(x) || !(is.data.frame(x) || data.table::is.data.table(x))) return(x)
+  out <- data.table::as.data.table(data.table::copy(x))
+  if ("variable" %in% names(out) && !"driver" %in% names(out)) {
+    out[, driver := as.character(variable)]
+    data.table::setcolorder(out, c("variable", "driver", setdiff(names(out), c("variable", "driver"))))
+  }
+  out[]
+}
+
+opsp_add_optimizer_output_aliases <- function(out) {
+  table_names <- c(
+    "current_plan",
+    "response_curves",
+    "response_curve_uncertainty",
+    "saturation_headroom",
+    "scenario_detail",
+    "scenario_uncertainty_by_variable",
+    "scenario_uncertainty_draws_by_variable",
+    "optimization_plan",
+    "optimization_uncertainty_by_variable",
+    "optimization_uncertainty_draws_by_variable",
+    "allocation_history",
+    "target_plan_detail"
+  )
+  for (nm in intersect(table_names, names(out))) {
+    out[[nm]] <- opsp_add_driver_alias(out[[nm]])
+  }
+  out
+}
+
 opsp_interp_curve_value <- function(table, variable_name, multiplier, value_col, fallback = NA_real_) {
   if (is.null(table) || !nrow(table) || !(value_col %in% names(table))) return(fallback)
   vv <- as.character(variable_name)[1]
@@ -914,7 +945,9 @@ opsp_scenario_plan_overrides <- function(scenario_plan, engine, vars) {
   sp <- opsp_as_dt(scenario_plan, "scenario_plan")
   vars <- as.character(vars)
   if (!nrow(sp)) return(data.table::data.table())
-  if (!"variable" %in% names(sp)) stop("scenario_plan must include variable.", call. = FALSE)
+  vcol <- opsp_pick_col(sp, c("variable", "driver", "channel", "media"))
+  if (is.na(vcol)) stop("scenario_plan must include variable, driver, channel, or media.", call. = FALSE)
+  if (!identical(vcol, "variable")) data.table::setnames(sp, vcol, "variable")
   if (!"scenario" %in% names(sp)) sp[, scenario := "custom_scenario"]
   sp[, `:=`(scenario = as.character(scenario), variable = as.character(variable))]
   sp <- sp[variable %in% vars]
@@ -3361,6 +3394,7 @@ run_optimizer_scenario_planner <- function(fit_obj = NULL,
     uncertainty_diagnostics = uncertainty_diagnostics[],
     diagnostics = diagnostics
   )
+  out <- opsp_add_optimizer_output_aliases(out)
   opsp_write_outputs(out, output_dir = output_dir, output_prefix = output_prefix)
   out
 }

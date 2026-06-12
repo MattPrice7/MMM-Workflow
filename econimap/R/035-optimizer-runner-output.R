@@ -561,6 +561,7 @@ run_optimizer_scenario_planner <- function(fit_obj = NULL,
     uncertainty_diagnostics = uncertainty_diagnostics[],
     diagnostics = diagnostics
   )
+  out <- opsp_add_optimizer_output_aliases(out)
   opsp_write_outputs(out, output_dir = output_dir, output_prefix = output_prefix)
   out
 }

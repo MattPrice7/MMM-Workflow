@@ -134,6 +134,7 @@ utils::globalVariables(c(
   "donor_post_media",
   "donor_pre_media",
   "donor_weight_max",
+  "driver",
   "downgrade_reasons",
   "due_to_pct_of_actual_change",
   "dvalue",

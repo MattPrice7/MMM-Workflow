@@ -35,5 +35,7 @@ opt_smoke <- run_optimizer_scenario_planner(
   uncertainty = "none"
 )
 stopifnot(nrow(opt_smoke$current_plan) == 2)
+stopifnot("driver" %in% names(opt_smoke$current_plan))
+stopifnot("driver" %in% names(opt_smoke$optimization_plan))
 stopifnot("input_alias_audit" %in% names(opt_smoke))
 stopifnot(any(opt_smoke$input_alias_audit$alias_used))

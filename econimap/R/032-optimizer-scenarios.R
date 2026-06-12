@@ -5,7 +5,9 @@ opsp_scenario_plan_overrides <- function(scenario_plan, engine, vars) {
   sp <- opsp_as_dt(scenario_plan, "scenario_plan")
   vars <- as.character(vars)
   if (!nrow(sp)) return(data.table::data.table())
-  if (!"variable" %in% names(sp)) stop("scenario_plan must include variable.", call. = FALSE)
+  vcol <- opsp_pick_col(sp, c("variable", "driver", "channel", "media"))
+  if (is.na(vcol)) stop("scenario_plan must include variable, driver, channel, or media.", call. = FALSE)
+  if (!identical(vcol, "variable")) data.table::setnames(sp, vcol, "variable")
   if (!"scenario" %in% names(sp)) sp[, scenario := "custom_scenario"]
   sp[, `:=`(scenario = as.character(scenario), variable = as.character(variable))]
   sp <- sp[variable %in% vars]
@@ -452,4 +454,3 @@ opsp_scenario_tables <- function(engine,
   ), by = scenario][order(-contribution)]
   list(detail = detail[], summary = summary[])
 }
-
