@@ -130,5 +130,9 @@ run_mmm_deck_output_builder <- function(long_decomp,
     write_shiny = write_shiny,
     top_n_charts = top_n_charts
   )
-  list(tables = tables, files = files)
+  list(
+    package_info = econimap_output_metadata("run_mmm_deck_output_builder", surface = "deck_output"),
+    tables = tables,
+    files = files
+  )
 }

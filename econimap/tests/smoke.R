@@ -34,8 +34,21 @@ opt_smoke <- run_optimizer_scenario_planner(
   scenario_multipliers = c(1, 1.2),
   uncertainty = "none"
 )
+stopifnot("package_info" %in% names(opt_smoke))
+stopifnot(opt_smoke$package_info$workflow[1] == "run_optimizer_scenario_planner")
 stopifnot(nrow(opt_smoke$current_plan) == 2)
 stopifnot("driver" %in% names(opt_smoke$current_plan))
 stopifnot("driver" %in% names(opt_smoke$optimization_plan))
 stopifnot("input_alias_audit" %in% names(opt_smoke))
 stopifnot(any(opt_smoke$input_alias_audit$alias_used))
+
+bau_smoke <- create_bau_response_curves(
+  data = data.frame(period = seq.Date(as.Date("2024-01-01"), by = "week", length.out = 12), tv_support = c(rep(10, 6), rep(20, 6)), tv_spend = c(rep(100, 6), rep(200, 6))),
+  variable_map = data.frame(variable = "tv", support_col = "tv_support", spend_col = "tv_spend", current_contribution = 50),
+  date_col = "period",
+  multiplier_grid = c(0, 1, 2),
+  estimate_rrate = FALSE
+)
+stopifnot("package_info" %in% names(bau_smoke))
+stopifnot(bau_smoke$package_info$workflow[1] == "create_bau_response_curves")
+stopifnot(nrow(bau_smoke$response_curves) > 0)

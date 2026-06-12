@@ -26,10 +26,11 @@ The package does include a Bayesian model. Documentation should not imply that t
 - [x] Add cleaned analyst idea workflow: raw scratchpad, dated review notes, and cleaned idea backlog.
 - [x] Add optional `rollup_path` metadata for reporting and planning rollups, e.g. `total_media > paid_social > meta > meta_campaign_1`, without modeling parent rows or double-counting parent variables.
 - [ ] Add optional semantic metadata columns later for richer slicers: `parent_channel`, `sub_channel`, `placement`, `creative`, `funnel_stage`, and `channel_family`.
-- [ ] Move to formal R package structure later: `DESCRIPTION`, `NAMESPACE`, `R/`, `inst/stan/`, `tests/testthat/`, examples, optional `renv.lock`.
-- [ ] Split large scripts only after core logic stabilizes. Preserve public analyst-facing function names.
+- [x] Add formal installable package shell with `DESCRIPTION`, `NAMESPACE`, `R/`, `inst/stan/`, `inst/scripts/`, and package smoke tests.
+- [ ] Convert smoke tests to fuller `testthat` structure later, with examples and optional `renv.lock`.
+- [x] Split the main package-native Stan, quasi-geo, optimizer, deck, and BAU logic into smaller internal modules while preserving public analyst-facing function names and standalone script copies.
 - [ ] Add one centralized config object/list for common workflow settings.
-- [ ] Add output versioning to every major workflow result.
+- [x] Add package-native `package_info` output versioning to core Stan, quasi-geo, optimizer, deck, and BAU workflow results.
 - [ ] Add package-level examples for Stan-only, quasi-geo-only, optimizer-only, chart-builder-only, and full workflow usage.
 - [ ] Decide GitHub workflow. Pushing requires a repo remote plus usable GitHub credentials/connector in this environment.
 
@@ -163,6 +164,7 @@ Done:
 - [x] Add optimizer outputs into deck builder charts.
 - [x] Add curve confidence/evidence labels into optimizer outputs when supplied by Stan response-curve draws, quasi-geo evidence, or analyst-provided curve metadata.
 - [x] Add future flighting and cost assumptions to optimizer scenarios, so planning can distinguish scaling historical support, changing cost per support unit, and changing flight timing.
+- [x] Add analyst-facing `driver` aliases to optimizer outputs while preserving `variable` for backward compatibility.
 
 ## 3.1 Meridian / Core Method Gaps
 

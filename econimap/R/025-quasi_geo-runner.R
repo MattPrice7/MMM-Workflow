@@ -218,6 +218,7 @@ run_quasi_geo_test <- function(input_data,
   if ("is_qgt_training__" %in% names(normalized_data)) normalized_data[, is_qgt_training__ := NULL]
   if (raw_dep_col %in% names(normalized_data)) normalized_data[, (raw_dep_col) := NULL]
   list(
+    package_info = econimap_output_metadata("run_quasi_geo_test", surface = "quasi_geo_evidence"),
     candidate_events = events[],
     event_estimates_all = event_estimates_all[],
     event_estimates = estimates[],

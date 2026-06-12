@@ -89,6 +89,34 @@ econimap_dependency_manifest <- function() {
   )
 }
 
+econimap_package_version <- function() {
+  version <- tryCatch(
+    as.character(utils::packageVersion("econimap")),
+    error = function(e) NA_character_
+  )
+  if (!is.na(version) && nzchar(version)) return(version)
+  desc_path <- file.path(getwd(), "econimap", "DESCRIPTION")
+  if (!file.exists(desc_path)) desc_path <- file.path(getwd(), "DESCRIPTION")
+  if (file.exists(desc_path)) {
+    desc <- tryCatch(read.dcf(desc_path), error = function(e) NULL)
+    if (!is.null(desc) && "Version" %in% colnames(desc)) return(as.character(desc[1, "Version"]))
+  }
+  NA_character_
+}
+
+econimap_output_metadata <- function(workflow,
+                                     surface = NA_character_,
+                                     status = "ready") {
+  data.table::data.table(
+    package = "econimap",
+    package_version = econimap_package_version(),
+    workflow = as.character(workflow)[1],
+    surface = as.character(surface)[1],
+    status = as.character(status)[1],
+    generated_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
+  )
+}
+
 econimap_get_function <- function(name) {
   if (!is.character(name) || length(name) != 1L || !nzchar(name)) {
     stop("`name` must be a single function name.", call. = FALSE)

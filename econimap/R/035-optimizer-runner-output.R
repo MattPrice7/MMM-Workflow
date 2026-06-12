@@ -509,6 +509,7 @@ run_optimizer_scenario_planner <- function(fit_obj = NULL,
     }
   )
   out <- list(
+    package_info = econimap_output_metadata("run_optimizer_scenario_planner", surface = "scenario_planner"),
     inputs_used = data.table::data.table(
       engine_mode = engine$mode,
       variable_count = length(engine$variables),

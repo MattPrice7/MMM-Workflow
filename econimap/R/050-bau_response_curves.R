@@ -921,6 +921,7 @@ create_bau_response_curves <- function(data,
     data.table::setorderv(curve_metadata, c("variable", "scope", "group"))
   }
   list(
+    package_info = econimap_output_metadata("create_bau_response_curves", surface = "bau_response_curves"),
     response_curves = response_curves[],
     curve_metadata = curve_metadata[],
     rrate_diagnostics = rrate_diagnostics[],

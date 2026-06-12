@@ -375,6 +375,7 @@ fit_hier_mmm_engine <- function(data,
   checkpoint("fit_hier_mmm complete", detail = "returning fit object and outputs")
 
   list(
+    package_info = econimap_output_metadata("fit_hier_mmm", surface = "stan_mmm_fit"),
     fit = fit,
     stan_data = prep$stan_data,
     metadata = prep$metadata,
@@ -477,4 +478,3 @@ fit_hier_mmm_engine <- function(data,
 # calibration checks, ROI/mROI, budget optimization, reach/frequency prep,
 # and sensitivity runs.
 # =============================================================================
-
