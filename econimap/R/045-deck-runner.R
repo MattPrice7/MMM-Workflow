@@ -134,8 +134,17 @@ run_mmm_deck_output_builder <- function(long_decomp,
     write_shiny = write_shiny,
     top_n_charts = top_n_charts
   )
+  package_info <- if (exists("econimap_output_metadata", mode = "function")) {
+    econimap_output_metadata("run_mmm_deck_output_builder", surface = "deck_output")
+  } else {
+    list(
+      function_name = "run_mmm_deck_output_builder",
+      surface = "deck_output",
+      generated_at = as.character(Sys.time())
+    )
+  }
   list(
-    package_info = econimap_output_metadata("run_mmm_deck_output_builder", surface = "deck_output"),
+    package_info = package_info,
     tables = tables,
     files = files
   )

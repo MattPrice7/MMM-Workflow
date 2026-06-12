@@ -228,7 +228,7 @@ result <- run_mmm_deck_output_builder(
   kpi_value_per_outcome = 30,
   write_charts = TRUE,
   write_html = TRUE,
-  write_excel = FALSE,
+  write_excel = TRUE,
   write_shiny = TRUE,
   top_n_charts = 12
 )

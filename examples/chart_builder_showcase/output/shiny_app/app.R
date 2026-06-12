@@ -457,7 +457,7 @@ server <- function(input, output, session) {
     validate(need(nrow(dt) > 0, "No rollup rows available. Add rollup_path/channel_map metadata to enable this view."))
     expanded <- rollup_expanded()
     dt[, indent__ := pmax(as.integer(rollup_level) - 1L, 0L)]
-    dt[, toggle__ := ifelse(has_children__, ifelse(row_key__ %in% expanded, "▾", "▸"), "")]
+    dt[, toggle__ := ifelse(has_children__, ifelse(row_key__ %in% expanded, "-", "+"), "")]
     dt[, Driver := sprintf('<div class="rollup-node-cell" style="padding-left:%spx;"><span class="rollup-toggle">%s</span>%s</div>', 18 * indent__, toggle__, rollup_node)]
     dt[, `Spend share` := bar_cell(spend_share, palette_values()[1])]
     dt[, `Contribution share` := bar_cell(contribution_bar_value, palette_values()[2])]
