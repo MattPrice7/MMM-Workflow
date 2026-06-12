@@ -501,6 +501,24 @@ add_result("Stan mROI business priors use marginal design conversion when availa
              is.finite(bp_mroi_update$business_prior_audit[variable == "tv", marginal_step_pct][1]) &&
              bp_mroi_update$business_prior_audit[variable == "tv", input_uncertainty_basis][1] == "sd")
 
+bp_mcpkpi <- data.table(variable = "tv", prior_metric = "marginal_cost_per_kpi", prior_mean = 8, prior_sd = 1.5)
+bp_mcpkpi_update <- apply_business_priors_to_metadata_hier_mmm(
+  data = bp_data,
+  metadata_input = bp_meta,
+  business_priors = bp_mcpkpi,
+  dep_var_col = "y",
+  group_col = "geo",
+  time_col = "week",
+  entity_col = "entity",
+  spend_map = data.table(variable = "tv", spend_col = "tv_spend"),
+  holdout_last_n = 4L
+)
+add_result("Stan marginal CPKPI priors use marginal design conversion when explicit",
+           nrow(bp_mcpkpi_update$business_prior_audit[variable == "tv" & is.na(warning)]) == 1L &&
+             bp_mcpkpi_update$business_prior_audit[variable == "tv", prior_metric][1] == "mcpkpi" &&
+             bp_mcpkpi_update$business_prior_audit[variable == "tv", economic_prior_basis][1] == "marginal_metric_delta_method" &&
+             is.finite(bp_mcpkpi_update$business_prior_audit[variable == "tv", marginal_step_pct][1]))
+
 bp_data_perturbed <- copy(bp_data)
 bp_data_perturbed[seq_len(.N) > .N - 4L, tv_spend := tv_spend * 1000]
 bp_cpkpi_perturbed <- apply_business_priors_to_metadata_hier_mmm(

@@ -5719,7 +5719,7 @@ build_response_curves_draws_hier_mmm <- function(fit_obj,
 make_hier_mmm_business_prior_template <- function(variables) {
   data.table(
     variable = as.character(variables),
-    prior_metric = NA_character_,       # coef, ikpc, cpkpi, roi, mroi
+    prior_metric = NA_character_,       # coef, ikpc, cpkpi, mcpkpi, roi, mroi
     prior_mean = NA_real_,
     prior_sd = NA_real_,
     prior_precision = NA_real_,
@@ -5739,6 +5739,7 @@ business_prior_metric_alias_hier_mmm <- function(x) {
   out[x %in% c("coefficient", "beta", "model_coef", "coef_prior")] <- "coef"
   out[x %in% c("incremental_kpi_per_cost", "incremental_outcome_per_cost", "incremental_kpi_per_dollar", "ikpc", "kpi_per_cost", "kpi_per_dollar", "outcome_per_cost", "outcome_per_dollar")] <- "ikpc"
   out[x %in% c("cost_per_kpi", "cost_per_outcome", "cost_per_conversion", "cost_per_subscriber", "cost_per_lead", "cpa", "cpkpi")] <- "cpkpi"
+  out[x %in% c("mcpkpi", "marginal_cpkpi", "marginal_cost_per_kpi", "marginal_cost_per_outcome", "marginal_cost_per_subscriber", "marginal_cpa")] <- "mcpkpi"
   out[x %in% c("roi", "return_on_investment")] <- "roi"
   out[x %in% c("mroi", "marginal_roi", "marginal_return_on_investment")] <- "mroi"
   out
@@ -5750,6 +5751,7 @@ business_prior_metric_candidates_hier_mmm <- function(metric) {
     coef = c("prior_mean", "coef", "coefficient", "beta", "model_coef", "coef_prior"),
     ikpc = c("prior_mean", "ikpc", "incremental_kpi_per_cost", "incremental_outcome_per_cost", "kpi_per_cost", "kpi_per_dollar", "outcome_per_cost"),
     cpkpi = c("prior_mean", "cpkpi", "cost_per_kpi", "cost_per_outcome", "cost_per_subscriber", "cost_per_lead", "cpa"),
+    mcpkpi = c("prior_mean", "mcpkpi", "marginal_cpkpi", "marginal_cost_per_kpi", "marginal_cost_per_outcome", "marginal_cost_per_subscriber", "marginal_cpa"),
     roi = c("prior_mean", "roi"),
     mroi = c("prior_mean", "mroi", "marginal_roi"),
     c("prior_mean", metric)
@@ -5774,7 +5776,7 @@ business_prior_detect_metric_hier_mmm <- function(bp, i) {
     pm <- business_prior_metric_alias_hier_mmm(bp$metric[i])
     if (nzchar(pm) && !is.na(pm)) return(pm)
   }
-  for (metric in c("coef", "ikpc", "cpkpi", "roi", "mroi")) {
+  for (metric in c("coef", "ikpc", "cpkpi", "mcpkpi", "roi", "mroi")) {
     if (is.finite(business_prior_row_num_hier_mmm(bp, i, business_prior_metric_candidates_hier_mmm(metric)))) {
       return(metric)
     }
@@ -6044,13 +6046,13 @@ apply_business_priors_to_metadata_hier_mmm <- function(data,
     design_sum <- business_design_sum_hier_mmm(prep, v)
     design_basis <- "average_metric_delta_method"
     warning_msg <- NA_character_
-    if (metric == "mroi") {
+    if (metric %in% c("mroi", "mcpkpi")) {
       marginal_design_sum <- business_marginal_design_sum_hier_mmm(prep, v, step_pct = marginal_step_pct)
       if (is.finite(marginal_design_sum) && marginal_design_sum > 0) {
         design_sum <- marginal_design_sum / marginal_step_pct
         design_basis <- "marginal_metric_delta_method"
       } else {
-        warning_msg <- "mroi_converted_with_average_scale_fallback_marginal_design_unusable"
+        warning_msg <- paste0(metric, "_converted_with_average_scale_fallback_marginal_design_unusable")
       }
     }
     spend <- pmax(suppressWarnings(as.numeric(raw_train[[sc]])), 0)
@@ -6068,7 +6070,7 @@ apply_business_priors_to_metadata_hier_mmm <- function(data,
     if (metric == "ikpc") {
       outcome_per_cost <- input_mean
       outcome_per_cost_sd <- input_sd
-    } else if (metric == "cpkpi") {
+    } else if (metric %in% c("cpkpi", "mcpkpi")) {
       cost_per_outcome <- input_mean
       cost_per_outcome_sd <- input_sd
       outcome_per_cost <- 1 / cost_per_outcome
@@ -6107,7 +6109,7 @@ apply_business_priors_to_metadata_hier_mmm <- function(data,
       cost_per_outcome_sd = cost_per_outcome_sd,
       spend_col = sc, spend_total_train = spend_total, model_design_sum_train = design_sum,
       economic_prior_basis = design_basis,
-      marginal_step_pct = if (metric == "mroi") marginal_step_pct else NA_real_,
+      marginal_step_pct = if (metric %in% c("mroi", "mcpkpi")) marginal_step_pct else NA_real_,
       evidence_source = evidence_source, evidence_notes = evidence_notes,
       warning = warning_msg
     )

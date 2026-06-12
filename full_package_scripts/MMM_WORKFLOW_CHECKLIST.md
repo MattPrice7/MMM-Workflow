@@ -73,7 +73,7 @@ Active / Next:
 - [ ] Validate Hill and Weibull defaults against Meridian-style Hill-after-adstock behavior before changing the default curve family.
 - [x] Add a central prior-scale parser so public inputs can accept either SD or precision consistently. Default analyst-facing input is SD; internals convert to true inverse-variance precision at the Stan handoff.
 - [x] Make mROI priors use true local marginal-design conversion when available, with an explicit fallback warning if the marginal denominator is unusable.
-- [ ] Make marginal CPKPI priors use true marginal-curve conversion when explicitly supplied as marginal cost-per-KPI, not average CPKPI conversion.
+- [x] Make marginal CPKPI priors use true marginal-curve conversion when explicitly supplied as marginal cost-per-KPI, not average CPKPI conversion.
 - [x] Add `kpi_value_per_outcome` to Stan response-curve and decisioning economics so revenue ROI can be computed when appropriate while preserving outcome-per-cost and cost-per-KPI for non-revenue KPIs.
 - [ ] Add richer prior predictive simulation before sampling.
 - [ ] Add posterior contribution intervals by variable/group/period as optional draw-based output.
