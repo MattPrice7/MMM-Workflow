@@ -78,6 +78,7 @@ utils::globalVariables(c(
   "context_type",
   "contribution",
   "contribution_abs_sort__",
+  "contribution_bar",
   "contribution_change",
   "contribution_share",
   "contribution_vs_current",

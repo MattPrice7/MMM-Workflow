@@ -6,7 +6,7 @@ write_mmm_deck_outputs <- function(report_tables,
                                    prefix = "",
                                    write_charts = TRUE,
                                    write_html = TRUE,
-                                   write_excel = FALSE,
+                                   write_excel = TRUE,
                                    write_shiny = FALSE,
                                    top_n_charts = 12) {
   if (is.null(output_dir) || !nzchar(output_dir)) stop("output_dir is required.")
@@ -37,7 +37,11 @@ write_mmm_deck_outputs <- function(report_tables,
 
   excel_path <- NA_character_
   if (isTRUE(write_excel)) {
-    excel_path <- write_mmm_deck_excel(report_tables, file.path(output_dir, paste0(pfx, "mmm_deck_summary.xlsx")))
+    excel_path <- write_mmm_deck_excel(
+      report_tables,
+      file.path(output_dir, paste0(pfx, "mmm_deck_summary.xlsx")),
+      chart_files = chart_files
+    )
   }
 
   shiny_path <- NA_character_
@@ -91,7 +95,7 @@ run_mmm_deck_output_builder <- function(long_decomp,
                                         kpi_value_per_outcome = NULL,
                                         write_charts = TRUE,
                                         write_html = TRUE,
-                                        write_excel = FALSE,
+                                        write_excel = TRUE,
                                         write_shiny = FALSE,
                                         top_n_charts = 12) {
   tables <- build_mmm_deck_tables(

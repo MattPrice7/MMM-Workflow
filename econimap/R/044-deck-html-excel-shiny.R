@@ -112,23 +112,324 @@ write_mmm_deck_html <- function(report_tables,
   output_path
 }
 
+mdo_xlsx_sheet_name <- function(x, used = character()) {
+  x <- gsub("[^A-Za-z0-9_ ]", "_", as.character(x))
+  x <- trimws(x)
+  if (!nzchar(x)) x <- "Sheet"
+  x <- substr(x, 1, 31)
+  base <- x
+  i <- 1L
+  while (tolower(x) %in% tolower(used)) {
+    suffix <- paste0("_", i)
+    x <- paste0(substr(base, 1, max(1L, 31L - nchar(suffix))), suffix)
+    i <- i + 1L
+  }
+  x
+}
+
+mdo_xlsx_clean_table <- function(x) {
+  dt <- data.table::as.data.table(data.table::copy(x))
+  for (nm in names(dt)) {
+    if (is.list(dt[[nm]]) && !inherits(dt[[nm]], c("Date", "POSIXct", "POSIXlt"))) {
+      dt[, (nm) := vapply(get(nm), function(v) paste(as.character(unlist(v)), collapse = "|"), character(1))]
+    }
+  }
+  dt
+}
+
+mdo_xlsx_bar <- function(x, max_abs = NULL, width = 18L) {
+  x <- as.numeric(x)
+  if (is.null(max_abs)) max_abs <- max(abs(x), na.rm = TRUE)
+  if (!is.finite(max_abs) || max_abs <= 0) return(rep("", length(x)))
+  n <- pmax(0L, pmin(width, round(abs(x) / max_abs * width)))
+  prefix <- ifelse(is.finite(x) & x < 0, "-", "")
+  paste0(prefix, vapply(n, function(k) paste(rep("|", k), collapse = ""), character(1)))
+}
+
 write_mmm_deck_excel <- function(report_tables,
-                                 output_path) {
+                                 output_path,
+                                 chart_files = NULL,
+                                 workbook_title = "MMM Analyst Dashboard") {
   if (!requireNamespace("openxlsx", quietly = TRUE)) {
     warning("Package 'openxlsx' is not installed; Excel workbook was skipped.")
     return(NA_character_)
   }
   wb <- openxlsx::createWorkbook()
+  styles <- list(
+    title = openxlsx::createStyle(fontSize = 18, textDecoration = "bold", fgFill = "#111827", fontColour = "#FFFFFF", halign = "left"),
+    subtitle = openxlsx::createStyle(fontSize = 10, fontColour = "#4B5563"),
+    section = openxlsx::createStyle(fontSize = 12, textDecoration = "bold", fgFill = "#E5E7EB", border = "bottom"),
+    header = openxlsx::createStyle(textDecoration = "bold", fgFill = "#DBEAFE", border = "bottom"),
+    number = openxlsx::createStyle(numFmt = "#,##0.00"),
+    integer = openxlsx::createStyle(numFmt = "#,##0"),
+    percent = openxlsx::createStyle(numFmt = "0.0%"),
+    money = openxlsx::createStyle(numFmt = "$#,##0"),
+    warning = openxlsx::createStyle(fgFill = "#FEF3C7"),
+    bad = openxlsx::createStyle(fgFill = "#FEE2E2"),
+    good = openxlsx::createStyle(fgFill = "#DCFCE7")
+  )
+  used_sheets <- character()
+  add_sheet <- function(name, tab_colour = "#2563EB") {
+    sheet <- mdo_xlsx_sheet_name(name, used_sheets)
+    used_sheets <<- c(used_sheets, sheet)
+    openxlsx::addWorksheet(wb, sheet, gridLines = FALSE, tabColour = tab_colour)
+    sheet
+  }
+  write_title <- function(sheet, title, subtitle = NULL) {
+    openxlsx::writeData(wb, sheet, title, startRow = 1, startCol = 1)
+    openxlsx::addStyle(wb, sheet, styles$title, rows = 1, cols = 1, stack = TRUE)
+    if (!is.null(subtitle) && nzchar(subtitle)) {
+      openxlsx::writeData(wb, sheet, subtitle, startRow = 2, startCol = 1)
+      openxlsx::addStyle(wb, sheet, styles$subtitle, rows = 2, cols = 1, stack = TRUE)
+    }
+    openxlsx::setColWidths(wb, sheet, cols = 1:12, widths = "auto")
+  }
+  write_block <- function(sheet, title, dt, start_row, start_col = 1, table_style = "TableStyleMedium2") {
+    dt <- mdo_xlsx_clean_table(dt)
+    openxlsx::writeData(wb, sheet, title, startRow = start_row, startCol = start_col)
+    openxlsx::addStyle(wb, sheet, styles$section, rows = start_row, cols = start_col, stack = TRUE)
+    if (!nrow(dt) || !ncol(dt)) {
+      openxlsx::writeData(wb, sheet, "No rows available for this section.", startRow = start_row + 1L, startCol = start_col)
+      return(start_row + 3L)
+    }
+    table_name <- paste0("tbl_", gsub("[^A-Za-z0-9_]", "_", sheet), "_", start_row, "_", start_col)
+    openxlsx::writeDataTable(
+      wb, sheet, dt,
+      startRow = start_row + 1L,
+      startCol = start_col,
+      tableStyle = table_style,
+      tableName = substr(table_name, 1, 255)
+    )
+    numeric_cols <- which(vapply(dt, is.numeric, logical(1)))
+    if (length(numeric_cols)) {
+      openxlsx::addStyle(
+        wb, sheet, styles$number,
+        rows = seq.int(start_row + 2L, start_row + 1L + nrow(dt)),
+        cols = start_col + numeric_cols - 1L,
+        gridExpand = TRUE,
+        stack = TRUE
+      )
+    }
+    pct_cols <- grep("share|pct|percent|rate|r_squared|mape|smape|probability", names(dt), ignore.case = TRUE)
+    pct_cols <- pct_cols[vapply(dt[, pct_cols, with = FALSE], is.numeric, logical(1))]
+    if (length(pct_cols)) {
+      openxlsx::addStyle(
+        wb, sheet, styles$percent,
+        rows = seq.int(start_row + 2L, start_row + 1L + nrow(dt)),
+        cols = start_col + pct_cols - 1L,
+        gridExpand = TRUE,
+        stack = TRUE
+      )
+    }
+    openxlsx::setColWidths(wb, sheet, cols = seq.int(start_col, start_col + ncol(dt) - 1L), widths = "auto")
+    start_row + nrow(dt) + 4L
+  }
+
+  dashboard <- add_sheet("Dashboard", "#111827")
+  write_title(dashboard, workbook_title, "Analyst-facing Excel workbook built from MMM decomposition, spend/modcut, posterior, and optimizer outputs.")
+  summary <- if ("executive_summary" %in% names(report_tables)) data.table::copy(report_tables$executive_summary) else data.table::data.table()
+  dash_left_next <- 4L
+  if (nrow(summary)) {
+    metric_names <- names(summary)
+    metric_values <- unlist(summary[1], use.names = FALSE)
+    metric_table <- data.table::data.table(metric = metric_names, value = as.character(metric_values))
+    dash_left_next <- write_block(dashboard, "Executive summary", metric_table, 4)
+  }
+  flags <- if ("diagnostic_flags" %in% names(report_tables)) data.table::copy(report_tables$diagnostic_flags) else data.table::data.table()
+  dash_right_next <- 4L
+  if (nrow(flags)) dash_right_next <- write_block(dashboard, "Reporting flags", flags, 4, start_col = 5, table_style = "TableStyleMedium4")
+  dash_next <- max(18L, dash_left_next, dash_right_next, na.rm = TRUE)
+  top <- if ("contribution_by_variable" %in% names(report_tables)) data.table::copy(report_tables$contribution_by_variable) else data.table::data.table()
+  if (nrow(top)) {
+    top <- top[role != "residual"][order(-abs(contribution))]
+    top <- top[seq_len(min(.N, 15L))]
+    top[, contribution_bar := mdo_xlsx_bar(contribution)]
+    keep <- intersect(c("variable", "role", "contribution", "share_of_actual_kpi", "contribution_bar"), names(top))
+    write_block(dashboard, "Top KPI contributors", top[, keep, with = FALSE], dash_next)
+  }
+  econ <- if ("kpi_economics" %in% names(report_tables)) data.table::copy(report_tables$kpi_economics) else data.table::data.table()
+  if (nrow(econ)) {
+    econ <- econ[order(cost_per_outcome)]
+    keep <- intersect(c("variable", "spend", "contribution", "outcome_per_cost", "cost_per_outcome", "fair_share_index", "signed_economics_flag"), names(econ))
+    write_block(dashboard, "Media economics", econ[, keep, with = FALSE], dash_next, start_col = 7, table_style = "TableStyleMedium9")
+  }
+  openxlsx::freezePane(wb, dashboard, firstRow = TRUE)
+
+  fit_sheet <- add_sheet("Fit", "#2563EB")
+  write_title(fit_sheet, "Fit and Period Movement", "Weekly/monthly/quarterly grain follows the period_granularity used to build the report tables.")
+  row <- 4L
+  for (nm in c("fit_diagnostics", "fit_by_period", "fit_by_group", "period_kpi_change")) {
+    if (nm %in% names(report_tables)) row <- write_block(fit_sheet, nm, report_tables[[nm]], row)
+  }
+  openxlsx::freezePane(wb, fit_sheet, firstRow = TRUE)
+
+  contrib_sheet <- add_sheet("Contributions", "#16A34A")
+  write_title(contrib_sheet, "Contribution Review", "Variable, channel, period, rollup, and group contribution views.")
+  row <- 4L
+  for (nm in c("contribution_by_variable", "contribution_by_channel", "contribution_by_rollup_node", "contribution_by_period_variable", "period_due_to_variable")) {
+    if (nm %in% names(report_tables)) row <- write_block(contrib_sheet, nm, report_tables[[nm]], row)
+  }
+  openxlsx::freezePane(wb, contrib_sheet, firstRow = TRUE)
+
+  econ_sheet <- add_sheet("Economics", "#0891B2")
+  write_title(econ_sheet, "Spend, ROI, and Cost-per-KPI", "Economics are only ranked as efficient when contribution is positive and spend is mapped to the same reporting domain.")
+  row <- 4L
+  for (nm in c("kpi_economics", "kpi_economics_by_channel", "kpi_economics_by_rollup_node", "kpi_economics_by_period")) {
+    if (nm %in% names(report_tables)) row <- write_block(econ_sheet, nm, report_tables[[nm]], row)
+  }
+  openxlsx::freezePane(wb, econ_sheet, firstRow = TRUE)
+
+  curve_sheet <- add_sheet("Curves", "#7C3AED")
+  write_title(curve_sheet, "Response and Marginal Curves", "Use Excel filters on variable, group/model ID, and spend/support multiplier to review curve shape and current point.")
+  row <- 4L
+  for (nm in c("optimizer_response_curves", "optimizer_saturation_headroom")) {
+    if (nm %in% names(report_tables)) row <- write_block(curve_sheet, nm, report_tables[[nm]], row)
+  }
+  openxlsx::freezePane(wb, curve_sheet, firstRow = TRUE)
+
+  opt_sheet <- add_sheet("Optimizer", "#F97316")
+  write_title(opt_sheet, "Scenario and Optimizer Outputs", "Point and uncertainty-aware scenario views from the optimizer/scenario planner output when provided.")
+  row <- 4L
+  for (nm in c("optimizer_summary", "optimizer_scenario_comparison", "optimizer_plan", "optimizer_group_rollup", "optimizer_scenario_detail", "optimizer_saturation_headroom")) {
+    if (nm %in% names(report_tables)) row <- write_block(opt_sheet, nm, report_tables[[nm]], row)
+  }
+  openxlsx::freezePane(wb, opt_sheet, firstRow = TRUE)
+
+  posterior_sheet <- add_sheet("Posterior", "#DB2777")
+  write_title(posterior_sheet, "Posterior Diagnostics", "Contribution and coefficient posterior summaries, when posterior draw tables are supplied.")
+  row <- 4L
+  for (nm in c("posterior_contribution_summary", "posterior_contribution_by_period_variable", "posterior_coef_summary", "posterior_coef_by_variable")) {
+    if (nm %in% names(report_tables)) row <- write_block(posterior_sheet, nm, report_tables[[nm]], row)
+  }
+  openxlsx::freezePane(wb, posterior_sheet, firstRow = TRUE)
+
+  rollup_sheet <- add_sheet("Rollups", "#4B5563")
+  write_title(rollup_sheet, "Rollup Explorer", "Rollup paths let modeled variables report into arbitrary parent structures without modeling parent rows.")
+  row <- 4L
+  for (nm in c("rollup_performance_table", "variable_rollup_map", "channel_map_normalized")) {
+    if (nm %in% names(report_tables)) row <- write_block(rollup_sheet, nm, report_tables[[nm]], row)
+  }
+  openxlsx::freezePane(wb, rollup_sheet, firstRow = TRUE)
+
+  chart_files <- if (is.null(chart_files)) character() else as.character(chart_files)
+  chart_files <- chart_files[!is.na(chart_files) & file.exists(chart_files)]
+  if (length(chart_files)) {
+    chart_sheet <- add_sheet("Chart_Gallery", "#0F766E")
+    write_title(chart_sheet, "Chart Gallery", "Static PNG charts inserted for quick review and deck assembly.")
+    row <- 4L
+    for (path in chart_files) {
+      title <- tools::file_path_sans_ext(basename(path))
+      openxlsx::writeData(wb, chart_sheet, gsub("_", " ", title), startRow = row, startCol = 1)
+      openxlsx::addStyle(wb, chart_sheet, styles$section, rows = row, cols = 1, stack = TRUE)
+      try(openxlsx::insertImage(wb, chart_sheet, path, startRow = row + 1L, startCol = 1, width = 8.5, height = 4.8), silent = TRUE)
+      row <- row + 26L
+    }
+    openxlsx::setColWidths(wb, chart_sheet, cols = 1:8, widths = 16)
+  }
+
+  index_sheet <- add_sheet("Workbook_Index", "#6B7280")
+  write_title(index_sheet, "Workbook Index", "Raw report tables are included after the curated analyst tabs for auditability.")
   table_names <- names(report_tables)[vapply(report_tables, function(x) data.table::is.data.table(x) || is.data.frame(x), logical(1))]
   table_names <- setdiff(table_names, c("standardized_long", "standardized_wide"))
-  for (nm in table_names) {
-    sheet <- substr(gsub("[^A-Za-z0-9_]", "_", nm), 1, 31)
-    openxlsx::addWorksheet(wb, sheet)
-    openxlsx::writeDataTable(wb, sheet, data.table::as.data.table(report_tables[[nm]]))
+  table_index <- data.table::data.table(
+    report_table = table_names,
+    rows = vapply(report_tables[table_names], nrow, integer(1)),
+    columns = vapply(report_tables[table_names], ncol, integer(1))
+  )
+  write_block(index_sheet, "Included report tables", table_index, 4)
+
+  curated <- c(
+    "executive_summary", "diagnostic_flags", "fit_diagnostics", "fit_by_period", "fit_by_group",
+    "period_kpi_change", "contribution_by_variable", "contribution_by_channel", "contribution_by_rollup_node",
+    "contribution_by_period_variable", "period_due_to_variable", "kpi_economics", "kpi_economics_by_channel",
+    "kpi_economics_by_rollup_node", "kpi_economics_by_period", "optimizer_response_curves",
+    "optimizer_saturation_headroom", "optimizer_summary", "optimizer_scenario_comparison", "optimizer_plan",
+    "optimizer_group_rollup", "optimizer_scenario_detail", "posterior_contribution_summary",
+    "posterior_contribution_by_period_variable", "posterior_coef_summary", "posterior_coef_by_variable",
+    "rollup_performance_table", "variable_rollup_map", "channel_map_normalized"
+  )
+  table_names <- names(report_tables)[vapply(report_tables, function(x) data.table::is.data.table(x) || is.data.frame(x), logical(1))]
+  table_names <- setdiff(table_names, c("standardized_long", "standardized_wide"))
+  raw_tables <- setdiff(table_names, curated)
+  for (nm in raw_tables) {
+    dt <- mdo_xlsx_clean_table(report_tables[[nm]])
+    if (!ncol(dt)) next
+    sheet <- add_sheet(paste0("Data_", nm), "#9CA3AF")
+    write_title(sheet, nm, "Auditable raw report-table export.")
+    write_block(sheet, nm, dt, 4)
     openxlsx::freezePane(wb, sheet, firstRow = TRUE)
   }
   openxlsx::saveWorkbook(wb, output_path, overwrite = TRUE)
   output_path
+}
+
+build_mmm_excel_dashboard <- function(long_decomp,
+                                      wide_decomp = NULL,
+                                      raw_data = NULL,
+                                      modcut = NULL,
+                                      spend_map = NULL,
+                                      optimizer_output = NULL,
+                                      posterior_decomp_draws = NULL,
+                                      posterior_coef_draws = NULL,
+                                      channel_map = NULL,
+                                      output_path,
+                                      media_variables = NULL,
+                                      baseline_variables = NULL,
+                                      time_col = NULL,
+                                      group_col = NULL,
+                                      entity_col = NULL,
+                                      variable_col = "variable",
+                                      contribution_col = "contribution",
+                                      actual_col = "y_actual",
+                                      fitted_col = "pred",
+                                      residual_col = "residual",
+                                      sample_col = "sample",
+                                      sample_values = NULL,
+                                      period_granularity = "month",
+                                      spend_suffix = "_spend",
+                                      kpi_value_per_outcome = NULL,
+                                      chart_files = NULL) {
+  tables <- build_mmm_deck_tables(
+    long_decomp = long_decomp,
+    wide_decomp = wide_decomp,
+    raw_data = raw_data,
+    modcut = modcut,
+    spend_map = spend_map,
+    optimizer_output = optimizer_output,
+    posterior_decomp_draws = posterior_decomp_draws,
+    posterior_coef_draws = posterior_coef_draws,
+    channel_map = channel_map,
+    media_variables = media_variables,
+    baseline_variables = baseline_variables,
+    time_col = time_col,
+    group_col = group_col,
+    entity_col = entity_col,
+    variable_col = variable_col,
+    contribution_col = contribution_col,
+    actual_col = actual_col,
+    fitted_col = fitted_col,
+    residual_col = residual_col,
+    sample_col = sample_col,
+    sample_values = sample_values,
+    period_granularity = period_granularity,
+    spend_suffix = spend_suffix,
+    kpi_value_per_outcome = kpi_value_per_outcome
+  )
+  path <- write_mmm_deck_excel(tables, output_path = output_path, chart_files = chart_files)
+  package_info <- if (exists("econimap_output_metadata", mode = "function")) {
+    econimap_output_metadata("build_mmm_excel_dashboard", surface = "excel_dashboard")
+  } else {
+    list(
+      function_name = "build_mmm_excel_dashboard",
+      surface = "excel_dashboard",
+      generated_at = as.character(Sys.time())
+    )
+  }
+  list(
+    package_info = package_info,
+    tables = tables,
+    excel_path = path
+  )
 }
 
 write_mmm_deck_shiny_app <- function(report_tables,
@@ -872,4 +1173,3 @@ write_mmm_deck_shiny_app <- function(report_tables,
   writeLines(readme, file.path(app_dir, "README.md"), useBytes = TRUE)
   app_path
 }
-

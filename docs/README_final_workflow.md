@@ -6,6 +6,12 @@ Analyst-facing script folders stay clean, but release bundles should include the
 
 For maintenance, use `SCRIPT_ROADMAP.md` as the script-by-script backlog. It separates production-critical Stan/quasi-geo work from chart polish, package-structure cleanup, and future workflow ideas.
 
+A rolling synthetic chart-builder showcase lives outside the scripts at:
+
+`/Users/mattprice/Documents/Codex/MMM_Workflow/examples/chart_builder_showcase`
+
+Run `build_chart_builder_showcase.R` from that folder after chart-builder changes to refresh the static HTML, PNG charts, CSV tables, and Shiny app preview.
+
 ## Files
 
 - `mmm_workflow.R`
@@ -35,21 +41,26 @@ For maintenance, use `SCRIPT_ROADMAP.md` as the script-by-script backlog. It sep
 - `mmm_deck_output_builder.R`
   - Reporting layer for decomposition outputs.
   - Builds deck-ready CSV tables, PNG charts, a static HTML dashboard, optional Excel workbook output, and an optional Shiny/Plotly/DT app folder.
-  - Includes channel rollups, period-over-period change, due-to contribution movement, funnel summary, channel-level KPI economics, and variable/channel role mapping.
+  - Includes channel rollups, arbitrary-depth `rollup_path` reporting metadata, period-over-period change, due-to contribution movement, funnel summary, channel-level KPI economics, and variable/channel role mapping.
+  - `rollup_path` is metadata only. Parent nodes such as `paid_social` or `meta` are used for reporting/economics rollups and are not modeled unless they also appear as explicit modeled variables.
+  - Can ingest `optimizer_output` from `run_optimizer_scenario_planner()` and export optimizer scenario comparison, recommended plan, group rollup, saturation/headroom, response-curve, and uncertainty tables.
+  - Adds optimizer charts for current vs recommended spend, scenario incremental contribution, response curves, marginal response, and saturation/headroom when the required columns are available.
+  - Includes a chart registry with audience tags (`client`, `appendix`, `internal_qa`), required tables/columns, availability, and recommended slide titles.
+  - Handles long-only decomposition inputs gracefully when fit columns are missing, and parses Excel serial dates with origin `1899-12-30`.
   - Uses generic KPI economics: outcome per cost and cost per outcome. Revenue ROI/value metrics are optional when a KPI value is available.
 
 - `optimizer_scenario_planner.R`
   - Standalone optimizer and scenario planner.
   - Always optimizes against response curves. With a fitted Stan MMM object, it uses `fit$response_curves` when available; otherwise it can generate the same curve points from the fitted transform/coefficient path used by decomposition. It can also accept a precomputed response-curve table for hand-built curves, external models, or baseline planning before a full MMM fit exists.
   - Outputs current plan economics, response curves, grid-based saturation/headroom diagnostics, all-channel and custom scenarios, optimized spend plan, allocation history, ROI, mROI, cost per KPI, and diagnostics.
-  - Preserves explicit spend/support points from supplied response-curve sheets, so CPM/CPP/support-based curves can be audited without forcing every row into a linear spend multiplier.
-  - Uses a transparent greedy marginal-response allocator with min/max, locked channel, fixed spend, min spend, max spend, total budget, and budget-change constraints.
+  - Preserves explicit spend/support points from supplied response-curve sheets, so CPM/CPP/support-based curves can be audited without forcing every row into a linear spend multiplier. When curves are supplied in support units such as impressions, GRPs, rating points, visits, clicks, or leads, `support_cost_map` can price those curves using CPM, CPP, cost per point, or cost per support unit. Scenario plans can also be entered as planned support units, and the planner converts them to the matching response-curve spend/multiplier path. Grid and hybrid optimizers enforce channel min/max/fixed spend constraints against the actual candidate spend on the curve, which also covers zero-current launch channels and nonlinear spend/support curves.
+  - Uses a transparent greedy marginal-response allocator by default. Optional search modes include `optimizer_method = "grid"` exhaustive grid search, `optimizer_method = "hybrid"` coarse grid plus continuous local refinement, `optimizer_method = "robust_grid"` posterior/draw-aware grid search, and `optimizer_method = "robust_hybrid"` robust grid plus continuous local refinement. Robust modes can optimize q05 contribution, expected utility, probability of clearing a target, q05 ROI, or q95 cost per KPI. All paths support min/max, locked channel, fixed spend, min spend, max spend, total budget, and budget-change constraints. Grid/hybrid modes also support `variable_group_map` plus `group_constraints` for portfolio, product, line-of-business, or channel-family caps/floors/share limits and emit `optimization_group_rollup`. If `variable_group_map` contains `rollup_path` but no explicit `planning_group`, the planner infers the first meaningful reporting node, e.g. `paid_social` from `total_media > paid_social > meta > meta_campaign_1`.
   - Includes target planning: minimum budget needed for a KPI target, and maximum budget that stays within target cost per KPI or ROI thresholds.
-  - Current version is point-estimate decision support. It preserves historical flighting by scaling channel support/spend and assumes constant cost per media/support unit unless the supplied response curve already encodes another cost assumption.
+  - Current optimizer recommendation is point-estimate decision support unless a robust optimizer is selected. When draw-level response curves are supplied through `response_curve_draws`, `fit$response_curves_draws`, or `uncertainty = "draws"` with a Stan fit, the planner also outputs q05/q50/q95 and custom-quantile scenario and optimized-plan uncertainty tables. These include incremental contribution, incremental ROI, expected profit, q05/custom profit, probability profit is positive, and probability incremental contribution is positive. Profit fields require `value_per_kpi`; KPI-only workflows can still use contribution and cost-per-KPI uncertainty.
 
 - `bau_response_curves.R`
   - Standalone BAU response-curve creator for pre-model planning, hand-built curves, or conservative defaults when a full MMM fit is not available.
-  - Uses historical support/spend flighting, optional group/model-ID rows, optional population scaling, Hill or Weibull curves, and channel-specific median saturation anchors. The default anchor is 50% saturation at median active support.
+  - Uses historical support/spend flighting, optional group/model-ID rows, optional population scaling, Hill or Weibull curves, and channel-specific median saturation anchors. The default anchor is 50% saturation at median active support. Curve normalization defaults to active training rows where raw current-period support is positive; `curve_normalization_scope = "all_train"` remains available as a sensitivity option.
   - Outputs optimizer-compatible response-curve rows when a business scale is supplied through current contribution, ROI-like outcome per cost, or cost-per-KPI. If no business scale is supplied, it still returns shape/audit curves but marks them `optimizer_ready = FALSE`.
 
 - `quasi_experimental_dose_response_analysis.R`
@@ -59,10 +70,11 @@ For maintenance, use `SCRIPT_ROADMAP.md` as the script-by-script backlog. It sep
 - `quasi_geo_test.R`
   - Standalone quasi-geo test engine for detecting natural or unannounced geo tests.
   - Scans geo x week signed media ramps, down-ramps, mixed windows, and cutoffs; builds ridge synthetic-control counterfactuals from donor geos when estimable; keeps messy candidate events by default; then diagnoses evidence quality, lift uncertainty, MDE/power proxy, pre-period placebo signal, and low/medium/high support dose response for curve-prior direction.
+  - If synthetic-control weights or donor support are weak, TBR / DiD fallback evidence can still be used as downgraded evidence when the fallback counterfactual is estimable. Synthetic-control failure is only treated as a blocker when all counterfactual paths fail or the event is not geo-identifiable.
   - Preserves raw spend for `incremental_spend`, cost per outcome, and ROI-like outputs even when modeled media is mean-indexed for comparability.
   - Can hand channel-specific usable quasi-geo evidence into Stan coefficient priors with `qgt_build_stan_prior_handoff()` and `qgt_apply_stan_prior_handoff()`. Bundle/confounded evidence stays in bundle/diagnostic outputs and is not allocated back to individual channels unless separately identified.
   - Writes event, variable, and estimand evidence summaries so imperfect events can be reviewed, filtered, and routed to calibration, directional-prior, diagnostic, or ignore/filter use.
-  - If media changes identically across all markets, the script should treat the event as not geo-identifiable. A future national TBR/interrupted-time-series fallback can be useful, but it should remain lower-tier time-series evidence rather than geo-lift calibration.
+  - If media changes identically across all markets, or if all candidate donor markets move the same channel at the same time, the script treats the event as not geo-identifiable. It preserves the diagnostic read, but does not convert it into geo-lift calibration or channel-specific Stan priors. A separate future national TBR/interrupted-time-series diagnostic could be useful, but it should remain lower-tier time-series evidence rather than quasi-geo evidence.
 
 - `synthetic_mmm_data_generators.R`
   - Support utility with reusable known-truth MMM panels, quasi-geo event panels, and simple decomposition outputs for tests, demos, hostile validation, and future Neural MMM experiments.
@@ -73,14 +85,16 @@ For maintenance, use `SCRIPT_ROADMAP.md` as the script-by-script backlog. It sep
   - UCM is still supported for final joint estimation.
   - Reads `coef_hierarchy_scale` from metadata to shrink group coefficient variation for national-only or weakly geo-resolved variables.
   - Supports `curve_type = "weibull"` or `"hill"` for curved media variables. Weibull remains the default.
-  - Accepts direct `anchor_saturation` in Stan metadata. Media rows with no explicit curve-rate or anchor default to 50% saturation at median active support. When `rrate` / `dvalue` fields are omitted, the wrapper defaults to no adstock and shape 1 unless you override them, with default/audit flags retained in metadata.
+  - Uses a generic `group_col` model-id input. That column can represent a geo, product, retailer, line of business, product-geo, product-retailer, LOB-product-geo, or any other analyst-defined modeling cell. The current Stan model has one hierarchical group/model-id dimension; use a composite ID for multi-dimensional cells unless/until crossed random effects are added. For variables marked `coef_hierarchy_scope = "keyed"`, pass one-time `coef_hierarchy_part_indices` to pool groups sharing selected pieces of the composite ID. Example: with `group_col = "region_retailer_product"`, `coef_hierarchy_part_indices = 3` pools within product. Metadata `hierarchy_part_indices` can override the global key for a specific variable. Indices are R-style one-based by default. `auto` hierarchy is media/reach-frequency treatment-only by default; controls/base/non-media variables require explicit `global` or `keyed` opt-in.
+  - Accepts direct `anchor_saturation` in Stan metadata. Media rows with no explicit curve-rate or anchor default to 50% saturation at median active support. When `rrate` / `dvalue` fields are omitted, the wrapper defaults to no adstock and shape 1 unless you override them, with default/audit flags retained in metadata. `curve_normalization_scope = "active_train"` is the default so flighted media is normalized on active support weeks rather than having off-weeks dilute the curve scale; `all_train` remains available for sensitivity/backward comparison.
   - Accepts direct business priors through `fit_hier_mmm(..., business_priors = ...)`: `coef`, `roi`, `mroi`, `ikpc`, and `cpkpi` inputs are converted to coefficient priors on the Stan model scale using training rows only, with SD/precision audit fields retained in `business_prior_audit`.
   - When `spend_map` is supplied, attaches raw spend and raw support to `long_decomp` and `wide_decomp` so outputs can feed KPI economics, response-curve, and deck workflows without a separate join.
-  - Outputs `response_curves` at the total variable level by default, with optional market/group or product-geo rows when the fitted data has meaningful group structure or `response_curve_scope = "both"` / `"group"` is requested. The CSV sheet is written as `response_curves.csv` when output writing is enabled.
+  - Outputs `response_curves` at the total variable level by default, with optional group/model-id rows when the fitted data has meaningful group structure or `response_curve_scope = "both"` / `"group"` is requested. The CSV sheet is written as `response_curves.csv` when output writing is enabled.
+  - Can optionally output posterior-draw response curves with `create_response_curve_draws = TRUE`; these write `response_curves_draws.csv` and feed uncertainty-aware optimizer/scenario outputs.
   - Writes sampler diagnostics and sampler-setting recommendations when treedepth, R-hat, ESS, divergence, or BFMI flags appear.
   - Writes `diagnostics_model_readiness.csv` and `diagnostics_model_readiness_issues.csv` so analyst review separates true blockers from short-chain smoke-test warnings, collinearity, weak fit, prior-stickiness, and other review notes.
   - Includes geometry controls for centered/non-centered coefficients, group intercepts, UCM state effects, predictor centering, sampler metric, and max treedepth. Fixed curves are precomputed as Stan data, so the common fixed-curve-prior workflow avoids unnecessary autodiff work.
-  - Roadmap items include channel-level median/half-saturation anchor overrides and built-in holiday dummy generation for selectable holiday calendars.
+  - Roadmap items include built-in holiday dummy generation for selectable holiday calendars and optional posterior contribution intervals by variable/group/period.
 
 - `hier_mmm.stan`
   - Stan model used by `hier_mmm.R`.
@@ -188,9 +202,14 @@ report <- run_mmm_deck_output_builder(
   long_decomp = fit$long_decomp,
   wide_decomp = fit$wide_decomp,
   raw_data = modcut,                 # optional, but needed for cost-per-KPI metrics
-  channel_map = data.table(          # optional: combine splits into client-facing channels
-    variable = c("social_brand", "social_prospecting", "search"),
-    channel = c("Paid Social", "Paid Social", "Paid Search"),
+  optimizer_output = planner,         # optional: adds optimizer/scenario tables and charts
+  channel_map = data.table(          # optional: combine splits into client-facing rollups
+    variable = c("meta_campaign_1", "meta_campaign_2", "search"),
+    rollup_path = c(
+      "total_media > paid_social > meta > meta_campaign_1",
+      "total_media > paid_social > meta > meta_campaign_2",
+      "total_media > paid_search > search"
+    ),
     role = c("media", "media", "media")
   ),
   output_dir = "mmm_deck_outputs",
@@ -201,7 +220,7 @@ report <- run_mmm_deck_output_builder(
   period_granularity = "quarter",
   write_html = TRUE,
   write_charts = TRUE,
-  write_excel = FALSE,               # requires openxlsx if TRUE
+  write_excel = TRUE,                # default analyst workbook; requires openxlsx
   write_shiny = TRUE                 # writes a Shiny app folder
 )
 ```
@@ -216,9 +235,14 @@ Primary outputs:
 - `tables/*_funnel_summary.csv`
 - `tables/*_kpi_economics.csv`
 - `tables/*_kpi_economics_by_channel.csv`
+- `tables/*_optimizer_scenario_comparison.csv`
+- `tables/*_optimizer_plan.csv`
+- `tables/*_optimizer_response_curves.csv`
+- `tables/*_chart_registry.csv`
 - `tables/*_fit_diagnostics.csv`
 - `charts/*.png`
 - `*_mmm_deck_dashboard.html`
+- `*_mmm_deck_summary.xlsx`
 - `shiny_app/app.R` when `write_shiny = TRUE`
 
 To run the generated Shiny app later:
@@ -302,13 +326,20 @@ planner <- run_optimizer_scenario_planner(
   fit_obj = fit_fourier,
   spend_map = data.table(variable = c("tv", "search"), spend_col = c("tv_spend", "search_spend")),
   raw_data = model_dt,
+  optimizer_method = "hybrid",
   total_budget = 1000000,
-  target_incremental_contribution = 5000,
-  target_cost_per_kpi = 25,
   constraints = data.table(
     variable = c("tv", "search"),
     min_multiplier = c(0.50, 0.75),
     max_multiplier = c(2.00, 1.50)
+  ),
+  variable_group_map = data.table(
+    variable = c("tv", "search"),
+    planning_group = c("upper_funnel", "lower_funnel")
+  ),
+  group_constraints = data.table(
+    planning_group = "upper_funnel",
+    max_share = 0.45
   ),
   scenario_multipliers = c(0.80, 1.00, 1.20),
   output_dir = "optimizer_outputs"

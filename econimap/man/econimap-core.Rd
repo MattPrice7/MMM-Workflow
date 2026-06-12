@@ -23,6 +23,7 @@
 \alias{run_mmm_scenario_planner}
 \alias{run_mmm_deck_output_builder}
 \alias{build_mmm_deck_tables}
+\alias{build_mmm_excel_dashboard}
 \alias{create_bau_response_curves}
 \alias{build_bau_response_curves}
 \alias{create_baseline_response_curves}

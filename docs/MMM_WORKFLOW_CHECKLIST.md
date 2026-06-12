@@ -201,6 +201,7 @@ Done:
 - [x] Add saturation/headroom summary charts.
 - [x] Add current vs optimized budget scenario charts.
 - [x] Add separated rolling synthetic chart-builder showcase with static HTML, PNG charts, CSV tables, and Shiny app preview.
+- [x] Add a dedicated analyst Excel dashboard workbook with dashboard, fit, contribution, economics, curves, optimizer, posterior, rollup, diagnostics, chart-gallery, and raw table tabs.
 
 Next:
 
@@ -212,12 +213,11 @@ Next:
 - [ ] Add posterior/credible interval bands to contribution, response-curve, ROI, and mROI charts when draw-level outputs are available.
 - [ ] Add posterior diagnostic plots for coefficients, prior-vs-posterior shifts, and parameter uncertainty.
 - [ ] Add quasi-geo treated-vs-synthetic, media shock, donor weights, placebo distribution, and evidence-prior audit charts.
-- [ ] Future: add a dedicated Excel chart workbook builder for consultant workflows.
-- [ ] Future: keep the Excel chart workbook separate from the Shiny/static deck builder so analyst Excel customization does not complicate the production chart/export contract.
+- [ ] Continue improving Excel-native charting/customization, including optional native Excel formulas, in-cell bars, and analyst-controlled period comparisons.
 
 Recommendation:
 
-- Use tables + static HTML/PNG/Excel as the stable deck-building default. Shiny/Plotly are useful exploratory layers, but they should not be the only client-delivery path.
+- Use the Excel dashboard workbook as the default analyst UI and portable handoff. Static HTML/PNG are useful for quick review and deck assembly. Shiny/Plotly are optional exploratory layers, not the only client-delivery path.
 
 ## 5. Neural MMM Research Project
 

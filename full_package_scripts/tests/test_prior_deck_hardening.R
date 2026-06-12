@@ -204,6 +204,43 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
   add_result("deck builder writes optimizer charts when ggplot2 is available", TRUE, "ggplot2 not installed; optional chart write skipped")
 }
 
+if (requireNamespace("openxlsx", quietly = TRUE)) {
+  excel_out_dir <- file.path(tempdir(), "deck_excel_outputs")
+  files_excel <- write_mmm_deck_outputs(
+    report_tables = tables_opt,
+    output_dir = excel_out_dir,
+    prefix = "analyst",
+    write_charts = requireNamespace("ggplot2", quietly = TRUE),
+    write_html = FALSE,
+    write_excel = TRUE,
+    write_shiny = FALSE
+  )
+  excel_sheets <- openxlsx::getSheetNames(files_excel$excel_path)
+  add_result("deck builder writes analyst Excel dashboard workbook",
+             file.exists(files_excel$excel_path) &&
+               all(c("Dashboard", "Fit", "Contributions", "Economics", "Curves", "Optimizer", "Rollups", "Workbook_Index") %in% excel_sheets))
+
+  direct_excel <- file.path(tempdir(), "direct_excel_dashboard.xlsx")
+  direct_res <- build_mmm_excel_dashboard(
+    long_decomp = long,
+    raw_data = raw,
+    spend_map = data.table(variable = c("tv", "search"), spend_col = c("tv_spend", "search_spend")),
+    optimizer_output = opt_out,
+    media_variables = c("tv", "search"),
+    time_col = "week",
+    group_col = "geo",
+    entity_col = "entity",
+    period_granularity = "week",
+    output_path = direct_excel
+  )
+  add_result("standalone Excel dashboard builder returns workbook path and tables",
+             file.exists(direct_res$excel_path) &&
+               "executive_summary" %in% names(direct_res$tables))
+} else {
+  add_result("deck builder writes analyst Excel dashboard workbook", TRUE, "openxlsx not installed; optional Excel workbook skipped")
+  add_result("standalone Excel dashboard builder returns workbook path and tables", TRUE, "openxlsx not installed; optional Excel workbook skipped")
+}
+
 fake_fit <- list(
   variable_lookup = data.table(variable = c("tv", "search"), role = "media"),
   metadata = data.table(variable = c("tv", "search"), role = "media"),

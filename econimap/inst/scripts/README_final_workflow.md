@@ -220,7 +220,7 @@ report <- run_mmm_deck_output_builder(
   period_granularity = "quarter",
   write_html = TRUE,
   write_charts = TRUE,
-  write_excel = FALSE,               # requires openxlsx if TRUE
+  write_excel = TRUE,                # default analyst workbook; requires openxlsx
   write_shiny = TRUE                 # writes a Shiny app folder
 )
 ```
@@ -242,6 +242,7 @@ Primary outputs:
 - `tables/*_fit_diagnostics.csv`
 - `charts/*.png`
 - `*_mmm_deck_dashboard.html`
+- `*_mmm_deck_summary.xlsx`
 - `shiny_app/app.R` when `write_shiny = TRUE`
 
 To run the generated Shiny app later:

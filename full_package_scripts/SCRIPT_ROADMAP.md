@@ -33,11 +33,12 @@ This file is the working backlog for the script bundle. It separates production-
    - Done: fix consultant chart date parsing, including Excel serial dates using origin `1899-12-30`.
    - Done: add guards for missing fit columns and graceful chart skipping.
    - Done: add optimizer scenario, current-vs-recommended spend, response-curve, marginal-response, and saturation/headroom chart outputs.
+   - Done: add a dedicated analyst Excel dashboard workbook with dashboard, fit, contribution, economics, curves, optimizer, posterior, rollup, diagnostics, chart-gallery, and raw table tabs.
    - Add client color palettes and channel color overrides.
    - Add quasi-geo treated-vs-synthetic, media shock, donor weights, placebo distribution, and evidence-prior audit charts.
-   - Future: add a dedicated Excel chart workbook builder for consultant workflows, separate from the Shiny/static HTML report path.
+   - Continue improving Excel-native charting/customization and period comparison controls.
    - Continue improving ROI, cost-per-KPI, mROI/mCPA, contribution, due-to bridge, funnel, and executive summary chart polish.
-   - Prefer table outputs plus static HTML/PNG as the stable default. Excel is useful for consultant workflows; Shiny/Plotly are good optional interactive layers, not the only delivery path.
+   - Prefer the Excel workbook as the portable analyst UI. Static HTML/PNG are useful review/deck outputs; Shiny/Plotly are optional exploratory layers.
 
 4. `mmm_prior_workflow.R` / `semi_univariate_prior_builder_production_final.R` / `prior_recovery_builder.R`
    - Add channel-level curve anchor overrides and audit fields.
