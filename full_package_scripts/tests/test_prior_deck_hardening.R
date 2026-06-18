@@ -216,9 +216,13 @@ if (requireNamespace("openxlsx", quietly = TRUE)) {
     write_shiny = FALSE
   )
   excel_sheets <- openxlsx::getSheetNames(files_excel$excel_path)
-  add_result("deck builder writes analyst Excel dashboard workbook",
+  add_result("deck builder writes analyst Excel data workbook",
              file.exists(files_excel$excel_path) &&
-               all(c("Controls", "Dashboard", "Fit", "Contributions", "Economics", "Curve_Explorer", "Optimizer", "Posterior_Explorer", "Rollups", "Workbook_Index") %in% excel_sheets))
+               all(c("Summary", "Fit", "Contributions", "Period_Due_To", "Economics", "Response_Curves", "Optimizer", "Posterior_Summaries", "Posterior_Draws", "Rollups", "Workbook_Index") %in% excel_sheets) &&
+               !any(c("Controls", "Dashboard", "Curve_Explorer", "Posterior_Explorer", "Chart_Gallery") %in% excel_sheets))
+  excel_archive_entries <- utils::unzip(files_excel$excel_path, list = TRUE)$Name
+  add_result("Excel data workbook contains no embedded static images or drawings",
+             !any(grepl("^xl/(media|drawings)/", excel_archive_entries)))
 
   direct_excel <- file.path(tempdir(), "direct_excel_dashboard.xlsx")
   direct_res <- build_mmm_excel_dashboard(
@@ -237,7 +241,8 @@ if (requireNamespace("openxlsx", quietly = TRUE)) {
              file.exists(direct_res$excel_path) &&
                "executive_summary" %in% names(direct_res$tables))
 } else {
-  add_result("deck builder writes analyst Excel dashboard workbook", TRUE, "openxlsx not installed; optional Excel workbook skipped")
+  add_result("deck builder writes analyst Excel data workbook", TRUE, "openxlsx not installed; optional Excel workbook skipped")
+  add_result("Excel data workbook contains no embedded static images or drawings", TRUE, "openxlsx not installed; optional Excel workbook skipped")
   add_result("standalone Excel dashboard builder returns workbook path and tables", TRUE, "openxlsx not installed; optional Excel workbook skipped")
 }
 

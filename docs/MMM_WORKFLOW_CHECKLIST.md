@@ -201,7 +201,8 @@ Done:
 - [x] Add saturation/headroom summary charts.
 - [x] Add current vs optimized budget scenario charts.
 - [x] Add separated rolling synthetic chart-builder showcase with static HTML, PNG charts, CSV tables, and Shiny app preview.
-- [x] Add a dedicated analyst Excel dashboard workbook with dashboard, fit, contribution, economics, curves, optimizer, posterior, rollup, diagnostics, chart-gallery, and raw table tabs.
+- [x] Add a dedicated analyst Excel data workbook with summary, fit, contribution, period due-to, economics, response-curve uncertainty, optimizer, posterior summary/draw, rollup, diagnostics, and raw audit tabs.
+- [x] Keep static chart images out of the Excel workbook; Shiny remains the interactive chart/slicer surface and PNG/HTML remain separate deck-review artifacts.
 
 Next:
 
@@ -217,7 +218,7 @@ Next:
 
 Recommendation:
 
-- Use the Excel dashboard workbook as the default analyst UI and portable handoff. Static HTML/PNG are useful for quick review and deck assembly. Shiny/Plotly are optional exploratory layers, not the only client-delivery path.
+- Use the Excel workbook as the default portable analyst data handoff. Use Shiny/Plotly for interactive charts and slicers; keep static HTML/PNG as separate review and deck-assembly artifacts.
 
 ## 5. Neural MMM Research Project
 

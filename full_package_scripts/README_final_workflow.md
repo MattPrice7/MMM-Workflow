@@ -238,12 +238,13 @@ Primary outputs:
 - `tables/*_optimizer_scenario_comparison.csv`
 - `tables/*_optimizer_plan.csv`
 - `tables/*_optimizer_response_curves.csv`
-- `tables/*_chart_registry.csv`
 - `tables/*_fit_diagnostics.csv`
 - `charts/*.png`
 - `*_mmm_deck_dashboard.html`
 - `*_mmm_deck_summary.xlsx`
 - `shiny_app/app.R` when `write_shiny = TRUE`
+
+The Excel output is a portable analyst data workbook, not a simulated interactive dashboard. It keeps static images out of the `.xlsx` and separates summary, fit, contribution, period due-to, economics, response-curve uncertainty, optimizer, posterior summary/draw, rollup, diagnostic, and raw audit tables into filtered sheets. Use the generated Shiny app for live charts and slicers; PNG/HTML outputs remain separate review and deck-assembly artifacts.
 
 To run the generated Shiny app later:
 

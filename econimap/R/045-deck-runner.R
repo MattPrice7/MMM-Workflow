@@ -39,8 +39,7 @@ write_mmm_deck_outputs <- function(report_tables,
   if (isTRUE(write_excel)) {
     excel_path <- write_mmm_deck_excel(
       report_tables,
-      file.path(output_dir, paste0(pfx, "mmm_deck_summary.xlsx")),
-      chart_files = chart_files
+      file.path(output_dir, paste0(pfx, "mmm_deck_summary.xlsx"))
     )
   }
 

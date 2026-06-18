@@ -33,7 +33,8 @@ This file is the working backlog for the script bundle. It separates production-
    - Done: fix consultant chart date parsing, including Excel serial dates using origin `1899-12-30`.
    - Done: add guards for missing fit columns and graceful chart skipping.
    - Done: add optimizer scenario, current-vs-recommended spend, response-curve, marginal-response, and saturation/headroom chart outputs.
-   - Done: add a dedicated analyst Excel dashboard workbook with dashboard, fit, contribution, economics, curves, optimizer, posterior, rollup, diagnostics, chart-gallery, and raw table tabs.
+   - Done: add a dedicated analyst Excel data workbook with filtered summary, fit, contribution, period due-to, economics, response-curve uncertainty, optimizer, posterior summary/draw, rollup, diagnostics, and raw audit tabs.
+   - Done: keep static chart images out of the Excel workbook; use Shiny for interactive charts/slicers and keep PNG/HTML outputs separate.
    - Add client color palettes and channel color overrides.
    - Add quasi-geo treated-vs-synthetic, media shock, donor weights, placebo distribution, and evidence-prior audit charts.
    - Continue improving Excel-native charting/customization and period comparison controls.
