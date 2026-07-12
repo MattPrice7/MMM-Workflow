@@ -166,6 +166,18 @@
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+if (!exists("econimap_output_metadata", mode = "function")) {
+  econimap_output_metadata <- function(function_name, surface = NA_character_) {
+    list(
+      package = "econimap",
+      function_name = as.character(function_name),
+      surface = as.character(surface),
+      standalone_script = TRUE,
+      generated_at = format(Sys.time(), tz = "UTC", usetz = TRUE)
+    )
+  }
+}
+
 require_hier_mmm_pkg <- function(pkg, context) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
     stop("Package '", pkg, "' is required for ", context, ". Install it before running this Stan/modeling function.", call. = FALSE)
@@ -327,8 +339,8 @@ finite_max_or_na <- function(x) {
 }
 
 normalize_curve_type_hier_mmm <- function(x) {
-  out <- tolower(trimws(as.character(x %||% "weibull")))
-  out[is.na(out) | !nzchar(out)] <- "weibull"
+  out <- tolower(trimws(as.character(x %||% "hill")))
+  out[is.na(out) | !nzchar(out)] <- "hill"
   out[out %in% c("weibull_cdf", "exponential", "exp")] <- "weibull"
   out[out %in% c("hill_function", "hill_curve", "logistic_saturation")] <- "hill"
   bad <- setdiff(unique(out), c("weibull", "hill"))
@@ -336,7 +348,7 @@ normalize_curve_type_hier_mmm <- function(x) {
   out
 }
 
-saturate_media_hier_mmm <- function(x, cvalue, dvalue = 1, curve_type = "weibull") {
+saturate_media_hier_mmm <- function(x, cvalue, dvalue = 1, curve_type = "hill") {
   z <- pmax(suppressWarnings(as.numeric(x)), 1e-12) * suppressWarnings(as.numeric(cvalue)[1])
   dvalue <- suppressWarnings(as.numeric(dvalue)[1])
   if (!is.finite(dvalue) || dvalue <= 0) dvalue <- 1
@@ -382,7 +394,7 @@ curve_rate_from_anchor_hier_mmm <- function(x,
                                             rrate,
                                             dvalue = 1,
                                             anchor_saturation = 0.50,
-                                            curve_type = "weibull",
+                                            curve_type = "hill",
                                             train_mask = NULL,
                                             normalize_curve_x = TRUE,
                                             curve_normalization_scope = "active_train") {

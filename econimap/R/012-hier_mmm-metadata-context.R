@@ -556,7 +556,9 @@ clean_metadata <- function(meta_input,
                            bound_one_sided_coef_defaults = TRUE,
                            default_positive_coef_upper = 3,
                            default_negative_coef_lower = -3,
-                           default_one_sided_coef_span = 6) {
+                           default_one_sided_coef_span = 6,
+                           curve_type_default = c("hill", "weibull")) {
+  curve_type_default <- match.arg(curve_type_default)
   raw <- read_input_table(meta_input)
   if (!("variable" %in% names(raw))) stop("Metadata is missing required column: variable")
   raw <- prepare_metadata_shell(raw)
@@ -593,7 +595,8 @@ clean_metadata <- function(meta_input,
     if ("bounds" %in% names(dt)) dt[, coef_bound := bounds] else dt[, coef_bound := ""]
   }
   if (!("curve_bound" %in% names(dt))) dt[, curve_bound := ""]
-  if (!("curve_type" %in% names(dt))) dt[, curve_type := "weibull"]
+  if (!("curve_type" %in% names(dt))) dt[, curve_type := curve_type_default]
+  dt[is.na(curve_type) | !nzchar(trimws(as.character(curve_type))), curve_type := curve_type_default]
   dt[, curve_type := normalize_curve_type_hier_mmm(curve_type)]
   if (!"cvalue_bound" %in% names(dt)) {
     hit <- intersect(c("curve_rate_bound", "saturation_rate_bound", "curve_inverse_scale_bound", "saturation_inverse_scale_bound"), names(dt))
@@ -616,6 +619,17 @@ clean_metadata <- function(meta_input,
   }
   dt[, anchor_saturation := suppressWarnings(as.numeric(anchor_saturation))]
   dt[is.finite(anchor_saturation), anchor_saturation := clip_numeric(anchor_saturation, 0.01, 0.99)]
+  if (!"anchor_saturation_sd" %in% names(dt)) dt[, anchor_saturation_sd := NA_real_]
+  if (!"anchor_saturation_precision" %in% names(dt)) dt[, anchor_saturation_precision := NA_real_]
+  dt[, `:=`(
+    anchor_saturation_sd = suppressWarnings(as.numeric(anchor_saturation_sd)),
+    anchor_saturation_precision = suppressWarnings(as.numeric(anchor_saturation_precision))
+  )]
+  dt[(!is.finite(anchor_saturation_sd) | anchor_saturation_sd <= 0) &
+       is.finite(anchor_saturation_precision) & anchor_saturation_precision > 0,
+     anchor_saturation_sd := 1 / sqrt(anchor_saturation_precision)]
+  dt[is.finite(anchor_saturation_sd) & anchor_saturation_sd > 0,
+     anchor_saturation_precision := 1 / anchor_saturation_sd^2]
   supplied_anchor_row__ <- is.finite(dt$anchor_saturation)
   if (!"anchor_source" %in% names(dt)) dt[, anchor_source := NA_character_]
   if (!"cvalue_from_anchor" %in% names(dt)) dt[, cvalue_from_anchor := FALSE]
@@ -624,7 +638,7 @@ clean_metadata <- function(meta_input,
   } else {
     rep(FALSE, nrow(dt))
   }
-  default_anchor_rows__ <- dt$role %in% c("media", "reach_frequency") &
+  default_anchor_rows__ <- dt$role %in% c("media", "reach_frequency", "organic_reach_frequency") &
     !supplied_anchor_row__ &
     !isTRUE(supplied_cvalue__) &
     !explicit_no_curve__
@@ -668,6 +682,57 @@ clean_metadata <- function(meta_input,
   dt[, source_entity := normalize_source_entity(source_entity)]
   dt[, role := standardize_role(role)]
   dt[, effect_type := role]
+  if (!"non_media_baseline_values" %in% names(dt)) {
+    baseline_col <- pick_first_existing_col(dt, c("non_media_baseline_value", "non_media_baseline", "counterfactual_reference", "counterfactual_value"))
+    dt[, non_media_baseline_values := if (!is.na(baseline_col)) as.character(get(baseline_col)) else NA_character_]
+  }
+  if (!"control_reference_values" %in% names(dt)) {
+    control_ref_col <- pick_first_existing_col(dt, c("control_reference_value", "control_reference", "reporting_reference"))
+    dt[, control_reference_values := if (!is.na(control_ref_col)) as.character(get(control_ref_col)) else NA_character_]
+  }
+  dt[, `:=`(
+    non_media_baseline_values = trimws(as.character(non_media_baseline_values)),
+    control_reference_values = trimws(as.character(control_reference_values))
+  )]
+  dt[role == "non_media_treatment" & (is.na(non_media_baseline_values) | !nzchar(non_media_baseline_values)), non_media_baseline_values := "min"]
+  dt[role == "control" & (is.na(control_reference_values) | !nzchar(control_reference_values)), control_reference_values := "mean"]
+  dt[, reference_value_spec := fifelse(
+    role == "non_media_treatment", non_media_baseline_values,
+    fifelse(role == "control", control_reference_values, NA_character_)
+  )]
+  valid_reference <- function(z) {
+    if (is.na(z) || !nzchar(z)) return(TRUE)
+    key <- tolower(trimws(z))
+    key %in% c("min", "max", "mean", "average", "avg", "median", "zero") || is.finite(suppressWarnings(as.numeric(key)))
+  }
+  bad_reference <- !vapply(dt$reference_value_spec, valid_reference, logical(1))
+  if (any(bad_reference)) {
+    stop("Invalid non-media/control reference value(s) for: ", paste(dt$variable[bad_reference], collapse = ", "),
+         ". Use min, max, mean, median, zero, or a custom numeric value.")
+  }
+  rf_aliases <- list(
+    reach_col = c("reach_column", "unique_reach_col", "rf_reach_col"),
+    frequency_col = c("frequency_column", "avg_frequency_col", "average_frequency_col", "rf_frequency_col"),
+    population_col = c("population_column", "market_size_col", "rf_population_col"),
+    rf_spend_col = c("reach_frequency_spend_col", "cost_col", "spend_col")
+  )
+  for (target_nm in names(rf_aliases)) {
+    if (!(target_nm %in% names(dt))) {
+      hit <- rf_aliases[[target_nm]][rf_aliases[[target_nm]] %in% names(dt)]
+      dt[, (target_nm) := if (length(hit)) as.character(get(hit[1])) else NA_character_]
+    }
+    dt[, (target_nm) := trimws(as.character(get(target_nm)))]
+    dt[is.na(get(target_nm)) | !nzchar(get(target_nm)), (target_nm) := NA_character_]
+  }
+  rf_role__ <- dt$role %in% c("reach_frequency", "organic_reach_frequency")
+  dt[rf_role__ & is.na(reach_col), reach_col := variable]
+  if (dt[rf_role__, any(is.na(frequency_col))]) {
+    bad_rf <- dt[rf_role__ & is.na(frequency_col), variable]
+    stop("reach_frequency metadata rows must provide frequency_col. Missing for: ", paste(bad_rf, collapse = ", "))
+  }
+  # Reach/frequency uses a Hill response over average frequency. Reach remains
+  # linear before the effective-media signal is adstocked.
+  dt[rf_role__, curve_type := "hill"]
   if (!"coef_hierarchy_scope" %in% names(dt)) {
     scope_col <- pick_first_existing_col(dt, c("hierarchy_scope", "hier_scope", "pooling_scope", "coef_pooling_scope"))
     if (!is.na(scope_col)) dt[, coef_hierarchy_scope := get(scope_col)] else dt[, coef_hierarchy_scope := "auto"]
@@ -847,6 +912,8 @@ clean_metadata <- function(meta_input,
 
   setcolorder(dt, c(
     "variable", "effect_type", "source_entity", "role", "has_curve",
+    "non_media_baseline_values", "control_reference_values", "reference_value_spec",
+    "reach_col", "frequency_col", "population_col", "rf_spend_col",
     "curve_type", "rrate", "rrate_precision", "cvalue", "cvalue_precision", "dvalue", "dvalue_precision",
     "coef", "coef_precision", "coef_hierarchy_scale", "coef_hierarchy_scope", "hierarchy_key",
     "model_id_parts", "hierarchy_part_indices", "hierarchy_note",
@@ -1041,4 +1108,3 @@ context_effect_multiplier_hier_mmm <- function(stan_data,
   if (is.finite(bound) && bound > 0) log_mult <- clip_numeric(log_mult, -bound, bound)
   exp(log_mult)
 }
-

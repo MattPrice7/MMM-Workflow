@@ -60,17 +60,30 @@ prior_non_intercept_mu <- function(sd, beta = NULL) {
         dv <- sd$dvalue_lower[k] + (sd$dvalue_upper[k] - sd$dvalue_lower[k]) * plogis(sd$dvalue_raw_mu[k])
         curve_type <- if (!is.null(sd$curve_type) && length(sd$curve_type) >= k && sd$curve_type[k] == 2L) "hill" else "weibull"
         train_mask <- if (!is.null(sd$is_train)) sd$is_train[idx] == 1L else rep(TRUE, length(idx))
-        tr <- media_transform_hier_mmm(
-          x = x,
-          rrate = rr,
-          cvalue = cv,
-          dvalue = dv,
-          curve_type = curve_type,
-          train_mask = train_mask,
-          normalize_curve_x = isTRUE(sd$normalize_curve_x == 1L),
-          curve_normalization_scope = if (!is.null(sd$curve_normalization_active) && isTRUE(sd$curve_normalization_active == 1L)) "active_train" else "all_train",
-          multiplier = 1
-        )
+        tr <- if (!is.null(sd$is_rf_curve) && sd$is_rf_curve[k] == 1L) {
+          reach_frequency_transform_hier_mmm(
+            reach_scaled = sd$X_rf_reach[idx, k],
+            frequency = sd$X_rf_frequency[idx, k],
+            rrate = rr,
+            cvalue = cv,
+            dvalue = dv,
+            train_mask = train_mask,
+            normalize_curve_x = isTRUE(sd$normalize_curve_x == 1L),
+            curve_normalization_scope = if (!is.null(sd$curve_normalization_active) && isTRUE(sd$curve_normalization_active == 1L)) "active_train" else "all_train"
+          )
+        } else {
+          media_transform_hier_mmm(
+            x = x,
+            rrate = rr,
+            cvalue = cv,
+            dvalue = dv,
+            curve_type = curve_type,
+            train_mask = train_mask,
+            normalize_curve_x = isTRUE(sd$normalize_curve_x == 1L),
+            curve_normalization_scope = if (!is.null(sd$curve_normalization_active) && isTRUE(sd$curve_normalization_active == 1L)) "active_train" else "all_train",
+            multiplier = 1
+          )
+        }
         trans <- tr$transformed
         center_value <- if (isTRUE(sd$center_predictors_for_sampling == 1L)) tr$center_value else 0
         context_mult <- context_effect_multiplier_hier_mmm(sd, variable_idx = j, row_idx = idx, context_coef = sd$context_coef_mu)
@@ -363,5 +376,4 @@ build_ucm_warm_start_init <- function(prep,
 
   replicate(as.integer(chains), make_chain(), simplify = FALSE)
 }
-
 

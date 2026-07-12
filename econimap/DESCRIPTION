@@ -41,6 +41,7 @@ Collate:
     '044-deck-html-excel-shiny.R'
     '045-deck-runner.R'
     '050-bau_response_curves.R'
+    '060-sequential-hierarchical-bayes.R'
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
 Depends:

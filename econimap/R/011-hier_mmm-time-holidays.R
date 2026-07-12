@@ -49,6 +49,51 @@ mean_index_global_cols <- function(dt, cols, eps = 1e-8, train_col = NULL) {
   dt[]
 }
 
+zscore_global_cols_hier_mmm <- function(dt, cols, eps = 1e-8, train_col = NULL) {
+  dt <- copy(as.data.table(dt))
+  cols <- unique(cols[cols %in% names(dt)])
+  if (!length(cols)) return(list(data = dt, audit = data.table()))
+  train_mask <- rep(TRUE, nrow(dt))
+  if (!is.null(train_col) && train_col %in% names(dt)) {
+    train_mask <- dt[[train_col]] == TRUE | dt[[train_col]] == 1L
+    train_mask[is.na(train_mask)] <- FALSE
+  }
+  audit <- rbindlist(lapply(cols, function(cc) {
+    x <- suppressWarnings(as.numeric(dt[[cc]]))
+    usable <- train_mask & is.finite(x)
+    center <- mean(x[usable], na.rm = TRUE)
+    scale <- stats::sd(x[usable], na.rm = TRUE)
+    if (!is.finite(center) || is.na(center)) center <- 0
+    if (!is.finite(scale) || is.na(scale) || scale <= eps) scale <- 1
+    dt[, (cc) := (suppressWarnings(as.numeric(get(cc))) - center) / scale]
+    data.table(variable = cc, x_scale_center = center, x_scale_sd = scale, x_scaling = "zscore_train_global")
+  }), use.names = TRUE, fill = TRUE)
+  list(data = dt[], audit = audit[])
+}
+
+resolve_reference_value_hier_mmm <- function(x, spec, train_mask = NULL, label = "reference") {
+  x <- suppressWarnings(as.numeric(x))
+  if (is.null(train_mask)) train_mask <- rep(TRUE, length(x))
+  train_mask <- rep(as.logical(train_mask), length.out = length(x))
+  train_mask[is.na(train_mask)] <- FALSE
+  usable <- x[train_mask & is.finite(x)]
+  if (!length(usable)) stop(label, " cannot be resolved because no finite training values are available.")
+  raw <- tolower(trimws(as.character(spec %||% ""))[1])
+  raw <- ifelse(raw %in% c("average", "avg"), "mean", raw)
+  numeric_value <- suppressWarnings(as.numeric(raw))
+  if (is.finite(numeric_value)) return(list(value = numeric_value, source = "custom_numeric"))
+  value <- switch(
+    raw,
+    min = min(usable, na.rm = TRUE),
+    max = max(usable, na.rm = TRUE),
+    mean = mean(usable, na.rm = TRUE),
+    median = stats::median(usable, na.rm = TRUE),
+    zero = 0,
+    stop(label, " must be min, max, mean, median, zero, or a custom numeric value.")
+  )
+  list(value = as.numeric(value), source = raw)
+}
+
 build_fourier_matrix <- function(time_vec, period = 52L, harmonics = 2L) {
   n <- length(time_vec)
   period <- as.integer(period %||% 52L)
@@ -474,5 +519,4 @@ parse_model_intercept <- function(intercept_type = "fourier", ucm_spec = NULL) {
     cycle_harmonics = cycle_harmonics
   )
 }
-
 

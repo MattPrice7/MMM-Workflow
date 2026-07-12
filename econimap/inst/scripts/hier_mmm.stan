@@ -55,6 +55,7 @@ functions {
 }
 
 data {
+  int<lower=0, upper=1> prior_only;
   int<lower=1> N;
   int<lower=1> J;
   int<lower=1> G;
@@ -83,10 +84,20 @@ data {
   array[J_linear] int<lower=1, upper=J> linear_idx;
   // 1 = Weibull CDF-style saturation, 2 = Hill saturation.
   array[J_curve] int<lower=1, upper=2> curve_type;
+  // Reach/frequency variables use linear scaled reach multiplied by a Hill
+  // response over average frequency, then adstock the effective-media signal.
+  array[J_curve] int<lower=0, upper=1> is_rf_curve;
+  matrix[N, J_curve] X_rf_reach;
+  matrix[N, J_curve] X_rf_frequency;
   // For fixed-curve mode, R precomputes the full adstock + saturation +
   // train-only scaling path. This keeps fixed curves out of the autodiff graph.
   matrix[N, J_curve] X_curve_fixed;
   matrix[G, J_curve] X_curve_fixed_center;
+  int<lower=0> C_calibration;
+  array[C_calibration] int<lower=1, upper=J> calibration_variable_idx;
+  matrix[N, C_calibration] calibration_weight;
+  vector[C_calibration] calibration_observed_lift;
+  vector<lower=0>[C_calibration] calibration_observed_sd;
   int<lower=0> K_context;
   matrix[N, K_context] X_context;
   array[K_context] int<lower=1, upper=J> context_variable_idx;
@@ -312,6 +323,7 @@ transformed parameters {
   vector[N] cycle_component;
   vector[N] level_state;
   vector[N] mu;
+  vector[C_calibration] calibration_pred;
 
   if (J_curve > 0) {
     for (k in 1:J_curve) {
@@ -527,6 +539,7 @@ transformed parameters {
   }
 
   mu = rep_vector(0, N);
+  calibration_pred = rep_vector(0, C_calibration);
   if (K_extra > 0) mu += Z_extra * gamma;
 
   if (intercept_mode == 1) {
@@ -545,16 +558,27 @@ transformed parameters {
   if (J_linear > 0) {
     for (n in 1:N) {
       real lin = 0;
-      for (k in 1:J_linear)
+      for (k in 1:J_linear) {
         if (center_predictors_for_sampling == 1) {
           real context_mult = context_multiplier_hier_mmm(n, linear_idx[k], K_context, X_context, context_variable_idx, context_coef, context_log_multiplier_bound);
+          real raw_contribution = beta[group_id[n], linear_idx[k]] * context_mult * X[n, linear_idx[k]];
           lin += beta[group_id[n], linear_idx[k]]
                  * context_mult
                  * (X[n, linear_idx[k]] - X_center_mean[group_id[n], linear_idx[k]]);
+          if (C_calibration > 0)
+            for (c in 1:C_calibration)
+              if (calibration_variable_idx[c] == linear_idx[k])
+                calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
         } else {
           real context_mult = context_multiplier_hier_mmm(n, linear_idx[k], K_context, X_context, context_variable_idx, context_coef, context_log_multiplier_bound);
-          lin += beta[group_id[n], linear_idx[k]] * context_mult * X[n, linear_idx[k]];
+          real raw_contribution = beta[group_id[n], linear_idx[k]] * context_mult * X[n, linear_idx[k]];
+          lin += raw_contribution;
+          if (C_calibration > 0)
+            for (c in 1:C_calibration)
+              if (calibration_variable_idx[c] == linear_idx[k])
+                calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
         }
+      }
       mu[n] += lin;
     }
   }
@@ -567,7 +591,73 @@ transformed parameters {
           real center_value = center_predictors_for_sampling == 1 ? X_curve_fixed_center[g, k] : 0;
           for (n in start_idx[g]:end_idx[g]) {
             real context_mult = context_multiplier_hier_mmm(n, j, K_context, X_context, context_variable_idx, context_coef, context_log_multiplier_bound);
-            mu[n] += beta[g, j] * context_mult * (X_curve_fixed[n, k] - center_value);
+            real raw_contribution = beta[g, j] * context_mult * X_curve_fixed[n, k];
+            mu[n] += raw_contribution - beta[g, j] * context_mult * center_value;
+            if (C_calibration > 0)
+              for (c in 1:C_calibration)
+                if (calibration_variable_idx[c] == j)
+                  calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
+          }
+        } else if (is_rf_curve[k] == 1) {
+          real rr = rrate[k];
+          real cv = cvalue[k];
+          real dv = dvalue[k];
+          real trans_mean = 1;
+          real carry_for_mean = 0;
+          real trans_sum_all = 0;
+          int n_count_all = 0;
+          real trans_sum_active = 0;
+          int n_count_active = 0;
+
+          for (n in start_idx[g]:end_idx[g]) {
+            real reach = fmax(X_rf_reach[n, k], 0);
+            real frequency = fmax(X_rf_frequency[n, k], 0);
+            real z = pow(fmax(frequency * cv, 1e-12), dv);
+            real frequency_sat = frequency > 0 ? z / (1 + z) : 0;
+            real effective_media = reach * frequency_sat;
+            carry_for_mean = effective_media + rr * carry_for_mean;
+            if (is_train[n] == 1) {
+              trans_sum_all += carry_for_mean;
+              n_count_all += 1;
+              if (curve_normalization_active == 1 && effective_media > 0) {
+                trans_sum_active += carry_for_mean;
+                n_count_active += 1;
+              }
+            }
+          }
+          if (curve_normalization_active == 1 && n_count_active > 0)
+            trans_mean = fmax(trans_sum_active / n_count_active, 1e-8);
+          else
+            trans_mean = fmax(trans_sum_all / n_count_all, 1e-8);
+
+          {
+            real carry = 0;
+            for (n in start_idx[g]:end_idx[g]) {
+              real reach = fmax(X_rf_reach[n, k], 0);
+              real frequency = fmax(X_rf_frequency[n, k], 0);
+              real z = pow(fmax(frequency * cv, 1e-12), dv);
+              real frequency_sat = frequency > 0 ? z / (1 + z) : 0;
+              real effective_media = reach * frequency_sat;
+              real trans_model;
+              real center_value = 0;
+              carry = effective_media + rr * carry;
+              if (normalize_curve_x == 1) {
+                trans_model = carry / trans_mean;
+                if (center_predictors_for_sampling == 1) center_value = 1;
+              } else {
+                trans_model = carry;
+                if (center_predictors_for_sampling == 1) center_value = trans_mean;
+              }
+              {
+                real context_mult = context_multiplier_hier_mmm(n, j, K_context, X_context, context_variable_idx, context_coef, context_log_multiplier_bound);
+                real raw_contribution = beta[g, j] * context_mult * trans_model;
+                mu[n] += raw_contribution - beta[g, j] * context_mult * center_value;
+                if (C_calibration > 0)
+                  for (c in 1:C_calibration)
+                    if (calibration_variable_idx[c] == j)
+                      calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
+              }
+            }
           }
         } else {
         real rr = rrate[k];
@@ -660,7 +750,12 @@ transformed parameters {
             }
             {
               real context_mult = context_multiplier_hier_mmm(n, j, K_context, X_context, context_variable_idx, context_coef, context_log_multiplier_bound);
-              mu[n] += beta[g, j] * context_mult * (trans_model - center_value);
+              real raw_contribution = beta[g, j] * context_mult * trans_model;
+              mu[n] += raw_contribution - beta[g, j] * context_mult * center_value;
+              if (C_calibration > 0)
+                for (c in 1:C_calibration)
+                  if (calibration_variable_idx[c] == j)
+                    calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
             }
           }
         }
@@ -862,27 +957,40 @@ model {
 
   gamma ~ normal(0, gamma_prior_sd);
   sigma_y ~ normal(0, sigma_y_prior_sd);
+  if (prior_only == 0) {
+    if (C_calibration > 0)
+      calibration_observed_lift ~ normal(calibration_pred, calibration_observed_sd);
 
-  if (likelihood_family == 2) {
-    for (i in 1:N_train) {
-      int n = train_idx[i];
-      y[n] ~ student_t(student_t_nu, mu[n], sigma_y);
-    }
-  } else {
-    for (i in 1:N_train) {
-      int n = train_idx[i];
-      y[n] ~ normal(mu[n], sigma_y);
+    if (likelihood_family == 2) {
+      for (i in 1:N_train) {
+        int n = train_idx[i];
+        y[n] ~ student_t(student_t_nu, mu[n], sigma_y);
+      }
+    } else {
+      for (i in 1:N_train) {
+        int n = train_idx[i];
+        y[n] ~ normal(mu[n], sigma_y);
+      }
     }
   }
 }
 generated quantities {
   vector[N] y_hat = mu;
+  vector[N] y_rep;
   vector[N_train] log_lik;
+  for (n in 1:N) {
+    if (likelihood_family == 2)
+      y_rep[n] = student_t_rng(student_t_nu, mu[n], sigma_y);
+    else
+      y_rep[n] = normal_rng(mu[n], sigma_y);
+  }
   for (i in 1:N_train) {
     int n = train_idx[i];
-    if (likelihood_family == 2)
-      log_lik[i] = student_t_lpdf(y[n] | student_t_nu, mu[n], sigma_y);
-    else
-      log_lik[i] = normal_lpdf(y[n] | mu[n], sigma_y);
+    if (prior_only == 1)
+      log_lik[i] = 0;
+    else if (likelihood_family == 2)
+        log_lik[i] = student_t_lpdf(y[n] | student_t_nu, mu[n], sigma_y);
+      else
+        log_lik[i] = normal_lpdf(y[n] | mu[n], sigma_y);
   }
 }

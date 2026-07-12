@@ -73,11 +73,68 @@ extract_posterior_means_hier_mmm <- function(fit, prep) {
 }
 
 
-build_outputs_hier_mmm <- function(fit, prep, extra_control_cols = NULL) {
-  pm <- extract_posterior_means_hier_mmm(fit, prep)
+build_experiment_calibration_diagnostics_hier_mmm <- function(fit, prep) {
+  audit <- copy(as.data.table(prep$experiment_calibration %||% data.table()))
+  if (!nrow(audit)) return(audit)
+  draws <- tryCatch(
+    fit$draws("calibration_pred", format = "matrix"),
+    error = function(e) NULL
+  )
+  if (is.null(draws) || !ncol(draws)) {
+    audit[, `:=`(
+      posterior_lift_mean = NA_real_,
+      posterior_lift_q05 = NA_real_,
+      posterior_lift_q50 = NA_real_,
+      posterior_lift_q95 = NA_real_,
+      posterior_minus_observed = NA_real_,
+      calibration_z = NA_real_,
+      calibration_status = "posterior_draws_unavailable"
+    )]
+    return(audit[])
+  }
+  summaries <- rbindlist(lapply(seq_len(nrow(audit)), function(i) {
+    nm <- paste0("calibration_pred[", i, "]")
+    if (!(nm %in% colnames(draws))) return(data.table(calibration_id = audit$calibration_id[i]))
+    x <- as.numeric(draws[, nm])
+    data.table(
+      calibration_id = audit$calibration_id[i],
+      posterior_lift_mean = mean(x, na.rm = TRUE),
+      posterior_lift_q05 = as.numeric(stats::quantile(x, 0.05, na.rm = TRUE)),
+      posterior_lift_q50 = as.numeric(stats::quantile(x, 0.50, na.rm = TRUE)),
+      posterior_lift_q95 = as.numeric(stats::quantile(x, 0.95, na.rm = TRUE))
+    )
+  }), use.names = TRUE, fill = TRUE)
+  audit[summaries, on = "calibration_id", `:=`(
+    posterior_lift_mean = i.posterior_lift_mean,
+    posterior_lift_q05 = i.posterior_lift_q05,
+    posterior_lift_q50 = i.posterior_lift_q50,
+    posterior_lift_q95 = i.posterior_lift_q95
+  )]
+  audit[, `:=`(
+    posterior_minus_observed = posterior_lift_mean - observed_lift_raw_scale,
+    calibration_z = (observed_lift_raw_scale - posterior_lift_mean) / observed_lift_sd_raw_scale,
+    calibration_status = fifelse(
+      !is.finite(posterior_lift_mean),
+      "posterior_draws_unavailable",
+      fifelse(
+        observed_lift_raw_scale >= posterior_lift_q05 & observed_lift_raw_scale <= posterior_lift_q95,
+        "observed_inside_posterior_90pct",
+        "review_prior_posterior_tension"
+      )
+    )
+  )]
+  audit[]
+}
+
+build_outputs_hier_mmm <- function(fit,
+                                   prep,
+                                   extra_control_cols = NULL,
+                                   posterior_means = NULL,
+                                   include_prediction_intervals = TRUE) {
+  pm <- posterior_means %||% extract_posterior_means_hier_mmm(fit, prep)
   dt <- copy(prep$data)
   vl <- copy(prep$variable_lookup)[order(variable_idx)]
-  if (!"curve_type" %in% names(vl)) vl[, curve_type := "weibull"]
+  if (!"curve_type" %in% names(vl)) vl[, curve_type := "hill"]
   gl <- copy(prep$group_lookup)[order(group_idx)]
   var_names <- vl$variable
   curve_vars <- vl[has_curve == 1L, variable]
@@ -149,10 +206,11 @@ build_outputs_hier_mmm <- function(fit, prep, extra_control_cols = NULL) {
         row_idx = seq_len(nrow(dt)),
         context_coef = pm$context_coef
       )
-      if (isTRUE(center_predictors)) {
-        center_offset_model <- center_offset_model + beta_vec * context_mult * prep$stan_data$X_center_mean[dt$group_idx, j]
-      }
-      dt[, (v) := get(v) * beta_vec * context_mult]
+      reference_model <- suppressWarnings(as.numeric(vl[variable == v, reference_value_model_scale][1]))
+      if (!is.finite(reference_model)) reference_model <- 0
+      sampling_center <- if (isTRUE(center_predictors)) prep$stan_data$X_center_mean[dt$group_idx, j] else 0
+      center_offset_model <- center_offset_model + beta_vec * context_mult * (sampling_center - reference_model)
+      dt[, (v) := (get(v) - reference_model) * beta_vec * context_mult]
     }
     contrib_cols <- c(contrib_cols, linear_vars)
   }
@@ -164,21 +222,36 @@ build_outputs_hier_mmm <- function(fit, prep, extra_control_cols = NULL) {
       rr <- pm$rrate[j]
       cv <- pm$cvalue[j]
       dv <- pm$dvalue[j]
-      curve_type <- vl[variable == v, curve_type][1] %||% "weibull"
+      curve_type <- vl[variable == v, curve_type][1] %||% "hill"
+      curve_pos <- match(j, prep$stan_data$curve_idx)
+      is_rf <- !is.null(prep$stan_data$is_rf_curve) && prep$stan_data$is_rf_curve[curve_pos] == 1L
       tmp <- numeric(nrow(dt))
       for (g in gl$group_idx) {
         idx <- which(dt$group_idx == g)
-        tr <- media_transform_hier_mmm(
-          x = dt[[v]][idx],
-          rrate = rr,
-          cvalue = cv,
-          dvalue = dv,
-          curve_type = curve_type,
-          train_mask = !dt$is_holdout__[idx],
-          normalize_curve_x = prep$normalize_curve_x,
-          curve_normalization_scope = prep$curve_normalization_scope %||% "active_train",
-          multiplier = 1
-        )
+        tr <- if (isTRUE(is_rf)) {
+          reach_frequency_transform_hier_mmm(
+            reach_scaled = prep$stan_data$X_rf_reach[idx, curve_pos],
+            frequency = prep$stan_data$X_rf_frequency[idx, curve_pos],
+            rrate = rr,
+            cvalue = cv,
+            dvalue = dv,
+            train_mask = !dt$is_holdout__[idx],
+            normalize_curve_x = prep$normalize_curve_x,
+            curve_normalization_scope = prep$curve_normalization_scope %||% "active_train"
+          )
+        } else {
+          media_transform_hier_mmm(
+            x = dt[[v]][idx],
+            rrate = rr,
+            cvalue = cv,
+            dvalue = dv,
+            curve_type = curve_type,
+            train_mask = !dt$is_holdout__[idx],
+            normalize_curve_x = prep$normalize_curve_x,
+            curve_normalization_scope = prep$curve_normalization_scope %||% "active_train",
+            multiplier = 1
+          )
+        }
         trans_vec <- tr$transformed
         center_value <- tr$center_value
         context_mult <- context_effect_multiplier_hier_mmm(
@@ -200,7 +273,7 @@ build_outputs_hier_mmm <- function(fit, prep, extra_control_cols = NULL) {
   contrib_cols <- unique(contrib_cols[contrib_cols %in% names(dt)])
   reporting_cols <- intersect("intercept_total", names(dt))
 
-  if (isTRUE(center_predictors) && any(abs(center_offset_model) > 1e-12, na.rm = TRUE)) {
+  if (any(abs(center_offset_model) > 1e-12, na.rm = TRUE)) {
     if ("intercept" %in% contrib_cols) {
       dt[, intercept := intercept - center_offset_model]
     } else if ("intercept_flat" %in% contrib_cols) {
@@ -237,7 +310,11 @@ build_outputs_hier_mmm <- function(fit, prep, extra_control_cols = NULL) {
   }
 
   # Posterior prediction intervals for fitted mean y_hat, rescaled to original units.
-  yhat_sm <- tryCatch(summarize_fit_vars(fit, variables = "y_hat"), error = function(e) data.table())
+  yhat_sm <- if (isTRUE(include_prediction_intervals) && !is.null(fit)) {
+    tryCatch(summarize_fit_vars(fit, variables = "y_hat"), error = function(e) data.table())
+  } else {
+    data.table()
+  }
   if (nrow(yhat_sm) && "variable" %in% names(yhat_sm)) {
     q05_col <- pick_first_existing_col(yhat_sm, c("q5", "q05", "5%", "5.0%", "q_5"))
     q50_col <- pick_first_existing_col(yhat_sm, c("median", "q50", "50%", "50.0%", "q_50"))
@@ -297,6 +374,30 @@ build_outputs_hier_mmm <- function(fit, prep, extra_control_cols = NULL) {
   residual_long[, contribution := residual]
 
   long_decomp <- rbindlist(list(long_decomp, residual_long), use.names = TRUE, fill = TRUE)[order(row_id, variable)]
+  decomp_meta <- vl[, .(
+    variable,
+    role,
+    reference_value_spec,
+    reference_value_raw,
+    reference_value_model_scale,
+    reference_value_source,
+    x_scaling
+  )]
+  long_decomp[decomp_meta, on = "variable", `:=`(
+    role = i.role,
+    reference_value_spec = i.reference_value_spec,
+    reference_value_raw = i.reference_value_raw,
+    reference_value_model_scale = i.reference_value_model_scale,
+    reference_value_source = i.reference_value_source,
+    x_scaling = i.x_scaling
+  )]
+  long_decomp[, attribution_interpretation := data.table::fcase(
+    role == "non_media_treatment", "causal_non_media_treatment_contrast_subject_to_assumptions",
+    role == "control", "noncausal_control_reference_contrast",
+    role %in% c("media", "reach_frequency", "organic_media", "organic_reach_frequency"), "causal_media_contrast_subject_to_assumptions",
+    variable == "residual", "residual",
+    default = "model_component_not_automatically_causal"
+  )]
 
   list(
     coef_long = coef_long,
@@ -545,6 +646,8 @@ build_hier_mmm_model_readiness <- function(diagnostics,
   col <- diagnostics$collinearity_overall %||% data.table()
   coef_pp <- diagnostics$prior_posterior_coef %||% data.table()
   curve_pp <- diagnostics$prior_posterior_curve %||% data.table()
+  ucm_steal <- diagnostics$ucm_media_stealing_overall %||% data.table()
+  ucm_steal_group <- diagnostics$ucm_media_stealing_by_group %||% data.table()
 
   if (!nrow(so)) {
     add_issue("warning", "sampler", "missing_sampler_diagnostics",
@@ -665,6 +768,37 @@ build_hier_mmm_model_readiness <- function(diagnostics,
                   paste0("far_from_prior_share=", signif(far_curve_share, 4)),
                   "Review curve prior construction and do not over-interpret saturation without independent support.")
       }
+    }
+  }
+
+  if (nrow(ucm_steal) && "media_stealing_risk" %in% names(ucm_steal)) {
+    risk <- as.character(ucm_steal$media_stealing_risk[1])
+    detail <- paste0(
+      "risk=", risk,
+      "; ucm_share=", signif(ucm_steal$ucm_share_of_actual[1], 4),
+      "; corr_level=", signif(ucm_steal$corr_ucm_media[1], 4),
+      "; corr_change=", signif(ucm_steal$corr_change_ucm_media[1], 4)
+    )
+    if (identical(risk, "high")) {
+      add_issue(
+        "warning", "baseline_identification", "possible_ucm_media_stealing", detail,
+        "Review baseline flexibility, omitted controls, media priors, and contribution stability before decisioning. This diagnostic is a warning, not causal proof of stealing."
+      )
+    } else if (identical(risk, "moderate")) {
+      add_issue(
+        "review", "baseline_identification", "ucm_media_separation_review", detail,
+        "Inspect baseline and media contribution paths together; a large baseline share alone is not evidence of media stealing."
+      )
+    }
+  }
+  if (nrow(ucm_steal_group) && "media_stealing_risk" %in% names(ucm_steal_group)) {
+    high_group_n <- ucm_steal_group[media_stealing_risk == "high", .N]
+    if (high_group_n > 0L && !(nrow(ucm_steal) && identical(as.character(ucm_steal$media_stealing_risk[1]), "high"))) {
+      add_issue(
+        "review", "baseline_identification", "group_specific_ucm_media_stealing_risk",
+        paste0("high_risk_groups=", high_group_n, "/", nrow(ucm_steal_group)),
+        "Review affected groups before relying on group-level ROI, mROI, or optimization outputs."
+      )
     }
   }
 
@@ -950,7 +1084,10 @@ build_hier_mmm_prior_audit <- function(prep, prior_post) {
     "business_prior_input_uncertainty_source", "business_prior_coef_sd",
     "business_prior_coef_precision_uncapped", "business_prior_precision_was_capped",
     "business_prior_distribution", "business_prior_basis", "business_prior_evidence_source",
-    "business_prior_evidence_notes", "coef_hierarchy_scope", "coef_hierarchy_key_id",
+    "business_prior_evidence_notes", "business_prior_reference_value_raw",
+    "business_prior_reference_value_model_scale", "business_prior_elasticity_reference_raw",
+    "business_prior_attribution_interpretation", "reference_value_spec", "reference_value_raw",
+    "reference_value_model_scale", "reference_value_source", "coef_hierarchy_scope", "coef_hierarchy_key_id",
     "hierarchy_note"
   ), names(md))
   if ("variable" %in% keep) {
@@ -1012,6 +1149,9 @@ build_hier_mmm_prior_audit <- function(prep, prior_post) {
     "input_prior_precision", "input_uncertainty_basis",
     "business_prior_input_uncertainty_source", "business_prior_basis",
     "business_prior_evidence_source", "business_prior_evidence_notes",
+    "business_prior_reference_value_raw", "business_prior_reference_value_model_scale",
+    "business_prior_elasticity_reference_raw", "business_prior_attribution_interpretation",
+    "reference_value_spec", "reference_value_raw", "reference_value_model_scale", "reference_value_source",
     "converted_stan_prior_mean", "converted_stan_prior_sd", "converted_stan_prior_precision",
     "coef_bound", "bound_type", "coef_lower", "coef_upper",
     "posterior_mean", "posterior_sd", "posterior_q05", "posterior_q50", "posterior_q95",
@@ -1094,20 +1234,46 @@ build_ucm_media_stealing_diagnostics <- function(wide_decomp,
 
   dt[, media_total__ := rowSums(.SD, na.rm = TRUE), .SDcols = media_cols]
   dt[, ucm_total__ := get(ucm_col)]
+  if (group_col %in% names(dt)) {
+    setorderv(dt, c(group_col, time_col))
+    dt[, `:=`(
+      ucm_change__ = c(NA_real_, diff(ucm_total__)),
+      media_change__ = c(NA_real_, diff(media_total__))
+    ), by = group_col]
+  } else {
+    setorderv(dt, time_col)
+    dt[, `:=`(
+      ucm_change__ = c(NA_real_, diff(ucm_total__)),
+      media_change__ = c(NA_real_, diff(media_total__))
+    )]
+  }
 
   calc <- function(x) {
     y_sum <- if ("y_actual" %in% names(x)) sum(x$y_actual, na.rm = TRUE) else NA_real_
     media_sum <- sum(x$media_total__, na.rm = TRUE)
     ucm_sum <- sum(x$ucm_total__, na.rm = TRUE)
+    corr_level <- safe_cor(x$ucm_total__, x$media_total__)
+    corr_change <- safe_cor(x$ucm_change__, x$media_change__)
+    ucm_share <- if (is.finite(y_sum) && abs(y_sum) > 1e-8) ucm_sum / y_sum else NA_real_
+    high_level <- is.finite(corr_level) && abs(corr_level) >= 0.70
+    high_change <- is.finite(corr_change) && abs(corr_change) >= 0.60
+    high_share <- is.finite(ucm_share) && abs(ucm_share) >= 0.80
+    risk <- if (high_change || (high_share && high_level)) "high" else if (high_level || high_share) "moderate" else "low"
+    reasons <- c(
+      if (high_share) "large_baseline_share",
+      if (high_level) "high_level_comovement",
+      if (high_change) "high_change_comovement"
+    )
     data.table(
       n = nrow(x),
       ucm_column = ucm_col,
       media_columns = paste(media_cols, collapse = "|"),
       ucm_sum = ucm_sum,
       media_sum = media_sum,
-      ucm_share_of_actual = if (is.finite(y_sum) && abs(y_sum) > 1e-8) ucm_sum / y_sum else NA_real_,
+      ucm_share_of_actual = ucm_share,
       media_share_of_actual = if (is.finite(y_sum) && abs(y_sum) > 1e-8) media_sum / y_sum else NA_real_,
-      corr_ucm_media = safe_cor(x$ucm_total__, x$media_total__),
+      corr_ucm_media = corr_level,
+      corr_change_ucm_media = corr_change,
       corr_ucm_actual = if ("y_actual" %in% names(x)) safe_cor(x$ucm_total__, x$y_actual) else NA_real_,
       corr_ucm_residual = if ("residual" %in% names(x)) safe_cor(x$ucm_total__, x$residual) else NA_real_,
       ucm_acf1 = {
@@ -1118,8 +1284,18 @@ build_ucm_media_stealing_diagnostics <- function(wide_decomp,
         zz <- x$media_total__[is.finite(x$media_total__)]
         if (length(zz) > 2L) suppressWarnings(stats::acf(zz, plot = FALSE, lag.max = 1)$acf[2]) else NA_real_
       },
-      high_ucm_media_corr_flag = is.finite(safe_cor(x$ucm_total__, x$media_total__)) && abs(safe_cor(x$ucm_total__, x$media_total__)) >= 0.70,
-      high_ucm_share_flag = is.finite(y_sum) && abs(y_sum) > 1e-8 && abs(ucm_sum / y_sum) >= 0.80
+      high_ucm_media_corr_flag = high_level,
+      high_ucm_media_change_corr_flag = high_change,
+      high_ucm_share_flag = high_share,
+      media_stealing_risk = risk,
+      risk_reasons = if (length(reasons)) paste(reasons, collapse = "|") else "none",
+      recommended_action = if (risk == "high") {
+        "Review baseline flexibility, omitted controls, media priors, and contribution stability before decisioning."
+      } else if (risk == "moderate") {
+        "Inspect baseline/media separation; do not infer stealing from baseline share alone."
+      } else {
+        "No strong baseline/media stealing signal from these diagnostics."
+      }
     )
   }
 

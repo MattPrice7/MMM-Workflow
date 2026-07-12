@@ -31,6 +31,7 @@ The package does include a Bayesian model. Documentation should not imply that t
 - [x] Split the main package-native Stan, quasi-geo, optimizer, deck, and BAU logic into smaller internal modules while preserving public analyst-facing function names and standalone script copies.
 - [ ] Add one centralized config object/list for common workflow settings.
 - [x] Add package-native `package_info` output versioning to core Stan, quasi-geo, optimizer, deck, and BAU workflow results.
+- [x] Fix package imports and make direct source/package smoke tests execute quasi-geo instead of only checking function existence.
 - [ ] Add package-level examples for Stan-only, quasi-geo-only, optimizer-only, chart-builder-only, and full workflow usage.
 - [ ] Decide GitHub workflow. Pushing requires a repo remote plus usable GitHub credentials/connector in this environment.
 
@@ -67,6 +68,8 @@ Done:
 - [x] Business-prior inputs accept `coef`, `roi`, `mroi`, `ikpc`, and `cpkpi` with SD or precision and convert to true inverse-variance coefficient precision on the Stan scale.
 - [x] Business-prior conversion uses training rows only when holdouts exist and writes a `business_prior_audit` table.
 - [x] Built-in holiday/control generation is available through `holiday_config` in `prepare_stan_data_hier_mmm()` and `fit_hier_mmm()`, with US major, EU major, global major, week-before/week-of/week-after windows, and custom holiday calendars.
+- [x] Add training-only non-media/control scaling and explicit references: `non_media_baseline_values` and `control_reference_values` support min/max/mean/median/zero/custom numeric values.
+- [x] Add auditable coefficient, contribution, elasticity, and standardized-effect (`effect_per_sd`) priors with supplied SD/inverse-variance precision preserved through conversion to Stan coefficient space.
 
 Active / Next:
 
@@ -80,7 +83,8 @@ Active / Next:
 - [x] Add prior audit table comparing input prior, converted Stan prior, posterior estimate, posterior interval, and review flags for prior-dominated or shifted coefficients.
 - [ ] Add diagnostics for baseline/UCM absorbing too much unexplained shock.
 - [ ] Validate brand-equity KPIs such as awareness, consideration, subscriptions, leads, or other non-revenue outcomes. Report KPI economics as cost per KPI / outcome per cost unless a value per KPI is supplied.
-- [ ] Add reach/frequency modeling when reach, frequency, impressions, or population are available.
+- [x] Add first-class reach/frequency modeling: population-scaled reach remains linear, frequency uses a Hill curve, effective media is adstocked, and fixed/sampled curve paths share the same transform.
+- [x] Add frequency-response planning at approximately fixed impressions, with explicit operational-validation caveats.
 - [x] Add optional context/effect-modifier helpers before adding time-varying coefficients. Implemented in Stan as off-by-default train-standardized context multipliers with sign constraints, real-column defaults, self-context blocking, time-context blocking by default, and context risk diagnostics.
 - [ ] Future / maybe: evaluate highly regularized time-varying media coefficients only after simpler interactions, controls, and baseline diagnostics are mature.
 - [ ] Future / maybe: evaluate optional time-varying effectiveness multipliers, tightly regularized around 1.0 with smooth random-walk or AR(1) structure, gated per channel and off by default.
@@ -120,11 +124,12 @@ Done:
 
 Active / Next:
 
-- [ ] Add multi-market treated-cell estimation when several markets move together and other markets remain untreated.
+- [x] Add pooled multi-treated-market estimation with inverse-variance effects, raw business totals, and heterogeneity-based downgrades when several markets move together.
 - [ ] Add prospective matched-market design simulator and required-ramp / MDE planning.
-- [ ] Add blocked pre-period cross-validation for ridge synthetic-control lambda selection.
+- [x] Add blocked pre-period cross-validation for ridge synthetic-control lambda selection, with an explicit in-sample fallback for short histories.
 - [x] Report donor weight concentration and flag if one donor dominates.
-- [ ] Expand placebo lift distribution diagnostics and multiple-testing warnings.
+- [x] Expand placebo diagnostics with repeated pre-period time windows, donor placebos, leave-one-donor-out sensitivity, and BH multiple-testing warnings.
+- [x] Emit uncertainty-weighted curve evidence points and conservative curve priors only when multiple channel-specific support levels are independently usable.
 - [x] Add explicit event overlap detection across variables/geos/windows.
 - [ ] Future / separate from quasi-geo: optional national interrupted-time-series/TBR diagnostic for all-market media shocks, clearly labeled as lower-tier time-series context and never routed as geo-lift calibration.
 - [ ] Add a dedicated quasi-geo evidence report pack for analysts.
@@ -172,8 +177,8 @@ Done:
 These are cross-cutting core gaps that should be addressed before cosmetic reporting work.
 
 - [ ] Evaluate native ROI/mROI/contribution priors inside Stan versus current coefficient-scale conversion.
-- [ ] Add calibration hooks for external experiments, platform lift tests, or previous MMMs with explicit prior precision.
-- [ ] Add reach/frequency or impressions/population-aware curve bounds.
+- [x] Add joint calibration likelihood hooks for external experiments or platform lift tests with raw-KPI lift, ROI, or cost-per-KPI evidence and explicit SD/precision.
+- [x] Add reach/frequency population scaling and frequency-specific saturation priors/bounds; impressions-only proxy construction remains a separate future input helper.
 - [ ] Add stronger formal model health and interpretation workflow.
 - [ ] Add stronger causal-methodology documentation separating randomized calibration, quasi-geo evidence, observational priors, and final Bayesian model outputs.
 - [ ] Keep Meridian alignment explicit: Hill after adstock, geo hierarchy where data supports it, population/exposure normalization where available, and ROI/KPI economics outputs.
@@ -230,9 +235,10 @@ Research backlog:
 
 - [ ] Decide R vs Python. Python likely has better ML tooling.
 - [x] Add reusable local known-truth generators in `synthetic_mmm_data_generators.R` for MMM panels, quasi-geo events, and decomposition outputs.
-- [ ] Expand synthetic data beyond local generators. Consider Meta `siMMMulator` as a benchmark/input source rather than inventing everything from scratch.
+- [x] Add an opt-in Meta `siMMMulator` integration benchmark with known contribution/ROI truth; keep local panels for deterministic unit contracts and use the external simulator for model-level validation.
 - [ ] Test schema-flexible variable encoders for geo/product/time panels.
 - [ ] Explore media/control-specific output heads for ROI, adstock, saturation, baseline, halo effects, and missing-variable bias.
+- [ ] Deferred challenger: evaluate TreeSHAP plus Owen-value grouped attribution only as a predictive/model-decomposition diagnostic. It cannot create identifying variation, should not be labeled causal, and must not split confounded bundle lift without independent evidence.
 - [ ] Explore cross-geo attention, temporal attention, and hierarchical channel-effect pooling.
 - [ ] Decide what labels to provide: funnel, channel role, support type, promo/weather/control, product/market, optional creative/message metadata.
 - [ ] Add interpretability diagnostics. Attention alone is not enough for causal trust.
@@ -255,7 +261,7 @@ Core files: `mmm_prior_workflow.R`, `semi_univariate_prior_builder_production_fi
 - [ ] Keep stable; no further prior-recovery changes until the core Stan, quasi-geo, optimizer, and reporting files are production-strong.
 - [ ] Optional parent/child/subchild ridge or NNLS allocation workflow.
 - [ ] Optional Robyn-style ridge prior-recovery script if useful later.
-- [ ] BAU response curves: evaluate safe optional rrate/adstock estimation only with guardrails, e.g. bounded search, active-support anchor, no automatic tightening, and diagnostics when higher rrate simply improves fit by absorbing baseline trend.
+- [x] BAU response curves use an optional KPI-driven, anchor-regularized coarse-to-fine search. Retention is profiled separately before saturation/shape, the one-standard-error rule retains the anchor when candidates are indistinguishable, geo population enables per-capita evidence, holdouts remain isolated, and q05/q50/q95 observational sensitivity envelopes expose weak identification.
 
 ### Data Pullers / Public Inputs
 
@@ -273,6 +279,7 @@ Core files: `mmm_prior_workflow.R`, `semi_univariate_prior_builder_production_fi
 
 ## Current Validation Snapshot
 
+- [x] Meta `siMMMulator` opt-in known-truth benchmark passed with native experiment calibration: 8/8 checks, zero divergences/treedepth hits, and worst channel contribution/ROI error 31.3%.
 - [x] Source/smoke tests passing.
 - [x] Core standalone contract tests passing.
 - [x] Stan contract tests passing.

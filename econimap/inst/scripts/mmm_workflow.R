@@ -10,7 +10,9 @@
   }, character(1))
   ofiles <- ofiles[!is.na(ofiles) & nzchar(ofiles)]
   if (length(ofiles)) {
-    normalizePath(ofiles[length(ofiles)], mustWork = FALSE)
+    candidate <- ofiles[length(ofiles)]
+    if (!file.exists(candidate) && file.exists(basename(candidate))) candidate <- basename(candidate)
+    normalizePath(candidate, mustWork = FALSE)
   } else {
     file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
     if (length(file_arg)) normalizePath(sub("^--file=", "", file_arg[1]), mustWork = FALSE) else NA_character_

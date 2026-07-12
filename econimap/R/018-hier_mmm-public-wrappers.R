@@ -154,6 +154,9 @@ fit_hier_mmm_ucm_final <- function(data,
     output_dir = output_dir,
     output_prefix = output_prefix
   ))
+  # modifyList drops NULL values by default; preserve an explicit NULL so
+  # analysts can disable file output from the public wrapper.
+  engine_args["output_dir"] <- list(output_dir)
 
   do.call(fit_hier_mmm, engine_args)
 }
@@ -224,21 +227,29 @@ fit_hier_mmm <- function(data,
                          budget_optimizer_config = NULL,
                          context_effects = NULL,
                          allow_time_context = FALSE,
+                         curve_type_default = c("hill", "weibull"),
                          coef_hierarchy_part_indices = NULL,
                          coef_hierarchy_index_base = c("one", "zero"),
                          raw_output_data = NULL,
                          create_response_curves = TRUE,
+                         create_frequency_response_curves = TRUE,
                          create_response_curve_draws = FALSE,
+                         create_posterior_contribution_intervals = FALSE,
                          response_curve_multipliers = seq(0, 3, by = 0.05),
+                         frequency_grid = seq(0.25, 10, by = 0.25),
                          response_curve_step_pct = 0.01,
                          response_curve_scope = c("auto", "total", "group", "both"),
                          response_curve_draw_count = 200L,
                          response_curve_draw_seed = 123L,
+                         contribution_interval_draw_count = 200L,
+                         contribution_interval_probs = c(0.05, 0.50, 0.95),
+                         contribution_interval_seed = 123L,
                          output_dir = "hier_mmm_outputs",
                          output_prefix = "",
                          ...) {
   dots <- list(...)
   response_curve_scope <- match.arg(response_curve_scope)
+  curve_type_default <- match.arg(curve_type_default)
   coef_hierarchy_index_base <- match.arg(coef_hierarchy_index_base)
   business_prior_update <- NULL
 
@@ -270,14 +281,19 @@ fit_hier_mmm <- function(data,
     group_col = group_col,
     time_col = time_col,
     entity_col = entity_col,
+    calibration_input = calibration_input,
     context_effects = context_effects,
     allow_time_context = allow_time_context,
+    curve_type_default = curve_type_default,
     coef_hierarchy_part_indices = coef_hierarchy_part_indices,
     coef_hierarchy_index_base = coef_hierarchy_index_base,
     holiday_config = holiday_config,
     output_dir = output_dir,
     output_prefix = output_prefix
   ))
+  # modifyList drops NULL values by default; preserve an explicit NULL so
+  # analysts can disable file output from the public wrapper.
+  engine_args["output_dir"] <- list(output_dir)
 
   if (!is.null(baseline_config)) {
     bc <- baseline_config
@@ -315,6 +331,30 @@ fit_hier_mmm <- function(data,
   fit_obj <- do.call(fit_hier_mmm_engine, engine_args)
   fit_obj$business_prior_audit <- if (!is.null(business_prior_update)) business_prior_update$business_prior_audit else data.table()
 
+  if (isTRUE(create_posterior_contribution_intervals)) {
+    fit_obj$posterior_contribution_intervals <- build_posterior_contribution_intervals_hier_mmm(
+      fit_obj = fit_obj,
+      max_draws = contribution_interval_draw_count,
+      probs = contribution_interval_probs,
+      seed = contribution_interval_seed
+    )
+    ci_cols <- c("row_id", "variable", "contribution_q05", "contribution_q50", "contribution_q95", "posterior_draw_n")
+    ci_join <- fit_obj$posterior_contribution_intervals[, ..ci_cols]
+    fit_obj$long_decomp[ci_join, on = .(row_id, variable), `:=`(
+      contribution_q05 = i.contribution_q05,
+      contribution_q50 = i.contribution_q50,
+      contribution_q95 = i.contribution_q95,
+      posterior_draw_n = i.posterior_draw_n
+    )]
+    if (!is.null(output_dir) && nzchar(output_dir) && nrow(fit_obj$posterior_contribution_intervals)) {
+      pfx <- if (nzchar(output_prefix %||% "")) paste0(output_prefix, "_") else ""
+      dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+      fwrite(fit_obj$posterior_contribution_intervals, file.path(output_dir, paste0(pfx, "posterior_contribution_intervals.csv")))
+    }
+  } else {
+    fit_obj$posterior_contribution_intervals <- data.table()
+  }
+
   if (!is.null(spend_map)) {
     fit_obj <- attach_spend_to_hier_mmm_outputs(
       fit_obj,
@@ -350,6 +390,19 @@ fit_hier_mmm <- function(data,
     }
   } else {
     fit_obj$response_curves <- data.table()
+  }
+  if (isTRUE(create_frequency_response_curves)) {
+    fit_obj$frequency_response_curves <- build_frequency_response_curves_hier_mmm(
+      fit_obj = fit_obj,
+      frequency_grid = frequency_grid
+    )
+    if (!is.null(output_dir) && nzchar(output_dir) && nrow(fit_obj$frequency_response_curves)) {
+      pfx <- if (nzchar(output_prefix %||% "")) paste0(output_prefix, "_") else ""
+      dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+      fwrite(fit_obj$frequency_response_curves, file.path(output_dir, paste0(pfx, "frequency_response_curves.csv")))
+    }
+  } else {
+    fit_obj$frequency_response_curves <- data.table()
   }
 
   if (isTRUE(create_response_curve_draws)) {
@@ -390,4 +443,96 @@ fit_hier_mmm <- function(data,
   }
 
   fit_obj
+}
+
+run_hier_mmm_prior_predictive <- function(data,
+                                          metadata_input,
+                                          dep_var_col,
+                                          group_col,
+                                          time_col,
+                                          entity_col,
+                                          probs = c(0.05, 0.50, 0.95),
+                                          chains = 4L,
+                                          parallel_chains = 4L,
+                                          iter_warmup = 500L,
+                                          iter_sampling = 500L,
+                                          seed = 123L,
+                                          output_dir = NULL,
+                                          output_prefix = "prior_predictive",
+                                          ...) {
+  probs <- as.numeric(probs)
+  if (length(probs) != 3L || any(!is.finite(probs)) || any(probs < 0 | probs > 1) || any(diff(probs) <= 0)) {
+    stop("probs must contain three strictly increasing probabilities between 0 and 1.", call. = FALSE)
+  }
+  dots <- list(...)
+  args <- modifyList(dots, list(
+    data = data,
+    metadata_input = metadata_input,
+    dep_var_col = dep_var_col,
+    group_col = group_col,
+    time_col = time_col,
+    entity_col = entity_col,
+    prior_only = TRUE,
+    chains = chains,
+    parallel_chains = parallel_chains,
+    iter_warmup = iter_warmup,
+    iter_sampling = iter_sampling,
+    seed = seed,
+    output_dir = NULL,
+    output_variables = c("beta", "rrate", "cvalue", "dvalue", "context_coef", "alpha_flat", "gamma",
+                         "level_component", "cycle_component", "season_component", "level_state", "sigma_y", "y_rep"),
+    create_response_curves = FALSE,
+    create_frequency_response_curves = FALSE,
+    create_response_curve_draws = FALSE,
+    create_posterior_contribution_intervals = FALSE
+  ))
+  args["output_dir"] <- list(NULL)
+  prior_fit <- do.call(fit_hier_mmm, args)
+  draw_mat <- as.matrix(prior_fit$fit$draws(variables = "y_rep", format = "matrix"))
+  if (!nrow(draw_mat)) stop("Stan prior-predictive run returned no y_rep draws.", call. = FALSE)
+  draw_idx <- suppressWarnings(as.integer(sub("^y_rep\\[([0-9]+)\\]$", "\\1", colnames(draw_mat))))
+  if (anyNA(draw_idx) || !setequal(draw_idx, seq_len(nrow(prior_fit$wide_decomp)))) {
+    stop("Could not align y_rep draws to model rows.", call. = FALSE)
+  }
+  draw_mat <- draw_mat[, order(draw_idx), drop = FALSE]
+  q <- apply(draw_mat, 2L, stats::quantile, probs = probs, na.rm = TRUE, names = FALSE)
+  scale <- as.numeric(prior_fit$wide_decomp$rescale_factor %||% rep(1, nrow(prior_fit$wide_decomp)))
+  rows <- copy(as.data.table(prior_fit$wide_decomp))
+  keep <- unique(c("row_id", group_col, time_col, entity_col, "sample", "y_actual"))
+  rows <- rows[, ..keep]
+  rows[, `:=`(
+    prior_pred_q05 = q[1, ] * scale,
+    prior_pred_q50 = q[2, ] * scale,
+    prior_pred_q95 = q[3, ] * scale
+  )]
+  observed_iqr <- stats::IQR(rows$y_actual, na.rm = TRUE)
+  if (!is.finite(observed_iqr) || observed_iqr <= 1e-8) observed_iqr <- stats::sd(rows$y_actual, na.rm = TRUE)
+  interval_width <- rows$prior_pred_q95 - rows$prior_pred_q05
+  coverage <- mean(rows$y_actual >= rows$prior_pred_q05 & rows$y_actual <= rows$prior_pred_q95, na.rm = TRUE)
+  width_ratio <- if (is.finite(observed_iqr) && observed_iqr > 1e-8) stats::median(interval_width, na.rm = TRUE) / observed_iqr else NA_real_
+  status <- if (!is.finite(coverage) || coverage < 0.80 || (is.finite(width_ratio) && width_ratio > 20)) "review_priors" else "plausible_after_standard_review"
+  overall <- data.table(
+    analysis_type = "stan_prior_predictive",
+    row_n = nrow(rows),
+    draw_n = nrow(draw_mat),
+    observed_coverage = coverage,
+    median_interval_width = stats::median(interval_width, na.rm = TRUE),
+    interval_width_to_observed_iqr = width_ratio,
+    prior_predictive_status = status,
+    interpretation = "Checks whether the declared priors generate plausible KPI outcomes before conditioning on observed KPI data."
+  )
+  if (!is.null(output_dir) && nzchar(output_dir)) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    pfx <- if (nzchar(output_prefix %||% "")) paste0(output_prefix, "_") else ""
+    fwrite(rows, file.path(output_dir, paste0(pfx, "rows.csv")))
+    fwrite(overall, file.path(output_dir, paste0(pfx, "summary.csv")))
+  }
+  list(
+    package_info = econimap_output_metadata("run_hier_mmm_prior_predictive", surface = "stan_prior_predictive"),
+    analysis_type = "prior_predictive_only",
+    row_summary = rows,
+    overall = overall,
+    fit = prior_fit$fit,
+    fit_contract = prior_fit
+  )
 }

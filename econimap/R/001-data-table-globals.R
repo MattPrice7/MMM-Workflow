@@ -601,6 +601,26 @@ utils::globalVariables(c(
   "variable_role",
   "variable_type",
   "variant",
+  "calibration_id",
+  "frequency_col",
+  "i.posterior_lift_mean",
+  "i.posterior_lift_q05",
+  "i.posterior_lift_q50",
+  "i.posterior_lift_q95",
+  "is_optimal_frequency",
+  "observed_lift_raw_scale",
+  "observed_lift_sd_raw_scale",
+  "planning_assumption",
+  "population_col",
+  "posterior_lift_mean",
+  "posterior_lift_q05",
+  "posterior_lift_q95",
+  "reach_col",
+  "rf_frequency_internal_col",
+  "rf_population_internal_col",
+  "rf_reach_internal_col",
+  "rf_reach_train_scale",
+  "rf_spend_col",
   "x__",
   "y__",
   "y_actual",
@@ -608,4 +628,186 @@ utils::globalVariables(c(
   "y_model_scale",
   "y_original__",
   "y_raw__"
+  ,"..curve_keep"
+  ,"anchor_saturation_precision"
+  ,"anchor_saturation_sd"
+  ,"attribution_interpretation"
+  ,"control_reference_values"
+  ,"curve_fit_status"
+  ,"curve_point_exclusion_reason"
+  ,"curve_point_usable"
+  ,"curve_point_weight"
+  ,"curve_point_weight_raw"
+  ,"donor_placebo_p_value"
+  ,"event_media"
+  ,"i.anchor_saturation"
+  ,"i.anchor_saturation_precision"
+  ,"i.anchor_saturation_sd"
+  ,"i.attribution_interpretation"
+  ,"i.curve_type"
+  ,"i.dvalue"
+  ,"i.elasticity_reference_raw"
+  ,"i.quasi_geo_curve_prior_source"
+  ,"i.quasi_geo_curve_recommended_use"
+  ,"i.reference_value_model_scale"
+  ,"i.reference_value_raw"
+  ,"i.reference_value_source"
+  ,"i.reference_value_spec"
+  ,"i.x_scale_center"
+  ,"i.x_scale_sd"
+  ,"i.x_scaling"
+  ,"lift_se"
+  ,"marginal_response_ci_high"
+  ,"marginal_response_ci_low"
+  ,"marginal_response_se"
+  ,"multiple_testing_warning"
+  ,"non_media_baseline_values"
+  ,"placebo_bh_q_value"
+  ,"placebo_test_p_value"
+  ,"quasi_geo_curve_prior_source"
+  ,"reference_internal_col"
+  ,"reference_value_model_scale"
+  ,"reference_value_raw"
+  ,"reference_value_source"
+  ,"reference_value_spec"
+  ,"support_midpoint"
+  ,"time_placebo_p_value"
+  ,"treated_geo_n"
+  ,"x_scale_center"
+  ,"x_scale_sd"
+  ,"x_scaling"
+  ,"anchor_distance"
+  ,"cv_score"
+  ,"feature__"
+  ,"search_date__"
+  ,"search_group__"
+  ,"search_stage"
+  ,"time_index__"
+  ,"within_one_se"
+  ,"x_group_scale__"
+  ,"y_group_scale__"
+  ,"..share_cols"
+  ,"..spend_cols"
+  ,"child_spend_share"
+  ,"fit_ok"
+  ,"i.prior_mean"
+  ,"i.prior_precision"
+  ,"i.prior_sd"
+  ,"i.rollup_leaf"
+  ,"i.rollup_parent"
+  ,"i.transfer_scale"
+  ,"override_prior_mean__"
+  ,"override_prior_precision__"
+  ,"override_prior_sd__"
+  ,"override_transfer_scale__"
+  ,"prior_evidence_mode"
+  ,"prior_mean"
+  ,"root_effectiveness"
+  ,"root_time__"
+  ,"root_time_index__"
+  ,"root_total_paid_spend__"
+  ,"root_y__"
+  ,"aggregation_basis"
+  ,"generated_spend_total"
+  ,"generated_variable"
+  ,"layer_id"
+  ,"layer_label"
+  ,"layer_metric"
+  ,"media_depth__"
+  ,"media_nodes__"
+  ,"rollup_depth"
+  ,"sequential_aggregation_basis"
+  ,"sequential_rollup_depth"
+  ,"sequential_rollup_node"
+  ,"sequential_rollup_source_n"
+  ,"source_media_replaced"
+  ,"source_path_depth"
+  ,"source_spend_columns"
+  ,"source_variable_n"
+  ,"source_variables"
+  ,"child_rollup_node_path"
+  ,"child_spend_col"
+  ,"parent_contribution_draw"
+  ,"parent_contribution__"
+  ,"parent_current_contribution"
+  ,"parent_current_spend"
+  ,"parent_draw__"
+  ,"parent_draw_n"
+  ,"parent_effectiveness"
+  ,"parent_effectiveness_draw"
+  ,"parent_effectiveness_sd"
+  ,"parent_multiplier__"
+  ,"parent_n"
+  ,"parent_roi__"
+  ,"parent_rollup_node_path"
+  ,"parent_spend__"
+  ,"parent_spend_draw"
+  ,"sequential_child_rollup_depth"
+  ,"sequential_parent_current_contribution"
+  ,"sequential_parent_current_spend"
+  ,"sequential_parent_draw_n"
+  ,"sequential_parent_id"
+  ,"sequential_parent_mean"
+  ,"sequential_parent_rollup_depth"
+  ,"sequential_parent_sd"
+  ,"sequential_parent_sd_component"
+  ,"target_layer_id"
+  ,"target_rollup_depth"
+))
+
+# Sequential empirical-Bayes and BAU columns used through data.table NSE.
+utils::globalVariables(c(
+  "..ci_cols", "..controls", "..eligible_spend_cols", "..key_cols", "..sources",
+  "active_group_n", "active_mean_support", "active_median_support", "active_row_n",
+  "aggregation_complete", "aggregation_rule", "aggregation_weight_col", "allocated_value__",
+  "allocation_basis_used", "allocation_row_id__", "allocation_weight",
+  "allocation_weight_col_used", "anchor_basis", "anchor_saturation_prior_mean",
+  "anchor_saturation_prior_precision", "anchor_saturation_prior_sd",
+  "anchor_saturation_prior_source", "blocked_n", "branch_decision",
+  "branch_decision_reason", "candidate_fit_ok", "carried_parent_node",
+  "child_identification_pooling_multiplier", "child_identification_recommendation",
+  "child_identification_strength_0_1", "child_spend_total", "child_variable",
+  "curve_prior_available", "curve_prior_mode", "decomposition_eligible", "draw_id",
+  "effectiveness_prior_sd_multiplier", "fallback_used", "final_prior_sd",
+  "hierarchical_variation_eligible", "hill_weight__", "holdout_states",
+  "i.allocated_spend_col", "i.allocated_support_col", "i.allocation_basis",
+  "i.allocation_weight_col", "i.anchor_saturation_prior_mean",
+  "i.anchor_saturation_prior_precision", "i.anchor_saturation_prior_source",
+  "i.child_active_row_n__", "i.child_identification_recommendation__",
+  "i.child_identification_strength__", "i.generated_variable",
+  "i.hierarchical_variation_eligible", "i.independent_child_retained",
+  "i.mechanically_allocated", "i.media_scope", "i.model_support_col", "i.modeled_as",
+  "i.national_data_layout", "i.observed_or_imputed", "i.override_validation_reason",
+  "i.parent_shrinkage_multiplier__", "i.posterior_draw_n",
+  "i.posterior_effectiveness__", "i.posterior_effectiveness_sd__", "i.raw_spend_col",
+  "i.raw_support_col", "i.rrate_prior_mean", "i.rrate_prior_precision__",
+  "i.rrate_prior_source", "i.spend_col", "i.spend_hierarchical_variation_eligible",
+  "i.spend_mechanically_allocated", "i.spend_national_layout",
+  "i.spend_observed_or_imputed", "i.spend_scope",
+  "i.support_hierarchical_variation_eligible", "i.support_mechanically_allocated",
+  "i.support_national_layout", "i.support_observed_or_imputed", "i.support_scope",
+  "i.support_semantics", "i.valid_effectiveness_override", "identification_recommendation",
+  "identification_strength_0_1", "implied_child_contribution_mean", "incomplete_reason",
+  "layout_consistent", "mechanically_allocated", "media_aggregation_complete",
+  "media_incomplete_reason", "media_stealing_risk", "model_support_col",
+  "national_spend_complete", "national_spend_incomplete_reason",
+  "original_national_total", "override_validation_reason", "parent_decomposition_eligible",
+  "parent_effectiveness_status", "parent_max_reported_vs_recomputed_roi_gap",
+  "parent_positive_effect_transferred", "parent_prior_center", "parent_shrinkage_multiplier",
+  "parent_uncertainty__", "parent_uncertainty_width_multiplier",
+  "plausibility_penalty_units", "population_value__", "posterior_effectiveness",
+  "posterior_effectiveness_sd", "posterior_movement_prior_sd_units",
+  "posterior_to_prior_sd_ratio", "prior_dominance_classification",
+  "reported_roi_weighted__", "reported_vs_recomputed_roi_gap", "root_adstock_order__",
+  "root_aicc", "root_anchor_saturation", "root_curve_type", "root_group__",
+  "root_identifiable_paid_spend__", "root_residual__", "root_row_id__", "root_rrate",
+  "rrate_complexity_units", "rrate_default_source", "rrate_prior", "rrate_prior_mean",
+  "rrate_prior_precision", "rrate_prior_precision__", "rrate_prior_sd",
+  "rrate_prior_source", "saturation_prior_available", "selection_score",
+  "sequential_child_heterogeneity_sd_component", "sequential_mix_sd_component",
+  "sequential_root_data_reuse_inflation", "sequential_root_mean", "sequential_root_sd",
+  "sequential_root_sd_component", "sequential_row_id__", "source_missing_n",
+  "source_nonmissing_n", "source_row_n", "spend_hierarchical_variation_eligible",
+  "support_hierarchical_variation_eligible", "support_value__", "time_value__", "total_n",
+  "user_prior_override_present", "user_prior_override_valid", "valid_effectiveness_override", "z__"
 ))

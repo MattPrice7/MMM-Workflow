@@ -183,7 +183,7 @@ media_transform_hier_mmm <- function(x,
                                      rrate,
                                      cvalue,
                                      dvalue = 1,
-                                     curve_type = "weibull",
+                                     curve_type = "hill",
                                      train_mask = NULL,
                                      normalize_curve_x = TRUE,
                                      curve_normalization_scope = "active_train",
@@ -241,11 +241,99 @@ media_transform_hier_mmm <- function(x,
   )
 }
 
-variable_contribution_rows_hier_mmm <- function(fit_obj, variable, multiplier = 1, posterior_params = NULL) {
+reach_frequency_transform_hier_mmm <- function(reach_scaled,
+                                                frequency,
+                                                rrate,
+                                                cvalue,
+                                                dvalue = 1,
+                                                train_mask = NULL,
+                                                normalize_curve_x = TRUE,
+                                                curve_normalization_scope = "active_train",
+                                                reach_multiplier = 1,
+                                                frequency_override = NULL,
+                                                hold_impressions = FALSE) {
+  reach_ref <- pmax(suppressWarnings(as.numeric(reach_scaled)), 0)
+  freq_ref <- pmax(suppressWarnings(as.numeric(frequency)), 0)
+  reach_ref[!is.finite(reach_ref)] <- 0
+  freq_ref[!is.finite(freq_ref)] <- 0
+  n <- length(reach_ref)
+  if (length(freq_ref) != n) stop("reach_scaled and frequency must have the same length.")
+  if (is.null(train_mask)) train_mask <- rep(TRUE, n)
+  train_mask <- rep(as.logical(train_mask), length.out = n)
+  train_mask[is.na(train_mask)] <- FALSE
+  if (!any(train_mask)) train_mask <- rep(TRUE, n)
+
+  reach_eval <- reach_ref * pmax(suppressWarnings(as.numeric(reach_multiplier)[1]), 0)
+  freq_eval <- freq_ref
+  if (!is.null(frequency_override)) {
+    freq_eval <- rep(pmax(suppressWarnings(as.numeric(frequency_override)), 0), length.out = n)
+    freq_eval[!is.finite(freq_eval)] <- 0
+    if (isTRUE(hold_impressions)) {
+      # Reach x frequency is the planning approximation to impressions. When
+      # evaluating a frequency policy at fixed delivery, higher frequency
+      # necessarily trades away unique reach.
+      reach_eval <- fifelse(freq_eval > 1e-8, reach_eval * freq_ref / freq_eval, 0)
+    }
+  }
+
+  rrate <- min(max(suppressWarnings(as.numeric(rrate)[1]), 0), 0.999)
+  cvalue <- suppressWarnings(as.numeric(cvalue)[1])
+  dvalue <- suppressWarnings(as.numeric(dvalue)[1])
+  if (!is.finite(cvalue) || cvalue <= 0) cvalue <- 1
+  if (!is.finite(dvalue) || dvalue <= 0) dvalue <- 1
+  hill_one <- function(z) {
+    power <- (pmax(z, 0) * cvalue)^dvalue
+    fifelse(power > 0, power / (1 + power), 0)
+  }
+  adstock_one <- function(z) {
+    carry <- 0
+    out <- numeric(length(z))
+    for (ii in seq_along(z)) {
+      carry <- z[ii] + rrate * carry
+      out[ii] <- carry
+    }
+    out
+  }
+
+  sat_ref <- hill_one(freq_ref)
+  sat_eval <- hill_one(freq_eval)
+  effective_ref <- reach_ref * sat_ref
+  effective_eval <- reach_eval * sat_eval
+  adstock_ref <- adstock_one(effective_ref)
+  adstock_eval <- adstock_one(effective_eval)
+  norm_mask <- curve_normalization_mask_hier_mmm(
+    effective_ref,
+    train_mask,
+    curve_normalization_scope
+  )
+  transformed_mean <- mean(adstock_ref[norm_mask], na.rm = TRUE)
+  if (!is.finite(transformed_mean) || is.na(transformed_mean) || transformed_mean <= 1e-8) transformed_mean <- 1
+  transformed <- if (isTRUE(normalize_curve_x)) adstock_eval / transformed_mean else adstock_eval
+
+  list(
+    transformed = transformed,
+    transformed_mean = transformed_mean,
+    center_value = if (isTRUE(normalize_curve_x)) 1 else transformed_mean,
+    reach = reach_eval,
+    frequency = freq_eval,
+    frequency_saturation = sat_eval,
+    effective_media = effective_eval,
+    adstock = adstock_eval,
+    hold_impressions = isTRUE(hold_impressions),
+    curve_normalization_scope = normalize_curve_normalization_scope_hier_mmm(curve_normalization_scope)
+  )
+}
+
+variable_contribution_rows_hier_mmm <- function(fit_obj,
+                                                variable,
+                                                multiplier = 1,
+                                                posterior_params = NULL,
+                                                frequency_override = NULL,
+                                                hold_impressions = FALSE) {
   var_name <- as.character(variable)[1]
   dt <- copy(as.data.table(fit_obj$data))
   vl <- copy(as.data.table(fit_obj$variable_lookup))[order(variable_idx)]
-  if (!"curve_type" %in% names(vl)) vl[, curve_type := "weibull"]
+  if (!"curve_type" %in% names(vl)) vl[, curve_type := "hill"]
   if (!(var_name %in% vl$variable)) stop("Unknown modeled variable: ", var_name)
   pm <- posterior_params %||% extract_pm_from_fit_obj_hier_mmm(fit_obj)
   j <- vl$variable_idx[match(var_name, vl$variable)]
@@ -271,21 +359,38 @@ variable_contribution_rows_hier_mmm <- function(fit_obj, variable, multiplier = 
   rr <- pm$rrate[j]
   cv <- pm$cvalue[j]
   dv <- pm$dvalue[j]
-  curve_type <- vl[variable_idx == j, curve_type][1] %||% "weibull"
+  curve_type <- vl[variable_idx == j, curve_type][1] %||% "hill"
+  is_rf <- !is.null(fit_obj$stan_data$is_rf_curve) && fit_obj$stan_data$is_rf_curve[curve_pos] == 1L
 
   for (g in sort(unique(dt$group_idx))) {
     idx <- which(dt$group_idx == g)
-    tr <- media_transform_hier_mmm(
-      x = dt[[var_name]][idx],
-      rrate = rr,
-      cvalue = cv,
-      dvalue = dv,
-      curve_type = curve_type,
-      train_mask = !dt$is_holdout__[idx],
-      normalize_curve_x = fit_obj$normalize_curve_x,
-      curve_normalization_scope = fit_obj$curve_normalization_scope %||% "active_train",
-      multiplier = multiplier
-    )
+    tr <- if (isTRUE(is_rf)) {
+      reach_frequency_transform_hier_mmm(
+        reach_scaled = fit_obj$stan_data$X_rf_reach[idx, curve_pos],
+        frequency = fit_obj$stan_data$X_rf_frequency[idx, curve_pos],
+        rrate = rr,
+        cvalue = cv,
+        dvalue = dv,
+        train_mask = !dt$is_holdout__[idx],
+        normalize_curve_x = fit_obj$normalize_curve_x,
+        curve_normalization_scope = fit_obj$curve_normalization_scope %||% "active_train",
+        reach_multiplier = multiplier,
+        frequency_override = frequency_override,
+        hold_impressions = hold_impressions
+      )
+    } else {
+      media_transform_hier_mmm(
+        x = dt[[var_name]][idx],
+        rrate = rr,
+        cvalue = cv,
+        dvalue = dv,
+        curve_type = curve_type,
+        train_mask = !dt$is_holdout__[idx],
+        normalize_curve_x = fit_obj$normalize_curve_x,
+        curve_normalization_scope = fit_obj$curve_normalization_scope %||% "active_train",
+        multiplier = multiplier
+      )
+    }
     trans <- tr$transformed
     context_mult <- context_effect_multiplier_hier_mmm(
       fit_obj$stan_data,
@@ -301,6 +406,38 @@ variable_contribution_rows_hier_mmm <- function(fit_obj, variable, multiplier = 
 variable_contribution_sum_hier_mmm <- function(fit_obj, variable, multiplier = 1, posterior_params = NULL) {
   out <- variable_contribution_rows_hier_mmm(fit_obj, variable, multiplier = multiplier, posterior_params = posterior_params)
   sum(out, na.rm = TRUE)
+}
+
+build_frequency_response_curves_hier_mmm <- function(fit_obj,
+                                                     frequency_grid = seq(0.25, 10, by = 0.25),
+                                                     variables = NULL,
+                                                     posterior_params = NULL) {
+  vl <- copy(as.data.table(fit_obj$variable_lookup))
+  rf_vars <- vl[role %in% c("reach_frequency", "organic_reach_frequency") & has_curve == 1L, variable]
+  if (!is.null(variables)) rf_vars <- intersect(rf_vars, as.character(variables))
+  frequency_grid <- sort(unique(suppressWarnings(as.numeric(frequency_grid))))
+  frequency_grid <- frequency_grid[is.finite(frequency_grid) & frequency_grid > 0]
+  if (!length(rf_vars) || !length(frequency_grid)) return(data.table())
+
+  rows <- rbindlist(lapply(rf_vars, function(v) {
+    data.table(
+      variable = v,
+      frequency = frequency_grid,
+      expected_contribution = vapply(frequency_grid, function(f) {
+        sum(variable_contribution_rows_hier_mmm(
+          fit_obj,
+          variable = v,
+          multiplier = 1,
+          posterior_params = posterior_params,
+          frequency_override = f,
+          hold_impressions = TRUE
+        ), na.rm = TRUE)
+      }, numeric(1))
+    )
+  }), use.names = TRUE, fill = TRUE)
+  rows[, is_optimal_frequency := expected_contribution == max(expected_contribution, na.rm = TRUE), by = variable]
+  rows[, planning_assumption := "frequency varied while approximate impressions (reach x frequency) are held constant"]
+  rows[]
 }
 
 build_response_curves_hier_mmm <- function(fit_obj,
@@ -533,6 +670,48 @@ extract_posterior_draw_params_hier_mmm <- function(fit_obj,
   list(draw_ids = as.character(draw_ids), params = params)
 }
 
+build_posterior_contribution_intervals_hier_mmm <- function(fit_obj,
+                                                             max_draws = 200L,
+                                                             probs = c(0.05, 0.50, 0.95),
+                                                             seed = 123L) {
+  probs <- as.numeric(probs)
+  if (length(probs) != 3L || any(!is.finite(probs)) || any(probs < 0 | probs > 1) || any(diff(probs) <= 0)) {
+    stop("probs must contain three strictly increasing probabilities between 0 and 1.", call. = FALSE)
+  }
+  prep <- fit_obj$prep
+  if (is.null(prep) || is.null(prep$stan_data)) {
+    stop("fit_obj does not contain the internal prep contract required for draw-level decomposition.", call. = FALSE)
+  }
+  draws <- extract_posterior_draw_params_hier_mmm(fit_obj, max_draws = max_draws, seed = seed)
+  if (!length(draws$params)) return(data.table())
+  modeled_vars <- as.character(fit_obj$variable_lookup$variable)
+  draw_rows <- rbindlist(lapply(seq_along(draws$params), function(i) {
+    pm <- draws$params[[i]]
+    pm$draw_id <- NULL
+    out <- build_outputs_hier_mmm(
+      fit = NULL,
+      prep = prep,
+      extra_control_cols = fit_obj$extra_control_cols %||% NULL,
+      posterior_means = pm,
+      include_prediction_intervals = FALSE
+    )$long_decomp
+    out <- out[variable %in% modeled_vars, .(row_id, variable, contribution)]
+    out[, draw_id := as.character(draws$draw_ids[i])]
+    out
+  }), use.names = TRUE, fill = TRUE)
+  if (!nrow(draw_rows)) return(data.table())
+  intervals <- draw_rows[, .(
+    contribution_q05 = as.numeric(stats::quantile(contribution, probs = probs[1], na.rm = TRUE, names = FALSE)),
+    contribution_q50 = as.numeric(stats::quantile(contribution, probs = probs[2], na.rm = TRUE, names = FALSE)),
+    contribution_q95 = as.numeric(stats::quantile(contribution, probs = probs[3], na.rm = TRUE, names = FALSE)),
+    posterior_draw_n = uniqueN(draw_id)
+  ), by = .(row_id, variable)]
+  key_cols <- unique(c("row_id", fit_obj$group_col, fit_obj$time_col, fit_obj$entity_col, "sample"))
+  key_cols <- key_cols[key_cols %in% names(fit_obj$long_decomp)]
+  keys <- unique(as.data.table(fit_obj$long_decomp)[, ..key_cols], by = "row_id")
+  keys[intervals, on = "row_id"][]
+}
+
 build_response_curves_draws_hier_mmm <- function(fit_obj,
                                                  spend_map = NULL,
                                                  raw_data = NULL,
@@ -579,7 +758,7 @@ build_response_curves_draws_hier_mmm <- function(fit_obj,
 make_hier_mmm_business_prior_template <- function(variables) {
   data.table(
     variable = as.character(variables),
-    prior_metric = NA_character_,       # coef, ikpc, cpkpi, mcpkpi, roi, mroi
+    prior_metric = NA_character_,       # coef, contribution, elasticity, effect_per_sd, ikpc, cpkpi, mcpkpi, roi, mroi
     prior_mean = NA_real_,
     prior_sd = NA_real_,
     prior_precision = NA_real_,
@@ -602,6 +781,9 @@ business_prior_metric_alias_hier_mmm <- function(x) {
   out[x %in% c("mcpkpi", "marginal_cpkpi", "marginal_cost_per_kpi", "marginal_cost_per_outcome", "marginal_cost_per_subscriber", "marginal_cpa")] <- "mcpkpi"
   out[x %in% c("roi", "return_on_investment")] <- "roi"
   out[x %in% c("mroi", "marginal_roi", "marginal_return_on_investment")] <- "mroi"
+  out[x %in% c("contribution", "contribution_pct", "percent_contribution", "pct_contribution")] <- "contribution"
+  out[x %in% c("elasticity", "point_elasticity", "average_elasticity")] <- "elasticity"
+  out[x %in% c("effect_per_sd", "standardized_effect", "standardised_effect", "one_sd_effect", "zscore_effect", "z_score_effect")] <- "effect_per_sd"
   out
 }
 
@@ -614,6 +796,9 @@ business_prior_metric_candidates_hier_mmm <- function(metric) {
     mcpkpi = c("prior_mean", "mcpkpi", "marginal_cpkpi", "marginal_cost_per_kpi", "marginal_cost_per_outcome", "marginal_cost_per_subscriber", "marginal_cpa"),
     roi = c("prior_mean", "roi"),
     mroi = c("prior_mean", "mroi", "marginal_roi"),
+    contribution = c("prior_mean", "contribution", "contribution_pct", "percent_contribution", "pct_contribution"),
+    elasticity = c("prior_mean", "elasticity", "point_elasticity", "average_elasticity"),
+    effect_per_sd = c("prior_mean", "effect_per_sd", "standardized_effect", "one_sd_effect", "zscore_effect"),
     c("prior_mean", metric)
   )
 }
@@ -636,7 +821,7 @@ business_prior_detect_metric_hier_mmm <- function(bp, i) {
     pm <- business_prior_metric_alias_hier_mmm(bp$metric[i])
     if (nzchar(pm) && !is.na(pm)) return(pm)
   }
-  for (metric in c("coef", "ikpc", "cpkpi", "mcpkpi", "roi", "mroi")) {
+  for (metric in c("coef", "contribution", "elasticity", "effect_per_sd", "ikpc", "cpkpi", "mcpkpi", "roi", "mroi")) {
     if (is.finite(business_prior_row_num_hier_mmm(bp, i, business_prior_metric_candidates_hier_mmm(metric)))) {
       return(metric)
     }
@@ -774,7 +959,7 @@ business_marginal_design_sum_hier_mmm <- function(prep, variable, step_pct = 0.0
     rr <- raw_to_value(row$rrate_raw_mu[1], row$rrate_lower[1], row$rrate_upper[1])
     cv <- raw_to_value(row$cvalue_raw_mu[1], row$cvalue_lower[1], row$cvalue_upper[1])
     dv <- raw_to_value(row$dvalue_raw_mu[1], row$dvalue_lower[1], row$dvalue_upper[1])
-    curve_type <- row$curve_type[1] %||% "weibull"
+    curve_type <- row$curve_type[1] %||% "hill"
     up <- numeric(nrow(prep$data))
     for (g in seq_len(nrow(prep$group_lookup))) {
       idx <- which(prep$data$group_idx == g)
@@ -797,6 +982,86 @@ business_marginal_design_sum_hier_mmm <- function(prep, variable, step_pct = 0.0
   }
   x <- sd$X[, j]
   sum(as.numeric(x)[train], na.rm = TRUE) * step_pct
+}
+
+business_linear_effect_conversion_hier_mmm <- function(prep,
+                                                       variable_name,
+                                                       metric,
+                                                       input_mean,
+                                                       input_sd = NA_real_,
+                                                       elasticity_reference = "median") {
+  vl <- prep$variable_lookup
+  vv <- as.character(variable_name)[1]
+  row <- vl[variable == vv][1]
+  if (!nrow(row)) return(list(ok = FALSE, warning = "unknown_variable_for_linear_prior_conversion"))
+  if (row$has_curve[1] == 1L) return(list(ok = FALSE, warning = paste0(metric, "_requires_linear_nonmedia_or_control_variable")))
+  j <- row$variable_idx[1]
+  train <- prep$stan_data$is_train == 1L
+  x_model <- as.numeric(prep$stan_data$X[, j])
+  rescale <- suppressWarnings(as.numeric(prep$data$rescale_factor__))
+  rescale[!is.finite(rescale) | abs(rescale) <= 1e-8] <- 1
+  y_raw <- suppressWarnings(as.numeric(prep$data$y_original__))
+  outcome_total <- sum(y_raw[train], na.rm = TRUE)
+  if (!is.finite(outcome_total) || abs(outcome_total) <= 1e-8) {
+    return(list(ok = FALSE, warning = "invalid_training_outcome_total_for_prior_conversion"))
+  }
+  reference_model <- suppressWarnings(as.numeric(row$reference_value_model_scale[1]))
+  if (!is.finite(reference_model)) reference_model <- 0
+  x_center <- suppressWarnings(as.numeric(row$x_scale_center[1]))
+  x_sd <- suppressWarnings(as.numeric(row$x_scale_sd[1]))
+  if (!is.finite(x_center)) x_center <- 0
+  if (!is.finite(x_sd) || x_sd <= 1e-8) x_sd <- 1
+  x_raw <- x_model * x_sd + x_center
+
+  design_sum <- NA_real_
+  reference_raw <- suppressWarnings(as.numeric(row$reference_value_raw[1]))
+  conversion_basis <- NA_character_
+  elasticity_reference_raw <- NA_real_
+  if (metric == "contribution") {
+    design_sum <- sum((x_model[train] - reference_model) * rescale[train], na.rm = TRUE)
+    conversion_basis <- "aggregate_observed_vs_reference_contribution"
+  } else if (metric == "effect_per_sd") {
+    design_sum <- sum(rescale[train], na.rm = TRUE)
+    conversion_basis <- "one_training_sd_intervention_vs_reference_kpi_fraction"
+  } else if (metric == "elasticity") {
+    ref <- resolve_reference_value_hier_mmm(
+      x = x_raw,
+      spec = elasticity_reference,
+      train_mask = train,
+      label = paste0("elasticity reference for variable '", vv, "'")
+    )
+    elasticity_reference_raw <- ref$value
+    if (!is.finite(elasticity_reference_raw) || abs(elasticity_reference_raw) <= 1e-8) {
+      return(list(ok = FALSE, warning = "elasticity_reference_must_be_nonzero"))
+    }
+    design_sum <- sum((elasticity_reference_raw / x_sd) * rescale[train], na.rm = TRUE)
+    conversion_basis <- paste0("point_elasticity_at_", ref$source, "_raw_reference")
+  }
+  if (!is.finite(design_sum) || abs(design_sum) <= 1e-8) {
+    return(list(ok = FALSE, warning = paste0("invalid_", metric, "_design_contrast")))
+  }
+  conversion_factor <- outcome_total / design_sum
+  coef <- input_mean * conversion_factor
+  coef_sd <- if (is.finite(input_sd) && input_sd > 0) abs(input_sd * conversion_factor) else NA_real_
+  list(
+    ok = TRUE,
+    coef = coef,
+    coef_sd = coef_sd,
+    conversion_factor = conversion_factor,
+    model_design_sum_train = design_sum,
+    outcome_total_train = outcome_total,
+    reference_value_raw = reference_raw,
+    reference_value_model_scale = reference_model,
+    elasticity_reference_raw = elasticity_reference_raw,
+    economic_prior_basis = conversion_basis,
+    attribution_interpretation = if (row$role[1] == "non_media_treatment") {
+      "causal_non_media_treatment_contrast_subject_to_assumptions"
+    } else if (row$role[1] == "control") {
+      "noncausal_control_reference_contrast"
+    } else {
+      "linear_model_effect_not_automatically_causal"
+    }
+  )
 }
 
 apply_business_priors_to_metadata_hier_mmm <- function(data,
@@ -899,6 +1164,49 @@ apply_business_priors_to_metadata_hier_mmm <- function(data,
         warning = NA_character_
       ))
     }
+    if (metric %in% c("contribution", "elasticity", "effect_per_sd")) {
+      elasticity_reference <- business_prior_row_chr_hier_mmm(
+        bp, i, c("elasticity_reference", "elasticity_reference_value", "marginal_reference_value")
+      )
+      if (is.na(elasticity_reference)) elasticity_reference <- "median"
+      conv <- business_linear_effect_conversion_hier_mmm(
+        prep = prep,
+        variable_name = v,
+        metric = metric,
+        input_mean = input_mean,
+        input_sd = input_sd,
+        elasticity_reference = elasticity_reference
+      )
+      if (!isTRUE(conv$ok)) return(data.table(variable = v, warning = conv$warning))
+      coef <- conv$coef
+      coef_sd <- conv$coef_sd
+      if (!is.finite(coef_sd) || coef_sd <= 0) coef_sd <- max(abs(coef) * default_relative_sd, min_coef_sd)
+      coef_sd <- max(coef_sd, min_coef_sd)
+      precision_uncapped <- 1 / coef_sd^2
+      precision <- min(precision_uncapped, max_precision)
+      return(data.table(
+        variable = v, coef = coef, coef_sd = coef_sd, coef_precision = precision,
+        coef_precision_uncapped = precision_uncapped,
+        coef_precision_was_capped = is.finite(max_precision) && precision_uncapped > max_precision,
+        prior_metric = metric, input_prior_mean = input_mean, input_prior_sd = input_sd,
+        input_prior_precision = input_precision,
+        input_uncertainty_basis = sp$basis,
+        input_uncertainty_source = sp$source,
+        input_uncertainty_requested_basis = sp$requested_basis,
+        input_precision_preserved = is.finite(input_precision) && input_precision > 0,
+        prior_distribution = dist, stan_prior_distribution = "normal_delta_method_on_coefficient",
+        kpi_value_per_outcome = NA_real_, spend_col = NA_character_, spend_total_train = NA_real_,
+        model_design_sum_train = conv$model_design_sum_train,
+        outcome_total_train = conv$outcome_total_train,
+        reference_value_raw = conv$reference_value_raw,
+        reference_value_model_scale = conv$reference_value_model_scale,
+        elasticity_reference_raw = conv$elasticity_reference_raw,
+        economic_prior_basis = conv$economic_prior_basis,
+        attribution_interpretation = conv$attribution_interpretation,
+        evidence_source = evidence_source, evidence_notes = evidence_notes,
+        warning = NA_character_
+      ))
+    }
     sc <- sm[variable == v, spend_col][1]
     if (is.na(sc) || !nzchar(sc) || !(sc %in% names(raw_train))) {
       return(data.table(variable = v, warning = "missing_spend_col_for_business_prior_conversion"))
@@ -975,6 +1283,10 @@ apply_business_priors_to_metadata_hier_mmm <- function(data,
     )
   })
   audit <- rbindlist(rows, fill = TRUE)
+  for (cc in c("reference_value_raw", "reference_value_model_scale", "elasticity_reference_raw")) {
+    if (!cc %in% names(audit)) audit[, (cc) := NA_real_]
+  }
+  if (!"attribution_interpretation" %in% names(audit)) audit[, attribution_interpretation := NA_character_]
   usable <- audit[is.na(warning) | !nzchar(warning)]
   if (nrow(usable)) {
     metadata_out[usable, on = "variable", `:=`(
@@ -991,6 +1303,10 @@ apply_business_priors_to_metadata_hier_mmm <- function(data,
       business_prior_precision_was_capped = i.coef_precision_was_capped,
       business_prior_distribution = i.prior_distribution,
       business_prior_basis = i.economic_prior_basis,
+      business_prior_reference_value_raw = i.reference_value_raw,
+      business_prior_reference_value_model_scale = i.reference_value_model_scale,
+      business_prior_elasticity_reference_raw = i.elasticity_reference_raw,
+      business_prior_attribution_interpretation = i.attribution_interpretation,
       business_prior_evidence_source = i.evidence_source,
       business_prior_evidence_notes = i.evidence_notes
     )]
@@ -1203,7 +1519,15 @@ add_reach_frequency_signal <- function(data,
   r <- pmax(as.numeric(dt[[reach_col]]), 0)
   f <- pmax(pmin(as.numeric(dt[[frequency_col]]), frequency_cap), 0)
   if (method == "effective_reach") {
-    dt[, (output_col) := r * (1 - exp(-f))]
+    tr <- reach_frequency_transform_hier_mmm(
+      reach_scaled = r,
+      frequency = f,
+      rrate = 0,
+      cvalue = 1,
+      dvalue = 1,
+      normalize_curve_x = FALSE
+    )
+    dt[, (output_col) := tr$effective_media]
   } else {
     dt[, (output_col) := r * f]
   }
@@ -1243,6 +1567,8 @@ run_hier_mmm_decisioning <- function(fit_obj,
   if (!is.null(calibration_input)) {
     out$calibration <- calibrate_lift_tests_hier_mmm(fit_obj, calibration_input = calibration_input)
   }
+  frequency_curves <- build_frequency_response_curves_hier_mmm(fit_obj)
+  if (nrow(frequency_curves)) out$frequency_planning <- frequency_curves
   if (!is.null(budget_optimizer_config)) {
     cfg <- budget_optimizer_config
     if (is.null(cfg$spend_map)) cfg$spend_map <- spend_map
@@ -1250,11 +1576,13 @@ run_hier_mmm_decisioning <- function(fit_obj,
     out$budget_optimizer <- do.call(optimize_budget_hier_mmm, c(list(fit_obj = fit_obj), cfg))
   }
   out$decisioning_notes <- data.table(
-    component = c("roi_mroi", "budget_optimizer"),
-    basis = c("posterior_mean_point_estimate", "posterior_mean_point_estimate_prototype"),
+    component = c("roi_mroi", "budget_optimizer", "frequency_planning", "experiment_calibration"),
+    basis = c("posterior_mean_point_estimate", "posterior_mean_point_estimate_prototype", "posterior_mean_fixed_impressions", "joint_likelihood_when_passed_to_fit_hier_mmm"),
     note = c(
       "KPI economics are computed from posterior means only; posterior draw intervals are not included in this table. roi/mroi are outcome-per-cost aliases unless revenue_roi is populated from kpi_value_per_outcome.",
-      "Budget optimization uses posterior mean response only and should be treated as prototype decision support."
+      "Budget optimization uses posterior mean response only and should be treated as prototype decision support.",
+      "Frequency planning varies average frequency while holding approximate impressions (reach x frequency) constant; validate operational reach/frequency trade-offs before activation.",
+      "Pass calibration_input directly to fit_hier_mmm for joint calibration. The post-fit calibration table is an audit/check, not a substitute for the joint likelihood."
     )
   )
   write_decision_outputs_hier_mmm(out, output_dir = output_dir, prefix = output_prefix)

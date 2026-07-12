@@ -32,6 +32,13 @@ Last reviewed against public sources on May 27, 2026.
 
 9. Carry observational curve evidence into the joint model.
    - The hierarchical Stan model now accepts an additional observed-cvalue prior term from `stan_observed_cvalue` metadata. This lets group-level ramp evidence inform the joint curve posterior instead of stopping at the semi-univariate prior file.
+   - The dedicated quasi-geo engine also emits uncertainty-weighted support/marginal-response points. Multiple independently usable support levels can produce a conservative Hill anchor shrunk toward 50% saturation at median active support. Anchor uncertainty is converted to the corresponding Hill or Weibull curve-rate precision before Stan sampling.
+
+10. Treat non-media interventions and controls differently.
+   - Following Meridian's distinction, price/promotion-like non-media treatments may use causal counterfactual contrasts when intervention assumptions are defensible. Their default baseline is the training minimum, with max/mean/median/zero/custom alternatives. Controls are training-z-scored and may receive descriptive reference contrasts, but those contrasts are labeled noncausal. Contribution, elasticity, standardized-effect, and direct coefficient priors convert into the same Stan coefficient space with auditable SD/precision.
+
+11. Strengthen observational geo inference without overstating it.
+   - Ridge synthetic-control regularization uses blocked pre-period validation when history supports it. Diagnostics include donor and repeated time-window placebos, BH multiplicity warnings, donor leave-one-out sensitivity, and pooled multi-treated-market estimates with heterogeneity. These follow GeoLift/Matched Markets design principles, but remain observational evidence unless treatment assignment was randomized.
 
 10. Treat semi-univariate outputs as prior evidence, not truth.
    - A purely univariate curve finder is not defensible as the final answer under common MMM problems such as correlated media, seasonality, targeting, demand anticipation, and omitted controls. This workflow therefore wraps the univariate/profile layer in multivariate residualization, transformed-variable collinearity checks, quasi-experimental ramp diagnostics, future-spend placebo checks, missing-data gates, contribution/elasticity sanity bounds, and joint Stan handoff. When those layers disagree, the workflow relaxes precision or asks for aggregation/external priors rather than tightening the curve.
@@ -72,6 +79,6 @@ Last reviewed against public sources on May 27, 2026.
 
 - Geo lift tests or randomized experiments.
 - A fully joint Bayesian/hierarchical MMM posterior.
-- Reach/frequency modeling when only impressions or spend are available.
+- Impressions-only reach/frequency proxy construction remains future work. When measured reach and frequency are available, the core Stan path now follows Meridian's structure: population-scaled linear reach, Hill frequency response, effective-media adstock, frequency planning, and experiment-calibration support.
 - True causal identification under severe multicollinearity.
 - Business review of implausible KPI economics, contribution, and response-curve shapes.

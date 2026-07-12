@@ -33,7 +33,9 @@ fit_hier_mmm_engine <- function(data,
                          default_positive_coef_upper = 3,
                          default_negative_coef_lower = -3,
                          default_one_sided_coef_span = 6,
+                         curve_type_default = c("hill", "weibull"),
                          coef_override_input = NULL,
+                         calibration_input = NULL,
                          context_effects = NULL,
                          context_log_multiplier_bound = 2,
                          allow_time_context = FALSE,
@@ -101,8 +103,10 @@ fit_hier_mmm_engine <- function(data,
                          output_prefix = "",
                          verbose = TRUE,
                          checkpoint_file = NULL,
-                         output_variables = "lean") {
+                         output_variables = "lean",
+                         prior_only = FALSE) {
   likelihood <- match.arg(likelihood)
+  curve_type_default <- match.arg(curve_type_default)
   curve_normalization_scope <- normalize_curve_normalization_scope_hier_mmm(match.arg(curve_normalization_scope))
   sample_curve_parameters <- match.arg(sample_curve_parameters)
   sample_coef_hierarchy <- match.arg(sample_coef_hierarchy)
@@ -168,7 +172,9 @@ fit_hier_mmm_engine <- function(data,
     default_positive_coef_upper = default_positive_coef_upper,
     default_negative_coef_lower = default_negative_coef_lower,
     default_one_sided_coef_span = default_one_sided_coef_span,
+    curve_type_default = curve_type_default,
     coef_override_input = coef_override_input,
+    calibration_input = calibration_input,
     context_effects = context_effects,
     context_log_multiplier_bound = context_log_multiplier_bound,
     allow_time_context = allow_time_context,
@@ -204,7 +210,8 @@ fit_hier_mmm_engine <- function(data,
     sigma_y_floor = sigma_y_floor,
     sigma_y_upper = sigma_y_upper,
     likelihood = likelihood,
-    student_t_nu = student_t_nu
+    student_t_nu = student_t_nu,
+    prior_only = prior_only
   )
 
   checkpoint(
@@ -285,7 +292,7 @@ fit_hier_mmm_engine <- function(data,
       output_variables <- c(
         "beta", "rrate", "cvalue", "dvalue", "context_coef", "alpha_flat", "gamma",
         "level_component", "cycle_component", "season_component", "level_state",
-        "sigma_y", "y_hat", "log_lik"
+        "sigma_y", "y_hat", "y_rep", "log_lik", "calibration_pred"
       )
     }
     sample_formals <- names(formals(mod$sample))
@@ -339,6 +346,7 @@ fit_hier_mmm_engine <- function(data,
   diagnostics$prior_posterior_curve <- prior_post$curve
   diagnostics$prior_posterior_context <- prior_post$context
   diagnostics$prior_audit <- build_hier_mmm_prior_audit(prep, prior_post)
+  diagnostics$experiment_calibration <- build_experiment_calibration_diagnostics_hier_mmm(fit, prep)
 
   collinearity <- build_collinearity_diagnostics(prep, threshold = collinearity_threshold)
   diagnostics$collinearity_overall <- collinearity$overall
@@ -377,12 +385,16 @@ fit_hier_mmm_engine <- function(data,
 
   list(
     package_info = econimap_output_metadata("fit_hier_mmm", surface = "stan_mmm_fit"),
+    prior_only = isTRUE(prior_only),
+    prep = prep,
+    extra_control_cols = extra_control_cols,
     fit = fit,
     stan_data = prep$stan_data,
     metadata = prep$metadata,
     curve_priors = prep$curve_priors,
     variable_lookup = prep$variable_lookup,
     context_effects = prep$context_effects,
+    experiment_calibration = prep$experiment_calibration,
     group_lookup = prep$group_lookup,
     data = prep$data,
     intercept_type = prep$intercept_type,
@@ -441,6 +453,7 @@ fit_hier_mmm_engine <- function(data,
     wide_decomp = outputs$wide_decomp,
     long_decomp = outputs$long_decomp,
     prior_audit = diagnostics$prior_audit,
+    experiment_calibration_diagnostics = diagnostics$experiment_calibration,
     diagnostics = diagnostics
   )
 }

@@ -256,6 +256,113 @@ clean_coef_override_input <- function(coef_override_input,
   )
 }
 
+build_experiment_calibration_hier_mmm <- function(calibration_input,
+                                                  data,
+                                                  variable_lookup,
+                                                  group_col,
+                                                  time_col) {
+  n <- nrow(data)
+  if (is.null(calibration_input)) {
+    return(list(
+      audit = data.table(),
+      variable_idx = integer(),
+      weight = matrix(0, nrow = n, ncol = 0L),
+      observed_lift = numeric(),
+      observed_sd = numeric()
+    ))
+  }
+  cal <- read_input_table(calibration_input)
+  cal <- as.data.table(copy(cal))
+  if (!nrow(cal)) return(build_experiment_calibration_hier_mmm(NULL, data, variable_lookup, group_col, time_col))
+  if (!"variable" %in% names(cal)) stop("calibration_input must include variable.")
+  if (anyDuplicated(cal$calibration_id %||% seq_len(nrow(cal)))) stop("calibration_input calibration_id values must be unique.")
+  if (!"calibration_id" %in% names(cal)) cal[, calibration_id := paste0("calibration_", .I)]
+  cal[, variable := as.character(variable)]
+  unknown <- setdiff(unique(cal$variable), variable_lookup$variable)
+  if (length(unknown)) stop("calibration_input references unknown modeled variable(s): ", paste(unknown, collapse = ", "))
+
+  first_numeric <- function(row, candidates) {
+    hit <- candidates[candidates %in% names(row)]
+    if (!length(hit)) return(NA_real_)
+    vals <- suppressWarnings(as.numeric(unlist(as.list(row)[hit], use.names = FALSE)))
+    vals <- vals[is.finite(vals)]
+    if (length(vals)) vals[1] else NA_real_
+  }
+  coerce_bound <- function(value, reference) {
+    if (inherits(reference, "Date")) return(as.Date(value))
+    if (inherits(reference, "POSIXct")) return(as.POSIXct(value, tz = attr(reference, "tzone") %||% "UTC"))
+    if (is.numeric(reference)) return(suppressWarnings(as.numeric(value)))
+    as.character(value)
+  }
+
+  weights <- matrix(0, nrow = n, ncol = nrow(cal))
+  audits <- vector("list", nrow(cal))
+  observed <- observed_sd <- numeric(nrow(cal))
+  variable_idx <- integer(nrow(cal))
+  for (cc in seq_len(nrow(cal))) {
+    row <- cal[cc]
+    variable_idx[cc] <- variable_lookup[variable == row$variable, variable_idx][1]
+    mask <- rep(TRUE, n)
+    if (group_col %in% names(cal) && !is.na(row[[group_col]][1]) && nzchar(as.character(row[[group_col]][1]))) {
+      mask <- mask & as.character(data[[group_col]]) == as.character(row[[group_col]][1])
+    }
+    if ("start_period" %in% names(cal) && !is.na(row$start_period[1]) && nzchar(as.character(row$start_period[1]))) {
+      mask <- mask & data[[time_col]] >= coerce_bound(row$start_period[1], data[[time_col]])
+    }
+    if ("end_period" %in% names(cal) && !is.na(row$end_period[1]) && nzchar(as.character(row$end_period[1]))) {
+      mask <- mask & data[[time_col]] <= coerce_bound(row$end_period[1], data[[time_col]])
+    }
+    if (!any(mask)) stop("calibration_input row '", row$calibration_id, "' selects no model rows.")
+
+    lift <- first_numeric(row, c("observed_lift", "incremental_outcome", "incremental_kpi"))
+    lift_sd <- first_numeric(row, c("observed_lift_sd", "incremental_outcome_sd", "incremental_kpi_sd"))
+    precision <- first_numeric(row, c("observed_lift_precision", "incremental_outcome_precision", "incremental_kpi_precision"))
+    spend <- first_numeric(row, c("incremental_spend", "experiment_spend", "spend"))
+    roi <- first_numeric(row, c("observed_roi", "incremental_roi"))
+    roi_sd <- first_numeric(row, c("observed_roi_sd", "incremental_roi_sd"))
+    cpkpi <- first_numeric(row, c("observed_cost_per_outcome", "observed_cpkpi", "cost_per_kpi"))
+    cpkpi_sd <- first_numeric(row, c("observed_cost_per_outcome_sd", "observed_cpkpi_sd", "cost_per_kpi_sd"))
+    basis <- "observed_lift"
+    if (!is.finite(lift) && is.finite(roi) && is.finite(spend)) {
+      lift <- roi * spend
+      if (is.finite(roi_sd)) lift_sd <- abs(spend) * roi_sd
+      basis <- "roi_x_incremental_spend"
+    }
+    if (!is.finite(lift) && is.finite(cpkpi) && cpkpi > 0 && is.finite(spend)) {
+      lift <- spend / cpkpi
+      if (is.finite(cpkpi_sd)) lift_sd <- abs(spend / (cpkpi^2)) * cpkpi_sd
+      basis <- "incremental_spend_divided_by_cost_per_kpi"
+    }
+    if ((!is.finite(lift_sd) || lift_sd <= 0) && is.finite(precision) && precision > 0) lift_sd <- 1 / sqrt(precision)
+    if (!is.finite(lift)) stop("calibration_input row '", row$calibration_id, "' needs observed_lift, ROI + incremental_spend, or cost-per-KPI + incremental_spend.")
+    if (!is.finite(lift_sd) || lift_sd <= 0) stop("calibration_input row '", row$calibration_id, "' must provide a positive SD or precision on its supplied evidence scale.")
+
+    weights[mask, cc] <- as.numeric(data$rescale_factor__[mask])
+    observed[cc] <- lift
+    observed_sd[cc] <- lift_sd
+    audits[[cc]] <- data.table(
+      calibration_id = as.character(row$calibration_id),
+      variable = as.character(row$variable),
+      variable_idx = variable_idx[cc],
+      selected_row_n = sum(mask),
+      observed_lift_raw_scale = lift,
+      observed_lift_sd_raw_scale = lift_sd,
+      observed_lift_precision_raw_scale = 1 / lift_sd^2,
+      evidence_basis = basis,
+      calibration_likelihood = "normal",
+      calibration_note = "Joint likelihood on raw-scale incremental KPI; row weights convert model-scale contribution using training-only outcome scaling."
+    )
+  }
+  storage.mode(weights) <- "double"
+  list(
+    audit = rbindlist(audits, use.names = TRUE, fill = TRUE),
+    variable_idx = as.integer(variable_idx),
+    weight = weights,
+    observed_lift = as.numeric(observed),
+    observed_sd = as.numeric(observed_sd)
+  )
+}
+
 prepare_stan_data_hier_mmm <- function(data,
                                        metadata_input,
                                        dep_var_col,
@@ -281,7 +388,9 @@ prepare_stan_data_hier_mmm <- function(data,
                                        default_positive_coef_upper = 3,
                                        default_negative_coef_lower = -3,
                                        default_one_sided_coef_span = 6,
+                                       curve_type_default = c("hill", "weibull"),
                                        coef_override_input = NULL,
+                                       calibration_input = NULL,
                                        context_effects = NULL,
                                        context_log_multiplier_bound = 2,
                                        allow_time_context = FALSE,
@@ -317,8 +426,10 @@ prepare_stan_data_hier_mmm <- function(data,
                                        sigma_y_floor = 0.005,
                                        sigma_y_upper = 5,
                                        likelihood = c("student_t", "normal"),
-                                       student_t_nu = 5) {
+                                       student_t_nu = 5,
+                                       prior_only = FALSE) {
   likelihood <- match.arg(likelihood)
+  curve_type_default <- match.arg(curve_type_default)
   curve_normalization_scope <- normalize_curve_normalization_scope_hier_mmm(match.arg(curve_normalization_scope))
   sample_curve_parameters <- match.arg(sample_curve_parameters)
   sample_coef_hierarchy <- match.arg(sample_coef_hierarchy)
@@ -400,8 +511,25 @@ prepare_stan_data_hier_mmm <- function(data,
     bound_one_sided_coef_defaults = bound_one_sided_coef_defaults,
     default_positive_coef_upper = default_positive_coef_upper,
     default_negative_coef_lower = default_negative_coef_lower,
-    default_one_sided_coef_span = default_one_sided_coef_span
+    default_one_sided_coef_span = default_one_sided_coef_span,
+    curve_type_default = curve_type_default
   )
+  rf_rows <- which(md$role %in% c("reach_frequency", "organic_reach_frequency"))
+  if (length(rf_rows)) {
+    for (ii in rf_rows) {
+      vv <- md$variable[ii]
+      rc <- md$reach_col[ii]
+      fc <- md$frequency_col[ii]
+      pc <- md$population_col[ii]
+      if (!is.na(rc) && rc %in% names(dt) && !(vv %in% names(dt))) {
+        dt[, (vv) := as.numeric(get(rc))]
+      }
+      missing_rf <- setdiff(c(rc, fc, if (!is.na(pc)) pc else character()), names(dt))
+      if (length(missing_rf)) {
+        stop("reach_frequency variable '", vv, "' is missing required data column(s): ", paste(missing_rf, collapse = ", "))
+      }
+    }
+  }
 
   req_data <- c(dep_var_col, group_col, time_col, entity_col)
   if (!all(req_data %in% names(dt))) stop("Data is missing one of: ", paste(req_data, collapse = ", "))
@@ -459,9 +587,50 @@ prepare_stan_data_hier_mmm <- function(data,
   if (anyNA(dt[[time_col]])) stop("time_col contains NA values.")
 
   context_keep_cols <- if (nrow(context_effects_clean)) context_effects_clean[context_type == "column", unique(context_key)] else character()
-  keep_cols <- unique(c(group_col, time_col, entity_col, dep_var_col, md$variable, extra_control_cols, context_keep_cols, dep_scale_col, holdout_col))
+  rf_source_cols <- if (length(rf_rows)) {
+    z <- c(md$reach_col[rf_rows], md$frequency_col[rf_rows], md$population_col[rf_rows])
+    unique(z[!is.na(z) & nzchar(z)])
+  } else character()
+  keep_cols <- unique(c(group_col, time_col, entity_col, dep_var_col, md$variable, rf_source_cols, extra_control_cols, context_keep_cols, dep_scale_col, holdout_col))
   ignored_data_cols <- setdiff(names(dt), keep_cols)
   dt <- dt[, ..keep_cols]
+  md[, `:=`(rf_reach_internal_col = NA_character_, rf_frequency_internal_col = NA_character_, rf_population_internal_col = NA_character_)]
+  md[, `:=`(
+    reference_internal_col = NA_character_,
+    reference_value_raw = NA_real_,
+    reference_value_model_scale = NA_real_,
+    reference_value_source = NA_character_,
+    x_scale_center = 0,
+    x_scale_sd = 1,
+    x_scaling = "mean_index"
+  )]
+  reference_rows <- which(md$role %in% c("control", "non_media_treatment"))
+  if (length(reference_rows)) {
+    for (ii in reference_rows) {
+      reference_internal <- paste0("reference_raw__", ii)
+      dt[, (reference_internal) := suppressWarnings(as.numeric(get(md$variable[ii])))]
+      md[ii, reference_internal_col := reference_internal]
+    }
+  }
+  if (length(rf_rows)) {
+    for (ii in rf_rows) {
+      reach_internal <- paste0("rf_reach_raw__", ii)
+      frequency_internal <- paste0("rf_frequency_raw__", ii)
+      population_internal <- paste0("rf_population_raw__", ii)
+      dt[, (reach_internal) := suppressWarnings(as.numeric(get(md$reach_col[ii])))]
+      dt[, (frequency_internal) := suppressWarnings(as.numeric(get(md$frequency_col[ii])))]
+      if (!is.na(md$population_col[ii])) {
+        dt[, (population_internal) := suppressWarnings(as.numeric(get(md$population_col[ii])))]
+      } else {
+        dt[, (population_internal) := 1]
+      }
+      md[ii, `:=`(
+        rf_reach_internal_col = reach_internal,
+        rf_frequency_internal_col = frequency_internal,
+        rf_population_internal_col = population_internal
+      )]
+    }
+  }
 
   dt[, y_original__ := as.numeric(get(dep_var_col))]
   if (!is.null(dep_scale_col)) {
@@ -506,6 +675,17 @@ prepare_stan_data_hier_mmm <- function(data,
     stop("Each group must have at least one training row before mean-indexing. Groups with zero training rows: ",
          paste(no_train_raw[[group_col]], collapse = ", "))
   }
+  if (length(reference_rows)) {
+    for (ii in reference_rows) {
+      ref <- resolve_reference_value_hier_mmm(
+        x = dt[[md$reference_internal_col[ii]]],
+        spec = md$reference_value_spec[ii],
+        train_mask = !dt$is_holdout__,
+        label = paste0("reference value for variable '", md$variable[ii], "'")
+      )
+      md[ii, `:=`(reference_value_raw = ref$value, reference_value_source = ref$source)]
+    }
+  }
 
   if (mean_index) {
     dt[, is_train_tmp__ := as.integer(!is_holdout__)]
@@ -523,15 +703,28 @@ prepare_stan_data_hier_mmm <- function(data,
       dt[, rescale_factor__ := dep_den]
       dt <- mean_index_global_cols(dt, cols = dep_var_col, train_col = "is_train_tmp__")
     }
-    x_cols_to_index <- c(md$variable, extra_control_cols)
+    zscore_cols <- unique(c(md[role %in% c("control", "non_media_treatment"), variable], extra_control_cols))
+    x_cols_to_index <- setdiff(md$variable, zscore_cols)
     if (identical(x_mean_index_scope, "group")) {
       dt <- mean_index_by_group(dt, cols = x_cols_to_index, by = group_col, train_col = "is_train_tmp__")
     } else {
       dt <- mean_index_global_cols(dt, cols = x_cols_to_index, train_col = "is_train_tmp__")
     }
+    zscaled <- zscore_global_cols_hier_mmm(dt, cols = zscore_cols, train_col = "is_train_tmp__")
+    dt <- zscaled$data
+    if (nrow(zscaled$audit)) {
+      md[zscaled$audit, on = .(variable), `:=`(
+        x_scale_center = i.x_scale_center,
+        x_scale_sd = i.x_scale_sd,
+        x_scaling = i.x_scaling
+      )]
+    }
     dt[, is_train_tmp__ := NULL]
   } else {
     dt[!is.finite(rescale_factor__) | is.na(rescale_factor__) | abs(rescale_factor__) <= 1e-8, rescale_factor__ := 1]
+  }
+  if (length(reference_rows)) {
+    md[reference_rows, reference_value_model_scale := (reference_value_raw - x_scale_center) / x_scale_sd]
   }
 
   dt[, y_model__ := as.numeric(get(dep_var_col))]
@@ -559,21 +752,51 @@ prepare_stan_data_hier_mmm <- function(data,
   if (length(anchor_rows)) {
     for (ii in anchor_rows) {
       vv <- md$variable[ii]
-      loc <- curve_rate_from_anchor_hier_mmm(
-        x = dt[[vv]],
-        rrate = md$rrate[ii],
-        dvalue = md$dvalue[ii],
-        anchor_saturation = md$anchor_saturation[ii],
-        curve_type = md$curve_type[ii],
-        train_mask = !dt$is_holdout__,
-        normalize_curve_x = isTRUE(normalize_curve_x),
-        curve_normalization_scope = curve_normalization_scope
-      )
+      loc <- if (md$role[ii] %in% c("reach_frequency", "organic_reach_frequency")) {
+        frequency_train <- dt[[md$rf_frequency_internal_col[ii]]][!dt$is_holdout__]
+        frequency_anchor <- stats::median(frequency_train[is.finite(frequency_train) & frequency_train > 0], na.rm = TRUE)
+        odds <- md$anchor_saturation[ii] / (1 - md$anchor_saturation[ii])
+        if (is.finite(frequency_anchor) && frequency_anchor > 0) odds^(1 / md$dvalue[ii]) / frequency_anchor else NA_real_
+      } else {
+        curve_rate_from_anchor_hier_mmm(
+          x = dt[[vv]],
+          rrate = md$rrate[ii],
+          dvalue = md$dvalue[ii],
+          anchor_saturation = md$anchor_saturation[ii],
+          curve_type = md$curve_type[ii],
+          train_mask = !dt$is_holdout__,
+          normalize_curve_x = isTRUE(normalize_curve_x),
+          curve_normalization_scope = curve_normalization_scope
+        )
+      }
       if (!is.finite(loc) || loc <= 0) {
         stop("Could not derive internal curve_rate from anchor_saturation for variable '", vv,
              "'. Provide explicit curve_rate or check that the variable has positive training support.")
       }
       md$cvalue[ii] <- clip_to_open_interval(loc, md$cvalue_lower[ii], md$cvalue_upper[ii])
+      anchor_sd <- suppressWarnings(as.numeric(md$anchor_saturation_sd[ii]))
+      if (is.finite(anchor_sd) && anchor_sd > 0) {
+        anchor <- md$anchor_saturation[ii]
+        eps <- min(1e-4, anchor / 4, (1 - anchor) / 4)
+        rate_low <- curve_rate_from_anchor_hier_mmm(
+          x = dt[[vv]], rrate = md$rrate[ii], dvalue = md$dvalue[ii],
+          anchor_saturation = anchor - eps, curve_type = md$curve_type[ii],
+          train_mask = !dt$is_holdout__, normalize_curve_x = isTRUE(normalize_curve_x),
+          curve_normalization_scope = curve_normalization_scope
+        )
+        rate_high <- curve_rate_from_anchor_hier_mmm(
+          x = dt[[vv]], rrate = md$rrate[ii], dvalue = md$dvalue[ii],
+          anchor_saturation = anchor + eps, curve_type = md$curve_type[ii],
+          train_mask = !dt$is_holdout__, normalize_curve_x = isTRUE(normalize_curve_x),
+          curve_normalization_scope = curve_normalization_scope
+        )
+        derivative <- abs(rate_high - rate_low) / (2 * eps)
+        rate_sd <- derivative * anchor_sd
+        if (is.finite(rate_sd) && rate_sd > 1e-8) {
+          md$cvalue_precision[ii] <- 1 / rate_sd^2
+          md$cvalue_precision_defaulted[ii] <- FALSE
+        }
+      }
       md$anchor_source[ii] <- ifelse(
         is.na(md$anchor_source[ii]) || !nzchar(md$anchor_source[ii]),
         "direct_metadata_anchor",
@@ -612,7 +835,12 @@ prepare_stan_data_hier_mmm <- function(data,
     coef_hierarchy_scale, coef_hierarchy_scope, hierarchy_key, model_id_parts,
     hierarchy_part_indices, hierarchy_note,
     curve_type, curve_bound, rrate_bound, cvalue_bound, dvalue_bound,
-    anchor_saturation, anchor_source, cvalue_from_anchor
+    anchor_saturation, anchor_saturation_sd, anchor_saturation_precision, anchor_source, cvalue_from_anchor,
+    non_media_baseline_values, control_reference_values, reference_value_spec,
+    reference_value_raw, reference_value_model_scale, reference_value_source,
+    x_scale_center, x_scale_sd, x_scaling,
+    reach_col, frequency_col, population_col, rf_spend_col,
+    rf_reach_internal_col, rf_frequency_internal_col, rf_population_internal_col
   )]
   variable_lookup[, variable_idx := .I]
   variable_lookup[, curve_param_idx := 0L]
@@ -805,6 +1033,31 @@ prepare_stan_data_hier_mmm <- function(data,
 
   curve_idx <- variable_lookup[has_curve == 1L, variable_idx]
   linear_idx <- variable_lookup[has_curve == 0L, variable_idx]
+  is_rf_curve <- variable_lookup[has_curve == 1L, as.integer(role %in% c("reach_frequency", "organic_reach_frequency"))]
+  X_rf_reach <- matrix(0, nrow = nrow(dt), ncol = length(curve_idx))
+  X_rf_frequency <- matrix(0, nrow = nrow(dt), ncol = length(curve_idx))
+  variable_lookup[, rf_reach_train_scale := NA_real_]
+  if (length(curve_idx)) {
+    for (k in seq_along(curve_idx)) {
+      if (is_rf_curve[k] != 1L) next
+      j <- curve_idx[k]
+      reach_raw <- suppressWarnings(as.numeric(dt[[variable_lookup$rf_reach_internal_col[j]]]))
+      frequency_raw <- suppressWarnings(as.numeric(dt[[variable_lookup$rf_frequency_internal_col[j]]]))
+      population_raw <- suppressWarnings(as.numeric(dt[[variable_lookup$rf_population_internal_col[j]]]))
+      if (any(!is.finite(reach_raw) | reach_raw < 0)) stop("RF reach must be finite and non-negative for variable: ", variable_lookup$variable[j])
+      if (any(!is.finite(frequency_raw) | frequency_raw < 0)) stop("RF frequency must be finite and non-negative for variable: ", variable_lookup$variable[j])
+      if (any(!is.finite(population_raw) | population_raw <= 0)) stop("RF population must be finite and positive for variable: ", variable_lookup$variable[j])
+      reach_per_capita <- reach_raw / population_raw
+      scale_mask <- !dt$is_holdout__ & is.finite(reach_per_capita) & reach_per_capita > 0
+      reach_scale <- stats::median(reach_per_capita[scale_mask], na.rm = TRUE)
+      if (!is.finite(reach_scale) || reach_scale <= 1e-12) stop("RF reach has no positive training support for variable: ", variable_lookup$variable[j])
+      X_rf_reach[, k] <- reach_per_capita / reach_scale
+      X_rf_frequency[, k] <- frequency_raw
+      variable_lookup[j, rf_reach_train_scale := reach_scale]
+    }
+  }
+  storage.mode(X_rf_reach) <- "double"
+  storage.mode(X_rf_frequency) <- "double"
 
   intercept_spec <- parse_model_intercept(intercept_type = intercept_type, ucm_spec = ucm_spec)
   if (isTRUE(center_predictors_for_sampling) && intercept_spec$intercept_mode == 0L) {
@@ -823,21 +1076,34 @@ prepare_stan_data_hier_mmm <- function(data,
       rr <- curve_raw_to_value(variable_lookup$rrate_raw_mu[j], variable_lookup$rrate_lower[j], variable_lookup$rrate_upper[j])
       cv <- curve_raw_to_value(variable_lookup$cvalue_raw_mu[j], variable_lookup$cvalue_lower[j], variable_lookup$cvalue_upper[j])
       dv <- curve_raw_to_value(variable_lookup$dvalue_raw_mu[j], variable_lookup$dvalue_lower[j], variable_lookup$dvalue_upper[j])
-      curve_type_k <- variable_lookup$curve_type[j] %||% "weibull"
+      curve_type_k <- variable_lookup$curve_type[j] %||% curve_type_default
       for (g in seq_len(nrow(group_lookup))) {
         idx <- which(dt$group_idx == g)
         if (!length(idx)) next
-        tr <- media_transform_hier_mmm(
-          x = X[idx, j],
-          rrate = rr,
-          cvalue = cv,
-          dvalue = dv,
-          curve_type = curve_type_k,
-          train_mask = !dt$is_holdout__[idx],
-          normalize_curve_x = isTRUE(normalize_curve_x),
-          curve_normalization_scope = curve_normalization_scope,
-          multiplier = 1
-        )
+        tr <- if (is_rf_curve[k] == 1L) {
+          reach_frequency_transform_hier_mmm(
+            reach_scaled = X_rf_reach[idx, k],
+            frequency = X_rf_frequency[idx, k],
+            rrate = rr,
+            cvalue = cv,
+            dvalue = dv,
+            train_mask = !dt$is_holdout__[idx],
+            normalize_curve_x = isTRUE(normalize_curve_x),
+            curve_normalization_scope = curve_normalization_scope
+          )
+        } else {
+          media_transform_hier_mmm(
+            x = X[idx, j],
+            rrate = rr,
+            cvalue = cv,
+            dvalue = dv,
+            curve_type = curve_type_k,
+            train_mask = !dt$is_holdout__[idx],
+            normalize_curve_x = isTRUE(normalize_curve_x),
+            curve_normalization_scope = curve_normalization_scope,
+            multiplier = 1
+          )
+        }
         X_curve_fixed[idx, k] <- tr$transformed
         X_curve_fixed_center[g, k] <- tr$center_value
       }
@@ -953,8 +1219,16 @@ prepare_stan_data_hier_mmm <- function(data,
   context_pos_pos <- which(context_sign_code == 1L)
   context_neg_pos <- which(context_sign_code == -1L)
   context_free_pos <- which(context_sign_code == 0L)
+  experiment_calibration <- build_experiment_calibration_hier_mmm(
+    calibration_input = calibration_input,
+    data = dt,
+    variable_lookup = variable_lookup,
+    group_col = group_col,
+    time_col = time_col
+  )
 
   stan_data <- list(
+    prior_only = as.integer(isTRUE(prior_only)),
     N = nrow(dt),
     J = nrow(variable_lookup),
     G = nrow(group_lookup),
@@ -982,8 +1256,16 @@ prepare_stan_data_hier_mmm <- function(data,
     curve_idx = as.integer(curve_idx),
     linear_idx = as.integer(linear_idx),
     curve_type = variable_lookup[has_curve == 1L, as.integer(fifelse(curve_type == "hill", 2L, 1L))],
+    is_rf_curve = as.integer(is_rf_curve),
+    X_rf_reach = X_rf_reach,
+    X_rf_frequency = X_rf_frequency,
     X_curve_fixed = X_curve_fixed,
     X_curve_fixed_center = X_curve_fixed_center,
+    C_calibration = nrow(experiment_calibration$audit),
+    calibration_variable_idx = experiment_calibration$variable_idx,
+    calibration_weight = experiment_calibration$weight,
+    calibration_observed_lift = experiment_calibration$observed_lift,
+    calibration_observed_sd = experiment_calibration$observed_sd,
     K_context = ncol(X_context),
     X_context = X_context,
     context_variable_idx = if (nrow(context_effect_audit)) as.integer(context_effect_audit$variable_idx) else integer(),
@@ -1143,8 +1425,14 @@ prepare_stan_data_hier_mmm <- function(data,
   if (length(stan_data$curve_idx) != stan_data$J_curve) stop("Internal error: curve_idx length does not match J_curve.")
   if (length(stan_data$linear_idx) != stan_data$J_linear) stop("Internal error: linear_idx length does not match J_linear.")
   if (length(stan_data$curve_type) != stan_data$J_curve) stop("Internal error: curve_type length does not match J_curve.")
+  if (length(stan_data$is_rf_curve) != stan_data$J_curve) stop("Internal error: is_rf_curve length does not match J_curve.")
+  if (nrow(stan_data$X_rf_reach) != stan_data$N || ncol(stan_data$X_rf_reach) != stan_data$J_curve) stop("Internal error: X_rf_reach dimensions do not match N/J_curve.")
+  if (nrow(stan_data$X_rf_frequency) != stan_data$N || ncol(stan_data$X_rf_frequency) != stan_data$J_curve) stop("Internal error: X_rf_frequency dimensions do not match N/J_curve.")
   if (nrow(stan_data$X_curve_fixed) != stan_data$N || ncol(stan_data$X_curve_fixed) != stan_data$J_curve) stop("Internal error: X_curve_fixed dimensions do not match N/J_curve.")
   if (nrow(stan_data$X_curve_fixed_center) != stan_data$G || ncol(stan_data$X_curve_fixed_center) != stan_data$J_curve) stop("Internal error: X_curve_fixed_center dimensions do not match G/J_curve.")
+  if (length(stan_data$calibration_variable_idx) != stan_data$C_calibration) stop("Internal error: calibration_variable_idx length does not match C_calibration.")
+  if (nrow(stan_data$calibration_weight) != stan_data$N || ncol(stan_data$calibration_weight) != stan_data$C_calibration) stop("Internal error: calibration_weight dimensions do not match N/C_calibration.")
+  if (length(stan_data$calibration_observed_lift) != stan_data$C_calibration || length(stan_data$calibration_observed_sd) != stan_data$C_calibration) stop("Internal error: calibration evidence lengths do not match C_calibration.")
   if (nrow(stan_data$X_context) != stan_data$N || ncol(stan_data$X_context) != stan_data$K_context) stop("Internal error: X_context dimensions do not match N/K_context.")
   if (length(stan_data$context_variable_idx) != stan_data$K_context) stop("Internal error: context_variable_idx length does not match K_context.")
   if (length(stan_data$context_coef_mu) != stan_data$K_context || length(stan_data$context_coef_sd) != stan_data$K_context) stop("Internal error: context coefficient prior lengths do not match K_context.")
@@ -1190,7 +1478,8 @@ prepare_stan_data_hier_mmm <- function(data,
       rrate_raw_mu, rrate_raw_sd, cvalue_raw_mu, cvalue_raw_sd,
       use_observed_cvalue_prior, observed_cvalue_raw_mu, observed_cvalue_raw_sd,
       observed_cvalue_mu, observed_cvalue_reliability, observed_cvalue_source,
-      anchor_saturation, anchor_source, cvalue_from_anchor,
+      anchor_saturation, anchor_saturation_sd, anchor_saturation_precision, anchor_source, cvalue_from_anchor,
+      reach_col, frequency_col, population_col, rf_spend_col, rf_reach_train_scale,
       dvalue_raw_mu, dvalue_raw_sd,
       rrate_lower, rrate_upper, cvalue_lower, cvalue_upper, dvalue_lower, dvalue_upper,
       possible_halo_somewhere,
@@ -1202,6 +1491,7 @@ prepare_stan_data_hier_mmm <- function(data,
     )],
     variable_lookup = variable_lookup,
     context_effects = context_effect_audit,
+    experiment_calibration = experiment_calibration$audit,
     group_lookup = group_lookup,
     coef_hierarchy_key_lookup = coef_hierarchy_key$key_lookup,
     coef_hierarchy_key_note = coef_hierarchy_key$note,
@@ -1277,5 +1567,3 @@ prepare_stan_data_hier_mmm <- function(data,
     holiday_config = holiday_config
   )
 }
-
-

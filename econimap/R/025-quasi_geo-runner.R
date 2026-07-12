@@ -22,6 +22,31 @@ qgt_add_overlap_diagnostics <- function(estimates) {
       diagnostic_reason := paste(diagnostic_reason, "overlapping_events", sep = "|")]
   out[]
 }
+
+qgt_add_multiple_testing_diagnostics <- function(estimates) {
+  if (is.null(estimates) || !nrow(estimates)) return(estimates)
+  out <- copy(estimates)
+  if (!"donor_placebo_p_value" %in% names(out)) out[, donor_placebo_p_value := NA_real_]
+  if (!"time_placebo_p_value" %in% names(out)) out[, time_placebo_p_value := NA_real_]
+  out[, placebo_test_p_value := vapply(seq_len(.N), function(i) {
+    z <- c(donor_placebo_p_value[i], time_placebo_p_value[i])
+    z <- z[is.finite(z)]
+    if (length(z)) min(z) else NA_real_
+  }, numeric(1))]
+  out[, placebo_bh_q_value := {
+    z <- placebo_test_p_value
+    ans <- rep(NA_real_, .N)
+    ok <- is.finite(z)
+    if (any(ok)) ans[ok] <- stats::p.adjust(z[ok], method = "BH")
+    ans
+  }, by = variable]
+  out[, multiple_testing_warning := fifelse(
+    .N > 1L,
+    paste0("BH-adjusted across ", .N, " candidate events for this variable; event discovery remains observational."),
+    "Single candidate event; no across-event multiplicity adjustment required."
+  ), by = variable]
+  out[]
+}
 run_quasi_geo_test <- function(input_data,
                                date_col,
                                dep_var_col,
@@ -158,6 +183,7 @@ run_quasi_geo_test <- function(input_data,
   national_diagnostics <- qgt_national_repeated_media_diagnostics(dt_estimation, date_col, geo_col, vm)
   event_estimates_all <- rbindlist(list(estimates, national_diagnostics), use.names = TRUE, fill = TRUE)
   event_estimates_all <- qgt_classify_evidence_events(event_estimates_all)
+  event_estimates_all <- qgt_add_multiple_testing_diagnostics(event_estimates_all)
   event_estimates_all <- qgt_attach_rollup_metadata(event_estimates_all, rollup_lookup)
   estimates <- qgt_attach_rollup_metadata(estimates, rollup_lookup)
   prior_events <- copy(event_estimates_all)
@@ -180,6 +206,9 @@ run_quasi_geo_test <- function(input_data,
   }
   summary_all <- qgt_summarize_dose_response(event_estimates_all)
   summary <- qgt_summarize_dose_response(estimates)
+  curve_evidence_points <- qgt_build_curve_evidence_points(event_estimates_all)
+  curve_prior_fits <- qgt_fit_conservative_curve_priors(curve_evidence_points)
+  multi_treated_market_estimates <- qgt_build_multi_treated_market_estimates(event_estimates_all)
   prior_recommendations <- qgt_build_prior_recommendations(prior_events)
   bundle_prior_recommendations <- qgt_build_bundle_prior_recommendations(prior_events)
   evidence_summary <- qgt_build_evidence_summary(event_estimates_all, "overall")
@@ -203,6 +232,9 @@ run_quasi_geo_test <- function(input_data,
     fwrite(diagnostic_events, file.path(output_dir, paste0(prefix, "_diagnostic_events.csv")))
     fwrite(summary_all, file.path(output_dir, paste0(prefix, "_dose_response_summary_all.csv")))
     fwrite(summary, file.path(output_dir, paste0(prefix, "_dose_response_summary.csv")))
+    fwrite(curve_evidence_points, file.path(output_dir, paste0(prefix, "_curve_evidence_points.csv")))
+    fwrite(curve_prior_fits, file.path(output_dir, paste0(prefix, "_curve_prior_fits.csv")))
+    fwrite(multi_treated_market_estimates, file.path(output_dir, paste0(prefix, "_multi_treated_market_estimates.csv")))
     fwrite(prior_recommendations, file.path(output_dir, paste0(prefix, "_prior_recommendations.csv")))
     fwrite(bundle_prior_recommendations, file.path(output_dir, paste0(prefix, "_bundle_prior_recommendations.csv")))
     fwrite(evidence_summary, file.path(output_dir, paste0(prefix, "_evidence_summary.csv")))
@@ -227,6 +259,9 @@ run_quasi_geo_test <- function(input_data,
     diagnostic_events = diagnostic_events[],
     dose_response_summary_all = summary_all[],
     dose_response_summary = summary[],
+    curve_evidence_points = curve_evidence_points[],
+    curve_prior_fits = curve_prior_fits[],
+    multi_treated_market_estimates = multi_treated_market_estimates[],
     prior_recommendations = prior_recommendations[],
     bundle_prior_recommendations = bundle_prior_recommendations[],
     evidence_summary = evidence_summary[],
@@ -239,7 +274,10 @@ run_quasi_geo_test <- function(input_data,
       "Designed to detect natural or unannounced geo tests.",
       "Event detection is signed: up ramps, down ramps, mixed ramps, and media cutoffs are retained.",
       "No default hard qualification is applied; events are estimated when possible and diagnosed afterward with numeric evidence_score.",
-      "False-positive review includes pre-period placebo, donor-geo placebo, and leave-one-donor-out sensitivity diagnostics.",
+      "False-positive review includes repeated pre-period time placebos, donor-geo placebos, BH multiplicity warnings, and leave-one-donor-out sensitivity diagnostics.",
+      "Ridge synthetic-control lambda uses blocked pre-period time validation when history is sufficient.",
+      "Multiple channel-specific support levels can yield an uncertainty-weighted conservative curve prior; weak/confounded points remain diagnostic.",
+      "Concurrent treated markets are pooled with inverse-variance weighting and heterogeneity diagnostics without double-counting them into event-level priors.",
       "evidence_score_0_100 is an analyst-facing ranking/filter built from GeoLift/matched-market-style diagnostics, not statistical proof.",
       "Use min_evidence_score_to_keep or min_evidence_tier_to_keep only for optional reporting/sensitivity filtering; prior generation uses min_evidence_score_for_prior.",
       "normalize = 'geo_mean_index' is the fallback when population or comparable exposure denominators are unavailable."

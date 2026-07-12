@@ -87,6 +87,12 @@ qgt_estimate_event <- function(dt,
   donor_cols <- intersect(clean_donors, names(pre_wide))
   if (!length(donor_cols)) return(qgt_event_not_estimable(event, "no_donor_data_in_pre_period"))
   weights <- qgt_ridge_synth_weights(pre_wide[[treat_geo]], pre_wide[, ..donor_cols], lambda_grid = lambda_grid, simplex = TRUE)
+  ridge_lambda <- attr(weights, "lambda") %||% NA_real_
+  ridge_lambda_cv_rmse <- attr(weights, "lambda_cv_rmse") %||% NA_real_
+  ridge_lambda_selection_method <- attr(weights, "lambda_selection_method") %||% NA_character_
+  ridge_lambda_cv_fold_n <- attr(weights, "lambda_cv_fold_n") %||% 0L
+  ridge_retained_donor_n <- attr(weights, "retained_donor_n") %||% NA_integer_
+  ridge_dropped_zero_variance_donor_n <- attr(weights, "dropped_zero_variance_donor_n") %||% NA_integer_
   synth_available <- !all(!is.finite(weights))
   if (isTRUE(synth_available)) names(weights) <- donor_cols
 
@@ -292,6 +298,30 @@ qgt_estimate_event <- function(dt,
   } else {
     NA_real_
   }
+  time_placebo_window_n <- min(max(2L, as.integer(post_weeks)), length(pre_resid))
+  time_placebo_lifts <- if (time_placebo_window_n >= 2L && length(pre_resid) >= time_placebo_window_n) {
+    starts <- seq_len(length(pre_resid) - time_placebo_window_n + 1L)
+    vapply(starts, function(i) {
+      z <- pre_resid[seq.int(i, i + time_placebo_window_n - 1L)]
+      if (all(is.finite(z))) sum(z) else NA_real_
+    }, numeric(1))
+  } else {
+    numeric()
+  }
+  time_placebo_lifts <- time_placebo_lifts[is.finite(time_placebo_lifts)]
+  time_placebo_p_value <- if (length(time_placebo_lifts) && is.finite(post_lift)) {
+    (1 + sum(abs(time_placebo_lifts) >= abs(post_lift))) / (1 + length(time_placebo_lifts))
+  } else {
+    NA_real_
+  }
+  time_placebo_strength <- if (is.finite(time_placebo_p_value)) qgt_clip(1 - time_placebo_p_value, 0, 1) else NA_real_
+  time_placebo_lift_median <- if (length(time_placebo_lifts)) stats::median(time_placebo_lifts) else NA_real_
+  time_placebo_lift_max_abs <- if (length(time_placebo_lifts)) max(abs(time_placebo_lifts)) else NA_real_
+  time_placebo_false_positive_rate <- if (length(time_placebo_lifts) && is.finite(post_lift)) {
+    mean(abs(time_placebo_lifts) >= abs(post_lift))
+  } else {
+    NA_real_
+  }
   incremental_outcome_ci_low <- if (is.finite(lift_se)) post_lift - 1.96 * lift_se else NA_real_
   incremental_outcome_ci_high <- if (is.finite(lift_se)) post_lift + 1.96 * lift_se else NA_real_
   post_actual <- if (any(is.finite(post_complete[[treat_geo]]))) sum(post_complete[[treat_geo]], na.rm = TRUE) else NA_real_
@@ -380,7 +410,8 @@ qgt_estimate_event <- function(dt,
   donor_contam_penalty <- if (isTRUE(donor_contamination_flag) || is.infinite(donor_contamination_max)) 1 else qgt_clip(donor_contamination_max / donor_contamination_pct, 0, 1)
   pre_period_placebo_penalty <- if (is.finite(placebo_lift_abs_ratio)) qgt_clip(placebo_lift_abs_ratio, 0, 1) else 0.5
   donor_placebo_penalty <- if (is.finite(donor_placebo_p_value)) qgt_clip((donor_placebo_p_value - 0.10) / 0.40, 0, 1) else 0.5
-  placebo_penalty <- max(pre_period_placebo_penalty, donor_placebo_penalty, na.rm = TRUE)
+  time_placebo_penalty <- if (is.finite(time_placebo_p_value)) qgt_clip((time_placebo_p_value - 0.10) / 0.40, 0, 1) else 0.5
+  placebo_penalty <- max(pre_period_placebo_penalty, donor_placebo_penalty, time_placebo_penalty, na.rm = TRUE)
   signal_score <- if (is.finite(lift_z)) qgt_clip((abs(lift_z) - 0.5) / 2.0, 0, 1) else 0.25
   direction_consistency_score <- if (is.finite(marginal_response)) {
     if (marginal_response > 0) 1 else if (marginal_response < 0) 0.15 else 0.50
@@ -426,6 +457,7 @@ qgt_estimate_event <- function(dt,
   if (is.finite(lookback_sensitivity_score) && lookback_sensitivity_score < 0.70) diagnostic_parts <- c(diagnostic_parts, "lookback_sensitive_pre_fit")
   if (is.finite(placebo_lift_abs_ratio) && placebo_lift_abs_ratio > 0.50) diagnostic_parts <- c(diagnostic_parts, "large_pre_period_placebo_lift")
   if (is.finite(donor_placebo_p_value) && donor_placebo_p_value >= 0.25) diagnostic_parts <- c(diagnostic_parts, "donor_placebo_false_positive_risk")
+  if (is.finite(time_placebo_p_value) && time_placebo_p_value >= 0.25) diagnostic_parts <- c(diagnostic_parts, "time_placebo_false_positive_risk")
   if (is.finite(leave_one_donor_out_stability_score) && leave_one_donor_out_stability_score < 0.50) diagnostic_parts <- c(diagnostic_parts, "donor_leave_one_out_sensitive")
   if (isTRUE(donor_dominant_flag)) diagnostic_parts <- c(diagnostic_parts, "dominant_donor_weight")
   if (is.finite(lift_z) && abs(lift_z) < 1.00) diagnostic_parts <- c(diagnostic_parts, "weak_lift_signal")
@@ -532,10 +564,22 @@ qgt_estimate_event <- function(dt,
     donor_placebo_strength = donor_placebo_strength,
     donor_placebo_lift_median = donor_placebo_lift_median,
     donor_placebo_lift_max_abs = donor_placebo_lift_max_abs,
+    time_placebo_n = length(time_placebo_lifts),
+    time_placebo_p_value = time_placebo_p_value,
+    time_placebo_strength = time_placebo_strength,
+    time_placebo_lift_median = time_placebo_lift_median,
+    time_placebo_lift_max_abs = time_placebo_lift_max_abs,
+    time_placebo_false_positive_rate = time_placebo_false_positive_rate,
     leave_one_donor_out_lift_sd = leave_one_donor_out_lift_sd,
     leave_one_donor_out_lift_max_abs_delta = leave_one_donor_out_lift_max_abs_delta,
     leave_one_donor_out_stability_score = leave_one_donor_out_stability_score,
     selected_counterfactual_method = selected_counterfactual_method,
+    ridge_lambda = ridge_lambda,
+    ridge_lambda_cv_rmse = ridge_lambda_cv_rmse,
+    ridge_lambda_selection_method = ridge_lambda_selection_method,
+    ridge_lambda_cv_fold_n = as.integer(ridge_lambda_cv_fold_n),
+    ridge_retained_donor_n = as.integer(ridge_retained_donor_n),
+    ridge_dropped_zero_variance_donor_n = as.integer(ridge_dropped_zero_variance_donor_n),
     counterfactual_fallback_reason = counterfactual_fallback_reason,
     synthetic_control_pre_fit_score = synthetic_control_pre_fit_score,
     tbr_pre_fit_score = tbr_fit$pre_fit_score,

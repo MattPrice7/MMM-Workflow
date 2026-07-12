@@ -6,6 +6,17 @@
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+if (!exists("econimap_output_metadata", mode = "function")) {
+  econimap_output_metadata <- function(workflow, surface = NA_character_) {
+    data.table::data.table(
+      package = "econimap",
+      workflow = as.character(workflow),
+      surface = as.character(surface),
+      generated_at_utc = format(Sys.time(), tz = "UTC", usetz = TRUE)
+    )
+  }
+}
+
 qgt_clip <- function(x, lo, hi) pmin(pmax(x, lo), hi)
 qgt_num <- function(x) suppressWarnings(as.numeric(x))
 qgt_date <- function(x) {
@@ -137,7 +148,9 @@ qgt_project_simplex <- function(v) {
 qgt_ridge_synth_weights <- function(y_treat_pre,
                                     donor_pre_mat,
                                     lambda_grid = 10 ^ seq(-4, 2, length.out = 20),
-                                    simplex = TRUE) {
+                                    simplex = TRUE,
+                                    blocked_cv = TRUE,
+                                    max_cv_folds = 3L) {
   y <- qgt_num(y_treat_pre)
   X <- as.matrix(donor_pre_mat)
   storage.mode(X) <- "double"
@@ -154,25 +167,58 @@ qgt_ridge_synth_weights <- function(y_treat_pre,
   })
   if (!any(keep_cols)) return(rep(NA_real_, full_p))
   X <- X[, keep_cols, drop = FALSE]
-  y <- y - mean(y, na.rm = TRUE)
-  X <- scale(X, center = TRUE, scale = FALSE)
-  XtX <- crossprod(X)
-  Xty <- crossprod(X, y)
   lambda_grid <- sort(unique(qgt_num(lambda_grid)))
   lambda_grid <- lambda_grid[is.finite(lambda_grid) & lambda_grid >= 0]
   if (!length(lambda_grid)) lambda_grid <- 1
-  best <- NULL
-  for (lam in lambda_grid) {
-    b <- tryCatch(as.numeric(solve(XtX + diag(lam, ncol(X)), Xty)), error = function(e) rep(NA_real_, ncol(X)))
+
+  fit_one <- function(y_train, X_train, lam) {
+    y_mean <- mean(y_train)
+    x_means <- colMeans(X_train)
+    yc <- y_train - y_mean
+    Xc <- sweep(X_train, 2L, x_means, "-")
+    b <- tryCatch(
+      as.numeric(solve(crossprod(Xc) + diag(lam, ncol(Xc)), crossprod(Xc, yc))),
+      error = function(e) rep(NA_real_, ncol(Xc))
+    )
     if (simplex) b <- qgt_project_simplex(b) else b[!is.finite(b)] <- 0
-    pred <- as.numeric(X %*% b)
-    mse <- mean((y - pred) ^ 2, na.rm = TRUE)
-    if (is.finite(mse) && (is.null(best) || !is.finite(best$mse) || mse < best$mse)) best <- list(weights = b, lambda = lam, mse = mse)
+    list(weights = b, intercept = y_mean - sum(b * x_means))
   }
-  if (is.null(best)) return(rep(NA_real_, full_p))
+
+  n <- length(y)
+  fold_ends <- unique(as.integer(floor(seq(0.50, 0.80, length.out = max(2L, as.integer(max_cv_folds))) * n)))
+  folds <- lapply(fold_ends, function(train_end) {
+    valid_end <- min(n, train_end + max(1L, floor(n / 6L)))
+    if (train_end < min_pre_rows || valid_end <= train_end) return(NULL)
+    list(train = seq_len(train_end), valid = seq.int(train_end + 1L, valid_end))
+  })
+  folds <- Filter(Negate(is.null), folds)
+  use_cv <- isTRUE(blocked_cv) && length(folds) >= 2L
+  scores <- vapply(lambda_grid, function(lam) {
+    if (use_cv) {
+      fold_mse <- vapply(folds, function(fold) {
+        fit <- fit_one(y[fold$train], X[fold$train, , drop = FALSE], lam)
+        pred <- fit$intercept + as.numeric(X[fold$valid, , drop = FALSE] %*% fit$weights)
+        mean((y[fold$valid] - pred)^2)
+      }, numeric(1))
+      mean(fold_mse[is.finite(fold_mse)])
+    } else {
+      fit <- fit_one(y, X, lam)
+      pred <- fit$intercept + as.numeric(X %*% fit$weights)
+      mean((y - pred)^2)
+    }
+  }, numeric(1))
+  if (!any(is.finite(scores))) return(rep(NA_real_, full_p))
+  best_i <- which.min(scores)
+  best <- fit_one(y, X, lambda_grid[best_i])
+  if (all(!is.finite(best$weights))) return(rep(NA_real_, full_p))
   out <- rep(0, full_p)
   out[keep_cols] <- best$weights
-  attr(out, "lambda") <- best$lambda
+  attr(out, "lambda") <- lambda_grid[best_i]
+  attr(out, "lambda_cv_rmse") <- sqrt(scores[best_i])
+  attr(out, "lambda_selection_method") <- if (use_cv) "blocked_time_cv" else "in_sample_fallback"
+  attr(out, "lambda_cv_fold_n") <- if (use_cv) length(folds) else 0L
+  attr(out, "retained_donor_n") <- sum(keep_cols)
+  attr(out, "dropped_zero_variance_donor_n") <- sum(!keep_cols)
   out
 }
 qgt_tbr_counterfactual <- function(wide,

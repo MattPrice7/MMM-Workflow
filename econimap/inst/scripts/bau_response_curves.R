@@ -20,6 +20,16 @@ bau_require_data_table <- function() {
 bau_as_dt <- function(x, label = "input") {
   bau_require_data_table()
   if (is.null(x)) return(data.table::data.table())
+  if (is.character(x) && length(x) == 1L && file.exists(x)) {
+    ext <- tolower(tools::file_ext(x))
+    if (ext %in% c("csv", "txt")) return(data.table::fread(x))
+    if (ext %in% c("xlsx", "xls")) {
+      if (!requireNamespace("readxl", quietly = TRUE)) {
+        stop(label, " points to an Excel file; install readxl or pass a data.frame/data.table.", call. = FALSE)
+      }
+      return(data.table::as.data.table(readxl::read_excel(x)))
+    }
+  }
   data.table::as.data.table(data.table::copy(x))
 }
 
@@ -117,6 +127,18 @@ bau_rate_from_anchor <- function(anchor_x, anchor_saturation = 0.50, shape = 1, 
   }
 }
 
+bau_half_saturation_x <- function(curve_rate, shape = 1, curve_type = "hill") {
+  curve_rate <- bau_num(curve_rate)[1]
+  shape <- bau_num(shape)[1]
+  if (!is.finite(curve_rate) || curve_rate <= 0 || !is.finite(shape) || shape <= 0) return(NA_real_)
+  curve_type <- bau_normalize_curve_type(curve_type)[1]
+  if (identical(curve_type, "hill")) {
+    1 / curve_rate
+  } else {
+    (-log(0.5)) ^ (1 / shape) / curve_rate
+  }
+}
+
 bau_adstock <- function(x, decay = 0) {
   x <- pmax(bau_num(x), 0)
   x[!is.finite(x)] <- 0
@@ -135,6 +157,106 @@ bau_first_finite <- function(...) {
   vals <- bau_num(vals)
   vals <- vals[is.finite(vals)]
   if (length(vals)) vals[1] else NA_real_
+}
+
+bau_normalize_prior_type <- function(x, default = "uniform") {
+  out <- tolower(trimws(as.character(x)[1] %||% default))
+  out <- gsub("[ -]+", "_", out)
+  if (out %in% c("truncnorm", "truncated_norm", "normal", "gaussian")) out <- "truncated_normal"
+  if (out %in% c("lower", "lower_bound", "creep", "creep_up")) out <- "lower_bound_complexity"
+  if (!out %in% c("uniform", "truncated_normal", "lower_bound_complexity")) out <- default
+  out
+}
+
+bau_parse_compact_prior <- function(x, default_type = "uniform") {
+  s <- trimws(as.character(x)[1] %||% "")
+  out <- list(
+    is_prior = FALSE,
+    type = bau_normalize_prior_type(default_type),
+    mean = NA_real_,
+    sd = NA_real_,
+    lower = NA_real_,
+    upper = NA_real_
+  )
+  if (is.na(s) || !nzchar(s)) return(out)
+  m <- regexec("^([A-Za-z_][A-Za-z0-9_. -]*)\\((.*)\\)$", s)
+  hit <- regmatches(s, m)[[1]]
+  if (length(hit) < 3L) return(out)
+  type <- bau_normalize_prior_type(hit[2], default = default_type)
+  args <- trimws(strsplit(hit[3], ",", fixed = TRUE)[[1]])
+  nums <- bau_num(args)
+  out$is_prior <- TRUE
+  out$type <- type
+  if (identical(type, "truncated_normal")) {
+    out$mean <- nums[1] %||% NA_real_
+    out$sd <- nums[2] %||% NA_real_
+    out$lower <- nums[3] %||% NA_real_
+    out$upper <- nums[4] %||% NA_real_
+  } else if (identical(type, "uniform")) {
+    out$lower <- nums[1] %||% NA_real_
+    out$upper <- nums[2] %||% NA_real_
+  } else if (identical(type, "lower_bound_complexity")) {
+    out$lower <- nums[1] %||% NA_real_
+    out$upper <- nums[2] %||% NA_real_
+  }
+  out
+}
+
+bau_normalize_anchor_basis <- function(x) {
+  out <- tolower(trimws(as.character(x)[1] %||% "active_median"))
+  if (is.na(out) || !nzchar(out)) out <- "active_median"
+  out <- gsub("[ -]+", "_", out)
+  out <- gsub("^active_", "", out)
+  switch(out,
+    median = "active_median",
+    med = "active_median",
+    mean = "active_mean",
+    avg = "active_mean",
+    average = "active_mean",
+    geomean = "active_geomean",
+    geo_mean = "active_geomean",
+    geometric_mean = "active_geomean",
+    median_mean_geomean = "active_median_mean_geomean",
+    geomean_median_mean = "active_median_mean_geomean",
+    median_mean_midpoint = "active_median_mean_midpoint",
+    midpoint = "active_median_mean_midpoint",
+    mid = "active_median_mean_midpoint",
+    "active_median"
+  )
+}
+
+bau_parse_anchor_spec <- function(x) {
+  s <- trimws(as.character(x)[1] %||% "")
+  out <- list(basis = NA_character_, saturation = NA_real_)
+  if (is.na(s) || !nzchar(s)) return(out)
+  s <- gsub("[()]", ",", s)
+  parts <- trimws(strsplit(s, ",", fixed = TRUE)[[1]])
+  parts <- parts[nzchar(parts)]
+  if (!length(parts)) return(out)
+  nums <- suppressWarnings(as.numeric(parts))
+  non_num <- parts[!is.finite(nums)]
+  num <- nums[is.finite(nums)]
+  if (length(non_num)) out$basis <- bau_normalize_anchor_basis(non_num[1])
+  if (length(num)) out$saturation <- bau_clip(num[1], 0.01, 0.99)
+  out
+}
+
+bau_anchor_x_from_values <- function(z, active, anchor_basis = "active_median") {
+  vals <- bau_num(z[active])
+  vals <- vals[is.finite(vals) & vals > 0]
+  if (!length(vals)) return(NA_real_)
+  med <- stats::median(vals, na.rm = TRUE)
+  mn <- mean(vals, na.rm = TRUE)
+  gm <- exp(mean(log(vals), na.rm = TRUE))
+  basis <- bau_normalize_anchor_basis(anchor_basis)
+  out <- switch(basis,
+    active_mean = mn,
+    active_geomean = gm,
+    active_median_mean_geomean = sqrt(pmax(med, 1e-12) * pmax(mn, 1e-12)),
+    active_median_mean_midpoint = (med + mn) / 2,
+    med
+  )
+  if (is.finite(out) && out > 0) out else med
 }
 
 bau_apply_anchor_overrides <- function(vm, channel_curve_anchors = NULL) {
@@ -163,6 +285,116 @@ bau_apply_anchor_overrides <- function(vm, channel_curve_anchors = NULL) {
   vm[]
 }
 
+bau_global_rrate_default <- function(rrate_default = NA_real_, global_bounds = c(0, 0.90)) {
+  gb <- sort(bau_clip(bau_num(global_bounds[1:2]), 0, 0.999))
+  if (length(gb) < 2L || any(!is.finite(gb)) || gb[1] >= gb[2]) gb <- c(0, 0.90)
+  default <- bau_num(rrate_default)[1]
+  if (!is.finite(default)) default <- gb[1]
+  list(default = bau_clip(default, gb[1], gb[2]), bounds = gb, source = "global_rrate_prior")
+}
+
+bau_rrate_settings_for_row <- function(vm,
+                                       row_i,
+                                       global_bounds = c(0, 0.90),
+                                       global_default = NA_real_,
+                                       global_prior_type = "uniform",
+                                       global_prior_mean = NA_real_,
+                                       global_prior_sd = NA_real_,
+                                       enable_default = TRUE,
+                                       use_global_default = FALSE) {
+  defaults <- bau_global_rrate_default(global_default, global_bounds)
+  gb <- sort(bau_clip(bau_num(global_bounds[1:2]), 0, 0.999))
+  if (length(gb) < 2L || any(!is.finite(gb))) gb <- c(0, 0.90)
+  bounds <- defaults$bounds
+  bounds_source <- "global_rrate_bounds"
+
+  lo_col <- bau_pick_col(vm, c("rrate_min", "rrate_lower", "adstock_decay_min", "adstock_decay_lower"))
+  hi_col <- bau_pick_col(vm, c("rrate_max", "rrate_upper", "adstock_decay_max", "adstock_decay_upper"))
+  if (!is.na(lo_col) || !is.na(hi_col)) {
+    lo <- if (!is.na(lo_col)) bau_num(vm[[lo_col]][row_i]) else NA_real_
+    hi <- if (!is.na(hi_col)) bau_num(vm[[hi_col]][row_i]) else NA_real_
+    if (is.finite(lo)) bounds[1] <- max(0, lo)
+    if (is.finite(hi)) bounds[2] <- min(0.999, hi)
+    bounds_source <- "variable_map_bounds"
+  }
+  if (!is.finite(bounds[1]) || !is.finite(bounds[2]) || bounds[1] >= bounds[2]) {
+    bounds <- gb
+    bounds_source <- "global_bounds_fallback"
+  }
+
+  supplied_default <- NA_real_
+  compact <- NULL
+  compact_col <- bau_pick_col(vm, c("rrate_prior", "adstock_decay_prior"))
+  if (!is.na(compact_col)) {
+    compact <- bau_parse_compact_prior(vm[[compact_col]][row_i], default_type = global_prior_type)
+    if (!isTRUE(compact$is_prior)) compact <- NULL
+  }
+  dcol <- bau_pick_col(vm, c("rrate_prior_mean", "rrate_default", "adstock_decay_default"))
+  if (!is.na(dcol)) supplied_default <- bau_num(vm[[dcol]][row_i])
+  sd_col <- bau_pick_col(vm, c("rrate_prior_sd", "rrate_sd", "adstock_decay_sd"))
+  supplied_sd <- if (!is.na(sd_col)) bau_num(vm[[sd_col]][row_i]) else NA_real_
+  type_col <- bau_pick_col(vm, c("rrate_prior_type", "adstock_decay_prior_type"))
+  supplied_type <- if (!is.na(type_col)) as.character(vm[[type_col]][row_i]) else NA_character_
+  prior_type <- bau_normalize_prior_type(if (nzchar(supplied_type) && !is.na(supplied_type)) supplied_type else global_prior_type)
+  if (!is.null(compact)) {
+    prior_type <- compact$type
+    if (is.finite(compact$mean)) supplied_default <- compact$mean
+    if (is.finite(compact$sd)) supplied_sd <- compact$sd
+    if (is.finite(compact$lower)) {
+      bounds[1] <- max(bounds[1], compact$lower)
+      bounds_source <- "compact_prior_bounds"
+    }
+    if (is.finite(compact$upper)) {
+      bounds[2] <- min(bounds[2], compact$upper)
+      bounds_source <- "compact_prior_bounds"
+    }
+    if (!is.finite(bounds[1]) || !is.finite(bounds[2]) || bounds[1] >= bounds[2]) {
+      bounds <- defaults$bounds
+      bounds_source <- "global_bounds_fallback"
+    }
+  }
+  global_prior_mean <- bau_num(global_prior_mean)[1]
+  if (!is.finite(global_prior_mean) && isTRUE(use_global_default)) global_prior_mean <- defaults$default
+  global_prior_sd <- bau_num(global_prior_sd)[1]
+  if (!is.finite(global_prior_sd) || global_prior_sd <= 0) global_prior_sd <- NA_real_
+  if (!is.finite(supplied_sd) || supplied_sd <= 0) supplied_sd <- global_prior_sd
+  if (isTRUE(enable_default) && is.finite(supplied_default)) {
+    default <- supplied_default
+    prior_mean <- supplied_default
+    prior_sd <- if (is.finite(supplied_sd)) supplied_sd else 0.30
+    prior_type <- if (identical(prior_type, "uniform")) "truncated_normal" else prior_type
+    default_source <- "variable_map_rrate_prior"
+  } else if (isTRUE(enable_default) && is.finite(global_prior_mean)) {
+    default <- global_prior_mean
+    prior_mean <- global_prior_mean
+    prior_sd <- if (is.finite(global_prior_sd)) global_prior_sd else 0.30
+    prior_type <- if (identical(prior_type, "uniform")) "truncated_normal" else prior_type
+    default_source <- defaults$source
+  } else if (isTRUE(enable_default)) {
+    default <- bounds[1]
+    prior_mean <- NA_real_
+    prior_sd <- NA_real_
+    default_source <- if (identical(prior_type, "lower_bound_complexity")) "lower_bound_complexity_prior" else "uniform_rrate_prior"
+  } else {
+    default <- bau_num(vm$adstock_decay[row_i])
+    prior_mean <- if (isTRUE(vm$adstock_decay_supplied[row_i])) default else NA_real_
+    prior_sd <- NA_real_
+    default_source <- if (isTRUE(vm$adstock_decay_supplied[row_i])) "supplied" else "default_no_dep_var"
+  }
+  default <- bau_clip(default, bounds[1], bounds[2])
+  prior_mean <- if (is.finite(prior_mean)) bau_clip(prior_mean, bounds[1], bounds[2]) else NA_real_
+  prior_sd <- if (is.finite(prior_sd) && prior_sd > 0) prior_sd else NA_real_
+  list(
+    default = default,
+    bounds = bounds,
+    default_source = default_source,
+    bounds_source = bounds_source,
+    prior_type = prior_type,
+    prior_mean = prior_mean,
+    prior_sd = prior_sd
+  )
+}
+
 bau_prepare_rrate_series <- function(dt,
                                      support_col,
                                      dep_var_col,
@@ -189,6 +421,776 @@ bau_prepare_rrate_series <- function(dt,
   out[]
 }
 
+bau_prepare_curve_search_panel <- function(dt,
+                                           support_col,
+                                           dep_var_col,
+                                           date_col = NULL,
+                                           group_col = NULL,
+                                           population_col = NULL,
+                                           train_col = "__bau_train__") {
+  x <- data.table::copy(dt)
+  has_date <- !is.null(date_col) && nzchar(date_col) && date_col %in% names(x)
+  has_group <- !is.null(group_col) && nzchar(group_col) && group_col %in% names(x)
+  has_population <- !is.null(population_col) && nzchar(population_col) && population_col %in% names(x)
+  x[, `:=`(
+    support_raw__ = pmax(bau_num(get(support_col)), 0),
+    dep_var_raw__ = bau_num(get(dep_var_col)),
+    train__ = as.logical(get(train_col)),
+    search_group__ = if (has_group) as.character(get(group_col)) else "ALL",
+    search_date__ = if (has_date) get(date_col) else seq_len(.N),
+    population_raw__ = if (has_population) bau_num(get(population_col)) else NA_real_
+  )]
+  x[is.na(train__), train__ := FALSE]
+  x[!is.finite(population_raw__) | population_raw__ <= 0, population_raw__ := NA_real_]
+  panel <- x[, .(
+    support_raw__ = sum(support_raw__, na.rm = TRUE),
+    dep_var_raw__ = if (all(is.na(dep_var_raw__))) NA_real_ else sum(dep_var_raw__, na.rm = TRUE),
+    population_raw__ = if (all(is.na(population_raw__))) NA_real_ else sum(unique(stats::na.omit(population_raw__)), na.rm = TRUE),
+    train__ = any(train__, na.rm = TRUE)
+  ), by = .(search_group__, search_date__)]
+  data.table::setorder(panel, search_group__, search_date__)
+  if (!nrow(panel)) return(panel)
+
+  use_population <- has_group && has_population &&
+    any(panel$train__ & is.finite(panel$population_raw__) & panel$population_raw__ > 0)
+  if (use_population) {
+    pop_scale <- stats::median(panel$population_raw__[panel$train__ & is.finite(panel$population_raw__) & panel$population_raw__ > 0], na.rm = TRUE)
+    panel[, `:=`(
+      curve_x__ = support_raw__ / population_raw__ * pop_scale,
+      curve_y__ = dep_var_raw__ / population_raw__ * pop_scale,
+      search_basis__ = "per_population_index"
+    )]
+  } else if (has_group) {
+    panel[, `:=`(
+      x_group_scale__ = mean(support_raw__[train__ & is.finite(support_raw__) & support_raw__ > 0], na.rm = TRUE),
+      y_group_scale__ = mean(dep_var_raw__[train__ & is.finite(dep_var_raw__)], na.rm = TRUE)
+    ), by = search_group__]
+    panel[!is.finite(x_group_scale__) | x_group_scale__ <= 1e-10, x_group_scale__ := 1]
+    panel[!is.finite(y_group_scale__) | abs(y_group_scale__) <= 1e-10, y_group_scale__ := 1]
+    panel[, `:=`(
+      curve_x__ = support_raw__ / x_group_scale__,
+      curve_y__ = dep_var_raw__ / y_group_scale__,
+      search_basis__ = "group_mean_index"
+    )]
+  } else {
+    panel[, `:=`(
+      curve_x__ = support_raw__,
+      curve_y__ = dep_var_raw__,
+      search_basis__ = "raw"
+    )]
+  }
+  panel[!is.finite(curve_x__) | is.na(curve_x__), curve_x__ := 0]
+  unique_dates <- sort(unique(panel$search_date__))
+  panel[, time_index__ := match(search_date__, unique_dates)]
+  panel[]
+}
+
+bau_curve_candidate_feature <- function(panel,
+                                        rrate,
+                                        anchor_saturation,
+                                        shape,
+                                        curve_type,
+                                        anchor_basis = "active_median",
+                                        curve_normalization_scope = "active_train") {
+  out <- data.table::copy(panel)
+  out[, feature__ := {
+    carry <- bau_adstock(curve_x__, decay = rrate)
+    norm_mask <- bau_curve_norm_mask(curve_x__, train__, curve_normalization_scope)
+    carry_scale <- mean(carry[norm_mask], na.rm = TRUE)
+    if (!is.finite(carry_scale) || carry_scale <= 1e-10) carry_scale <- 1
+    z <- carry / carry_scale
+    active <- train__ & is.finite(z) & z > 0 & curve_x__ > 0
+    anchor_x <- bau_anchor_x_from_values(z, active, anchor_basis)
+    rate <- bau_rate_from_anchor(anchor_x, anchor_saturation, shape, curve_type)
+    sat <- bau_saturation(z, rate, shape, curve_type)
+    sat_scale <- mean(sat[norm_mask], na.rm = TRUE)
+    if (!is.finite(sat_scale) || sat_scale <= 1e-10) sat_scale <- 1
+    sat / sat_scale
+  }, by = search_group__]
+  out$feature__
+}
+
+bau_curve_baseline_matrix <- function(panel,
+                                      season_period = 52,
+                                      fourier_order = 3L,
+                                      group_specific_baseline = FALSE) {
+  n <- nrow(panel)
+  trend <- if (n) {
+    t <- bau_num(panel$time_index__)
+    if (max(t, na.rm = TRUE) > min(t, na.rm = TRUE)) 2 * (t - min(t, na.rm = TRUE)) / (max(t, na.rm = TRUE) - min(t, na.rm = TRUE)) - 1 else rep(0, n)
+  } else numeric()
+  mats <- list(intercept = rep(1, n), trend = trend)
+  season_period <- bau_num(season_period)[1]
+  fourier_order <- as.integer(fourier_order %||% 3L)
+  if (!is.finite(fourier_order) || fourier_order < 0L) fourier_order <- 3L
+  fourier_order <- min(fourier_order, 6L)
+  if (is.finite(season_period) && season_period >= 4 && length(unique(panel$time_index__)) >= 8L) {
+    for (kk in seq_len(fourier_order)) {
+      mats[[paste0("season_sin_", kk)]] <- sin(2 * pi * kk * panel$time_index__ / season_period)
+      mats[[paste0("season_cos_", kk)]] <- cos(2 * pi * kk * panel$time_index__ / season_period)
+    }
+  }
+  groups <- sort(unique(as.character(panel$search_group__)))
+  if (length(groups) > 1L) {
+    for (gg in groups[-1]) {
+      g <- as.numeric(panel$search_group__ == gg)
+      nm <- make.names(gg)
+      mats[[paste0("group_", nm)]] <- g
+      if (isTRUE(group_specific_baseline)) {
+        mats[[paste0("group_trend_", nm)]] <- g * trend
+        if (is.finite(season_period) && season_period >= 4 && length(unique(panel$time_index__)) >= 8L) {
+          mats[[paste0("group_season_sin_", nm)]] <- g * sin(2 * pi * panel$time_index__ / season_period)
+          mats[[paste0("group_season_cos_", nm)]] <- g * cos(2 * pi * panel$time_index__ / season_period)
+        }
+      }
+    }
+  }
+  do.call(cbind, mats)
+}
+
+bau_stable_baseline_regression <- function(y, baseline, fit_idx, pred_idx, ridge = 1e-6) {
+  X <- baseline
+  fit_idx <- which(fit_idx & is.finite(y) & apply(is.finite(X), 1, all))
+  pred_idx <- which(pred_idx & is.finite(y) & apply(is.finite(X), 1, all))
+  if (length(fit_idx) < max(8L, ncol(X) + 2L) || !length(pred_idx)) return(NULL)
+  center <- colMeans(X[fit_idx, , drop = FALSE])
+  scale <- apply(X[fit_idx, , drop = FALSE], 2, stats::sd)
+  scale[!is.finite(scale) | scale <= 1e-10] <- 1
+  intercept_cols <- which(colnames(X) == "intercept")
+  if (length(intercept_cols)) {
+    center[intercept_cols] <- 0
+    scale[intercept_cols] <- 1
+  }
+  Xs <- sweep(sweep(X, 2, center, "-"), 2, scale, "/")
+  XtX <- crossprod(Xs[fit_idx, , drop = FALSE])
+  penalty <- rep(ridge * length(fit_idx), ncol(Xs))
+  if (length(intercept_cols)) penalty[intercept_cols] <- 0
+  beta <- tryCatch(
+    as.numeric(solve(XtX + diag(penalty, ncol(Xs)), crossprod(Xs[fit_idx, , drop = FALSE], y[fit_idx]))),
+    error = function(e) NULL
+  )
+  if (is.null(beta) || any(!is.finite(beta))) return(NULL)
+  list(
+    prediction = as.numeric(Xs[pred_idx, , drop = FALSE] %*% beta),
+    observed = y[pred_idx],
+    fit_n = length(fit_idx),
+    pred_n = length(pred_idx)
+  )
+}
+
+bau_stable_regression <- function(y, feature, baseline, fit_idx, pred_idx, ridge = 1e-6) {
+  X <- cbind(feature = feature, baseline)
+  fit_idx <- which(fit_idx & is.finite(y) & apply(is.finite(X), 1, all))
+  pred_idx <- which(pred_idx & is.finite(y) & apply(is.finite(X), 1, all))
+  if (length(fit_idx) < max(8L, ncol(X) + 2L) || !length(pred_idx)) return(NULL)
+  center <- colMeans(X[fit_idx, , drop = FALSE])
+  scale <- apply(X[fit_idx, , drop = FALSE], 2, stats::sd)
+  scale[!is.finite(scale) | scale <= 1e-10] <- 1
+  intercept_cols <- which(colnames(X) == "intercept")
+  if (length(intercept_cols)) {
+    center[intercept_cols] <- 0
+    scale[intercept_cols] <- 1
+  }
+  Xs <- sweep(sweep(X, 2, center, "-"), 2, scale, "/")
+  XtX <- crossprod(Xs[fit_idx, , drop = FALSE])
+  penalty <- rep(ridge * length(fit_idx), ncol(Xs))
+  penalty[1] <- 0
+  if (length(intercept_cols)) penalty[intercept_cols] <- 0
+  beta <- tryCatch(
+    as.numeric(solve(XtX + diag(penalty, ncol(Xs)), crossprod(Xs[fit_idx, , drop = FALSE], y[fit_idx]))),
+    error = function(e) NULL
+  )
+  if (is.null(beta) || any(!is.finite(beta))) return(NULL)
+  list(
+    prediction = as.numeric(Xs[pred_idx, , drop = FALSE] %*% beta),
+    observed = y[pred_idx],
+    feature_coef = beta[1] / scale[1],
+    fit_n = length(fit_idx),
+    pred_n = length(pred_idx)
+  )
+}
+
+bau_score_curve_candidate <- function(panel,
+                                      rrate,
+                                      anchor_saturation,
+                                      shape,
+                                      curve_type,
+                                      curve_normalization_scope = "active_train",
+                                      cv_folds = 4L,
+                                      season_period = 52,
+                                      fourier_order = 3L,
+                                      group_specific_baseline = FALSE,
+                                      anchor_basis = "active_median",
+                                      objective = c("incremental_lift", "prediction_error"),
+                                      lead_placebo_penalty = 0.10,
+                                      lead_placebo_min_gap = 0.02,
+                                      positive_effect = TRUE,
+                                      wrong_sign_penalty = 25) {
+  y <- bau_num(panel$curve_y__)
+  objective <- match.arg(objective)
+  baseline <- bau_curve_baseline_matrix(
+    panel,
+    season_period = season_period,
+    fourier_order = fourier_order,
+    group_specific_baseline = group_specific_baseline
+  )
+  train_rows <- panel$train__ & is.finite(y)
+  dates <- sort(unique(panel$search_date__[train_rows]))
+  cv_folds <- max(2L, min(as.integer(cv_folds), max(2L, floor(length(dates) / 6L))))
+  date_fold <- ceiling(seq_along(dates) / length(dates) * cv_folds)
+
+  score_feature <- function(feature) {
+    scores <- numeric()
+    coefs <- numeric()
+    base_scores <- numeric()
+    for (fold in seq.int(2L, cv_folds)) {
+      fit_dates <- dates[date_fold < fold]
+      pred_dates <- dates[date_fold == fold]
+      fit_idx <- train_rows & panel$search_date__ %in% fit_dates
+      pred_idx <- train_rows & panel$search_date__ %in% pred_dates
+      reg <- bau_stable_regression(y, feature, baseline, fit_idx = fit_idx, pred_idx = pred_idx)
+      base_reg <- bau_stable_baseline_regression(y, baseline, fit_idx = fit_idx, pred_idx = pred_idx)
+      if (is.null(reg)) next
+      scale_y <- stats::sd(y[fit_idx], na.rm = TRUE)
+      if (!is.finite(scale_y) || scale_y <= 1e-10) scale_y <- 1
+      full_rmse <- sqrt(mean((reg$observed - reg$prediction)^2, na.rm = TRUE)) / scale_y
+      base_rmse <- if (!is.null(base_reg)) {
+        sqrt(mean((base_reg$observed - base_reg$prediction)^2, na.rm = TRUE)) / scale_y
+      } else {
+        NA_real_
+      }
+      candidate_score <- if (identical(objective, "incremental_lift") && is.finite(base_rmse) && base_rmse > 1e-10) {
+        full_rmse / base_rmse
+      } else {
+        full_rmse
+      }
+      scores <- c(scores, candidate_score)
+      base_scores <- c(base_scores, base_rmse)
+      coefs <- c(coefs, reg$feature_coef)
+    }
+    if (!length(scores)) {
+      reg <- bau_stable_regression(y, feature, baseline, train_rows, train_rows)
+      base_reg <- bau_stable_baseline_regression(y, baseline, train_rows, train_rows)
+      if (is.null(reg)) return(list(score = Inf, score_se = NA_real_, coef = NA_real_, folds = 0L, baseline_score = NA_real_))
+      scale_y <- stats::sd(y[train_rows], na.rm = TRUE)
+      if (!is.finite(scale_y) || scale_y <= 1e-10) scale_y <- 1
+      full_rmse <- sqrt(mean((reg$observed - reg$prediction)^2, na.rm = TRUE)) / scale_y
+      base_rmse <- if (!is.null(base_reg)) sqrt(mean((base_reg$observed - base_reg$prediction)^2, na.rm = TRUE)) / scale_y else NA_real_
+      scores <- if (identical(objective, "incremental_lift") && is.finite(base_rmse) && base_rmse > 1e-10) full_rmse / base_rmse else full_rmse
+      base_scores <- base_rmse
+      coefs <- reg$feature_coef
+    }
+    list(
+      score = mean(scores, na.rm = TRUE),
+      score_se = if (length(scores) > 1L) stats::sd(scores) / sqrt(length(scores)) else NA_real_,
+      coef = stats::median(coefs, na.rm = TRUE),
+      folds = length(scores),
+      baseline_score = mean(base_scores, na.rm = TRUE)
+    )
+  }
+
+  feature <- bau_curve_candidate_feature(panel, rrate, anchor_saturation, shape, curve_type, anchor_basis, curve_normalization_scope)
+  cur <- score_feature(feature)
+  score <- cur$score
+  coef <- cur$coef
+
+  lead_penalty_units <- 0
+  lead_placebo_penalty <- bau_num(lead_placebo_penalty)[1]
+  lead_placebo_min_gap <- bau_num(lead_placebo_min_gap)[1]
+  if (!is.finite(lead_placebo_penalty) || lead_placebo_penalty < 0) lead_placebo_penalty <- 0
+  if (!is.finite(lead_placebo_min_gap) || lead_placebo_min_gap <= 0) lead_placebo_min_gap <- 0.02
+  if (lead_placebo_penalty > 0 && is.finite(score) && score > 0) {
+    lead_panel <- data.table::copy(panel)
+    lead_panel[, curve_x__ := data.table::shift(curve_x__, n = 1L, type = "lead", fill = 0), by = search_group__]
+    lead_feature <- bau_curve_candidate_feature(lead_panel, rrate, anchor_saturation, shape, curve_type, anchor_basis, curve_normalization_scope)
+    lead <- score_feature(lead_feature)
+    if (is.finite(lead$score)) {
+      lead_gap <- (lead$score - score) / max(score, 1e-10)
+      lead_penalty_units <- pmax(0, pmin(2, 1 - lead_gap / lead_placebo_min_gap))
+      score <- score * (1 + lead_placebo_penalty * lead_penalty_units)
+    }
+  }
+  if (isTRUE(positive_effect) && (!is.finite(coef) || coef <= 0)) score <- score * wrong_sign_penalty
+  list(
+    score = score,
+    score_se = cur$score_se,
+    coef = coef,
+    folds = cur$folds,
+    baseline_score = cur$baseline_score,
+    lead_placebo_penalty_units = lead_penalty_units
+  )
+}
+
+bau_curve_candidate_plausibility <- function(panel,
+                                             rrate,
+                                             anchor_saturation,
+                                             shape,
+                                             curve_type,
+                                             curve_normalization_scope = "active_train",
+                                             anchor_basis = "active_median",
+                                             anchor_prior = 0.50,
+                                             mean_saturation_bounds = c(0.08, 0.92),
+                                             min_marginal_response_at_mean = 0.015,
+                                             skew_median_to_mean_threshold = 0.55,
+                                             half_saturation_band_penalty_power = 2,
+                                             observational_coef = NA_real_) {
+  work <- data.table::copy(panel)
+  work[, z__ := {
+    carry <- bau_adstock(curve_x__, decay = rrate)
+    norm_mask <- bau_curve_norm_mask(curve_x__, train__, curve_normalization_scope)
+    carry_scale <- mean(carry[norm_mask], na.rm = TRUE)
+    if (!is.finite(carry_scale) || carry_scale <= 1e-10) carry_scale <- 1
+    carry / carry_scale
+  }, by = search_group__]
+  active <- work$train__ & is.finite(work$z__) & work$z__ > 0 & is.finite(work$curve_x__) & work$curve_x__ > 0
+  if (!any(active)) {
+    return(data.table::data.table(
+      median_to_mean_support = NA_real_,
+      active_median_support = NA_real_,
+      active_mean_support = NA_real_,
+      half_saturation_support = NA_real_,
+      half_saturation_band_low = NA_real_,
+      half_saturation_band_high = NA_real_,
+      saturation_at_mean_support = NA_real_,
+      marginal_response_at_mean_support = NA_real_,
+      selected_vs_anchor_delta = anchor_saturation - anchor_prior,
+      plausibility_flag = "invalid_curve_support",
+      plausibility_penalty_units = 2,
+      weak_curve_signal = TRUE
+    ))
+  }
+  z_active <- work$z__[active]
+  med_z <- stats::median(z_active, na.rm = TRUE)
+  mean_z <- mean(z_active, na.rm = TRUE)
+  median_to_mean <- if (is.finite(mean_z) && mean_z > 0) med_z / mean_z else NA_real_
+  anchor_x <- bau_anchor_x_from_values(work$z__, active, anchor_basis)
+  rate <- bau_rate_from_anchor(anchor_x, anchor_saturation, shape, curve_type)
+  half_x <- bau_half_saturation_x(rate, shape, curve_type)
+  band_low <- min(c(med_z, mean_z), na.rm = TRUE)
+  band_high <- max(c(med_z, mean_z), na.rm = TRUE)
+  sat_mean <- if (is.finite(mean_z) && mean_z > 0) bau_saturation(mean_z, curve_rate = rate, shape = shape, curve_type = curve_type) else NA_real_
+  eps <- 0.01
+  sat_up <- if (is.finite(mean_z) && mean_z > 0) bau_saturation(mean_z * (1 + eps), curve_rate = rate, shape = shape, curve_type = curve_type) else NA_real_
+  marginal <- if (is.finite(sat_mean) && is.finite(sat_up)) (sat_up - sat_mean) / eps else NA_real_
+
+  bounds <- bau_num(mean_saturation_bounds[1:2])
+  if (length(bounds) < 2L || any(!is.finite(bounds))) bounds <- c(0.08, 0.92)
+  lo <- bau_clip(min(bounds), 0.001, 0.80)
+  hi <- bau_clip(max(bounds), lo + 0.01, 0.999)
+  skew_threshold <- bau_num(skew_median_to_mean_threshold)[1]
+  if (!is.finite(skew_threshold)) skew_threshold <- 0.55
+  if (is.finite(median_to_mean) && median_to_mean < skew_threshold) {
+    hi <- min(hi, 0.88)
+    if (median_to_mean < 0.35) hi <- min(hi, 0.82)
+  } else if (is.finite(median_to_mean) && median_to_mean > 1 / max(skew_threshold, 1e-6)) {
+    lo <- max(lo, 0.12)
+    if (median_to_mean > 1 / 0.35) lo <- max(lo, 0.18)
+  }
+  min_marginal <- bau_num(min_marginal_response_at_mean)[1]
+  if (!is.finite(min_marginal) || min_marginal < 0) min_marginal <- 0.015
+
+  flags <- character()
+  penalty <- 0
+  if (is.finite(median_to_mean) && median_to_mean < skew_threshold) flags <- c(flags, "active_mean_gt_median_skew")
+  if (is.finite(median_to_mean) && median_to_mean > 1 / max(skew_threshold, 1e-6)) flags <- c(flags, "active_median_gt_mean_skew")
+  band_power <- bau_num(half_saturation_band_penalty_power)[1]
+  if (!is.finite(band_power) || band_power <= 0) band_power <- 2
+  if (is.finite(half_x) && is.finite(band_low) && is.finite(band_high) && band_low > 0 && band_high >= band_low) {
+    if (half_x < band_low) {
+      log_dist <- abs(log(half_x / band_low))
+      flags <- c(flags, "half_saturation_below_active_mean_median_band")
+      band_penalty <- exp(band_power * log_dist) - 1
+      penalty <- penalty + 0.05 * band_penalty
+    } else if (half_x > band_high) {
+      log_dist <- abs(log(half_x / band_high))
+      flags <- c(flags, "half_saturation_above_active_mean_median_band")
+      band_penalty <- exp(band_power * log_dist) - 1
+      penalty <- penalty + 0.05 * band_penalty
+    }
+  }
+  if (!is.finite(sat_mean)) {
+    flags <- c(flags, "invalid_mean_saturation")
+    penalty <- penalty + 2
+  } else {
+    if (sat_mean < lo) {
+      flags <- c(flags, "low_mean_saturation")
+      penalty <- penalty + (lo - sat_mean) / max(lo, 1e-6)
+    }
+    if (sat_mean > hi) {
+      flags <- c(flags, "high_mean_saturation")
+      penalty <- penalty + (sat_mean - hi) / max(1 - hi, 1e-6)
+    }
+  }
+  if (is.finite(marginal) && marginal < min_marginal) {
+    flags <- c(flags, "flat_marginal_response_at_mean")
+    penalty <- penalty + 0.5 * (min_marginal - marginal) / max(min_marginal, 1e-6)
+  }
+  if (is.finite(observational_coef) && observational_coef <= 0 && abs(anchor_saturation - anchor_prior) > 0.05) {
+    flags <- c(flags, "negative_observational_coef_curve_move")
+    penalty <- penalty + 1
+  }
+  weak <- penalty > 0 || !is.finite(marginal) || marginal < min_marginal
+  if (!length(flags)) flags <- "ok"
+  data.table::data.table(
+    median_to_mean_support = median_to_mean,
+    active_median_support = med_z,
+    active_mean_support = mean_z,
+    anchor_basis = bau_normalize_anchor_basis(anchor_basis),
+    anchor_x_support = anchor_x,
+    half_saturation_support = half_x,
+    half_saturation_band_low = band_low,
+    half_saturation_band_high = band_high,
+    saturation_at_mean_support = sat_mean,
+    marginal_response_at_mean_support = marginal,
+    selected_vs_anchor_delta = anchor_saturation - anchor_prior,
+    plausibility_flag = paste(unique(flags), collapse = "|"),
+    plausibility_penalty_units = penalty,
+    weak_curve_signal = weak
+  )
+}
+
+bau_search_curve_one <- function(dt,
+                                 variable,
+                                 support_col,
+                                 dep_var_col,
+                                 date_col = NULL,
+                                 group_col = NULL,
+                                 population_col = NULL,
+                                 train_col = "__bau_train__",
+                                 default_rrate = 0,
+                                 anchor_saturation = 0.50,
+                                 anchor_basis = "active_median",
+                                 shape = 1,
+                                 curve_type = "hill",
+                                 rrate_supplied = FALSE,
+                                 rrate_overwrite_supplied = FALSE,
+                                 rrate_bounds = c(0, 0.90),
+                                 anchor_bounds = c(0.10, 0.90),
+                                 shape_bounds = c(0.50, 3.00),
+                                 coarse_rrate_grid = seq(0, 0.90, by = 0.15),
+                                 coarse_anchor_grid = seq(0.10, 0.90, by = 0.10),
+                                 coarse_shape_grid = c(0.50, 0.75, 1, 1.50, 2, 3),
+                                 fine_rrate_step = 0.025,
+                                 fine_anchor_step = 0.025,
+                                 fine_shape_step = 0.10,
+                                 cv_folds = 4L,
+                                 season_period = 52,
+                                 fourier_order = 3L,
+                                 group_specific_baseline = FALSE,
+                                 objective = c("incremental_lift", "prediction_error"),
+                                 lead_placebo_penalty = 0.10,
+                                 lead_placebo_min_gap = 0.02,
+                                 min_active_periods = 12L,
+                                 min_support_cv = 0.05,
+                                 rrate_one_se_keep_best_improvement = 0.005,
+                                 joint_rrate_search = TRUE,
+                                 rrate_prior_type = "uniform",
+                                 rrate_prior_mean = NA_real_,
+                                 rrate_prior_sd = NA_real_,
+                                 rrate_complexity_penalty = 0.05,
+                                 mean_saturation_bounds = c(0.08, 0.92),
+                                 min_marginal_response_at_mean = 0.015,
+                                 skew_median_to_mean_threshold = 0.55,
+                                 half_saturation_band_penalty_power = 2,
+                                 plausibility_penalty = 0.20,
+                                 curve_normalization_scope = "active_train") {
+  objective <- match.arg(objective)
+  anchor_basis <- bau_normalize_anchor_basis(anchor_basis)
+  panel <- bau_prepare_curve_search_panel(
+    dt, support_col, dep_var_col, date_col, group_col, population_col, train_col
+  )
+  train <- panel$train__ & is.finite(panel$curve_y__)
+  active_n <- sum(train & panel$curve_x__ > 0, na.rm = TRUE)
+  support_cv <- stats::sd(panel$curve_x__[train & panel$curve_x__ > 0], na.rm = TRUE) /
+    mean(panel$curve_x__[train & panel$curve_x__ > 0], na.rm = TRUE)
+  default_rrate <- bau_clip(default_rrate, rrate_bounds[1], rrate_bounds[2])
+  rrate_prior_type <- tolower(trimws(as.character(rrate_prior_type)[1] %||% "uniform"))
+  rrate_prior_type <- gsub("[ -]+", "_", rrate_prior_type)
+  if (rrate_prior_type %in% c("truncnorm", "truncated_norm", "normal", "gaussian")) rrate_prior_type <- "truncated_normal"
+  if (rrate_prior_type %in% c("lower", "lower_bound", "creep", "creep_up")) rrate_prior_type <- "lower_bound_complexity"
+  if (!rrate_prior_type %in% c("uniform", "truncated_normal", "lower_bound_complexity")) rrate_prior_type <- "uniform"
+  rrate_prior_mean <- bau_num(rrate_prior_mean)[1]
+  rrate_prior_sd <- bau_num(rrate_prior_sd)[1]
+  if (!is.finite(rrate_prior_mean)) rrate_prior_mean <- default_rrate
+  if (!is.finite(rrate_prior_sd) || rrate_prior_sd <= 0) rrate_prior_sd <- NA_real_
+  anchor_saturation <- bau_clip(anchor_saturation, anchor_bounds[1], anchor_bounds[2])
+  shape <- bau_clip(shape, shape_bounds[1], shape_bounds[2])
+  rrate_prior <- if (identical(rrate_prior_type, "truncated_normal") && is.finite(rrate_prior_mean)) {
+    bau_clip(rrate_prior_mean, rrate_bounds[1], rrate_bounds[2])
+  } else {
+    default_rrate
+  }
+  anchor_prior <- anchor_saturation
+  shape_prior <- shape
+  empty_result <- function(status) list(
+    diagnostic = data.table::data.table(
+      variable = variable, curve_search_status = status, curve_search_source = "anchored_default",
+      selected_rrate = default_rrate, selected_anchor_saturation = anchor_saturation, selected_shape = shape,
+      raw_best_rrate = NA_real_, raw_best_anchor_saturation = NA_real_, raw_best_shape = NA_real_,
+      anchor_cv_score = NA_real_, best_cv_score = NA_real_, selected_cv_score = NA_real_,
+      one_se_threshold = NA_real_, cv_improvement = NA_real_, active_periods = active_n,
+      support_cv = support_cv, cv_folds = 0L, search_basis = if (nrow(panel)) panel$search_basis__[1] else NA_character_,
+      observational_coef = NA_real_, selected_at_anchor = TRUE,
+      rrate_prior_type = rrate_prior_type,
+      rrate_prior_mean = rrate_prior_mean,
+      rrate_prior_sd = rrate_prior_sd,
+      median_to_mean_support = NA_real_,
+      active_median_support = NA_real_,
+      active_mean_support = NA_real_,
+      anchor_basis = anchor_basis,
+      anchor_x_support = NA_real_,
+      half_saturation_support = NA_real_,
+      half_saturation_band_low = NA_real_,
+      half_saturation_band_high = NA_real_,
+      saturation_at_mean_support = NA_real_,
+      marginal_response_at_mean_support = NA_real_,
+      selected_vs_anchor_delta = 0,
+      plausibility_flag = "not_evaluated",
+      weak_curve_signal = TRUE,
+      curve_quality_flag = status
+    ),
+    candidates = data.table::data.table()
+  )
+  if (!nrow(panel) || active_n < as.integer(min_active_periods) || !is.finite(support_cv) || support_cv < min_support_cv) {
+    return(empty_result(if (!nrow(panel)) "anchored_no_data" else if (active_n < min_active_periods) "anchored_insufficient_active_periods" else "anchored_insufficient_support_variation"))
+  }
+
+  score_grid <- function(grid, stage) {
+    data.table::rbindlist(lapply(seq_len(nrow(grid)), function(i) {
+      z <- bau_score_curve_candidate(
+        panel, grid$rrate[i], grid$anchor_saturation[i], grid$shape[i], curve_type,
+        curve_normalization_scope = curve_normalization_scope,
+        cv_folds = cv_folds,
+        season_period = season_period,
+        fourier_order = fourier_order,
+        group_specific_baseline = group_specific_baseline,
+        anchor_basis = anchor_basis,
+        objective = objective,
+        lead_placebo_penalty = lead_placebo_penalty,
+        lead_placebo_min_gap = lead_placebo_min_gap
+      )
+      data.table::data.table(
+        rrate = grid$rrate[i], anchor_saturation = grid$anchor_saturation[i], shape = grid$shape[i],
+        cv_score = z$score, cv_score_se = z$score_se, observational_coef = z$coef,
+        baseline_cv_score = z$baseline_score,
+        lead_placebo_penalty_units = z$lead_placebo_penalty_units,
+        cv_folds = z$folds, search_stage = stage
+      )
+    }), fill = TRUE)
+  }
+  rr_all <- if (isTRUE(rrate_supplied) && !isTRUE(rrate_overwrite_supplied)) rrate_prior else coarse_rrate_grid
+  rr_all <- sort(unique(bau_clip(c(rr_all, rrate_prior), rrate_bounds[1], rrate_bounds[2])))
+  retention_profile <- score_grid(data.table::data.table(
+    rrate = rr_all,
+    anchor_saturation = anchor_prior,
+    shape = shape_prior
+  ), "retention_profile")
+  retention_profile <- retention_profile[is.finite(cv_score)][order(cv_score)]
+  if (!nrow(retention_profile)) return(empty_result("anchored_retention_profile_failed"))
+  if (!(isTRUE(rrate_supplied) && !isTRUE(rrate_overwrite_supplied))) {
+    retention_center <- retention_profile$rrate[1]
+    retention_fine_grid <- sort(unique(bau_clip(
+      seq(retention_center - 0.15, retention_center + 0.15, by = fine_rrate_step),
+      rrate_bounds[1], rrate_bounds[2]
+    )))
+    retention_fine <- score_grid(data.table::data.table(
+      rrate = retention_fine_grid,
+      anchor_saturation = anchor_prior,
+      shape = shape_prior
+    ), "retention_profile")
+    retention_profile <- unique(
+      data.table::rbindlist(list(retention_profile, retention_fine), fill = TRUE),
+      by = "rrate"
+    )[is.finite(cv_score)][order(cv_score)]
+  }
+  retention_best <- retention_profile[1]
+  retention_se <- if (is.finite(retention_best$cv_score_se)) retention_best$cv_score_se else 0
+  retention_threshold <- retention_best$cv_score + retention_se
+  retention_profile[, within_one_se := cv_score <= retention_threshold + 1e-12]
+  retention_default <- retention_profile[which.min(abs(rrate - rrate_prior))]
+  retention_identified <- !nrow(retention_default) || retention_default$cv_score > retention_threshold
+  retention_improvement <- if (nrow(retention_default) && is.finite(retention_default$cv_score[1]) && retention_default$cv_score[1] > 0) {
+    pmax(0, (retention_default$cv_score[1] - retention_best$cv_score[1]) / retention_default$cv_score[1])
+  } else {
+    NA_real_
+  }
+  if (isTRUE(rrate_supplied) && !isTRUE(rrate_overwrite_supplied)) {
+    rr_grid <- rrate_prior
+    retention_status <- "supplied_fixed"
+  } else if (isTRUE(joint_rrate_search)) {
+    rr_grid <- sort(unique(bau_clip(c(rr_all, retention_profile$rrate, rrate_prior), rrate_bounds[1], rrate_bounds[2])))
+    retention_status <- "joint_search_all_rrate"
+  } else if (!isTRUE(retention_identified) && (!is.finite(retention_improvement) || retention_improvement < rrate_one_se_keep_best_improvement)) {
+    rr_grid <- rrate_prior
+    retention_status <- "default_within_one_se"
+  } else {
+    rr_grid <- retention_profile[within_one_se == TRUE, sort(unique(rrate))]
+    retention_status <- if (isTRUE(retention_identified)) "temporal_profile_identified" else "weak_temporal_profile_kept_by_fit_gain"
+  }
+  an_grid <- sort(unique(bau_clip(c(coarse_anchor_grid, anchor_prior), anchor_bounds[1], anchor_bounds[2])))
+  sh_grid <- sort(unique(bau_clip(c(coarse_shape_grid, shape_prior), shape_bounds[1], shape_bounds[2])))
+  coarse <- data.table::CJ(rrate = rr_grid, anchor_saturation = an_grid, shape = sh_grid)
+  coarse_fit <- score_grid(coarse, "coarse")
+  finite_coarse <- coarse_fit[is.finite(cv_score)]
+  if (!nrow(finite_coarse)) return(empty_result("anchored_all_candidates_failed"))
+  data.table::setorder(finite_coarse, cv_score)
+  centers <- unique(finite_coarse[seq_len(min(3L, .N)), .(rrate, anchor_saturation, shape)])
+  fine <- data.table::rbindlist(lapply(seq_len(nrow(centers)), function(i) {
+    rr <- if (length(rr_grid) == 1L) rr_grid else
+      seq(centers$rrate[i] - 0.15, centers$rrate[i] + 0.15, by = fine_rrate_step)
+    rr <- rr[rr >= min(rr_grid) - 1e-12 & rr <= max(rr_grid) + 1e-12]
+    aa <- seq(centers$anchor_saturation[i] - 0.10, centers$anchor_saturation[i] + 0.10, by = fine_anchor_step)
+    ss <- seq(centers$shape[i] - 0.40, centers$shape[i] + 0.40, by = fine_shape_step)
+    data.table::CJ(
+      rrate = sort(unique(bau_clip(rr, rrate_bounds[1], rrate_bounds[2]))),
+      anchor_saturation = sort(unique(bau_clip(aa, anchor_bounds[1], anchor_bounds[2]))),
+      shape = sort(unique(bau_clip(ss, shape_bounds[1], shape_bounds[2])))
+    )
+  }), fill = TRUE)
+  fine <- unique(fine)
+  fine_fit <- score_grid(fine, "fine")
+  candidates <- unique(data.table::rbindlist(list(coarse_fit, fine_fit), fill = TRUE), by = c("rrate", "anchor_saturation", "shape"))
+  candidates <- candidates[is.finite(cv_score)]
+  if (!nrow(candidates)) return(empty_result("anchored_all_candidates_failed"))
+
+  plaus <- data.table::rbindlist(lapply(seq_len(nrow(candidates)), function(i) {
+    bau_curve_candidate_plausibility(
+      panel = panel,
+      rrate = candidates$rrate[i],
+      anchor_saturation = candidates$anchor_saturation[i],
+      shape = candidates$shape[i],
+      curve_type = curve_type,
+      curve_normalization_scope = curve_normalization_scope,
+      anchor_basis = anchor_basis,
+      anchor_prior = anchor_prior,
+      mean_saturation_bounds = mean_saturation_bounds,
+      min_marginal_response_at_mean = min_marginal_response_at_mean,
+      skew_median_to_mean_threshold = skew_median_to_mean_threshold,
+      half_saturation_band_penalty_power = half_saturation_band_penalty_power,
+      observational_coef = candidates$observational_coef[i]
+    )
+  }), fill = TRUE)
+  candidates <- cbind(candidates, plaus)
+
+  rr_width <- max(diff(range(rrate_bounds)), 1e-8)
+  an_width <- max(diff(range(anchor_bounds)), 1e-8)
+  sh_width <- max(log(shape_bounds[2] / shape_bounds[1]), 1e-8)
+  rrate_complexity_penalty <- bau_num(rrate_complexity_penalty)[1]
+  if (!is.finite(rrate_complexity_penalty) || rrate_complexity_penalty < 0) rrate_complexity_penalty <- 0.05
+  rrate_floor <- min(rrate_bounds, na.rm = TRUE)
+  candidates[, rrate_complexity_units := {
+    if (isTRUE(rrate_supplied) || identical(rrate_prior_type, "uniform")) {
+      0
+    } else if (identical(rrate_prior_type, "truncated_normal") && is.finite(rrate_prior_mean) && is.finite(rrate_prior_sd) && rrate_prior_sd > 0) {
+      ((rrate - rrate_prior_mean) / rrate_prior_sd)^2
+    } else {
+      ((rrate - rrate_floor) / rr_width)^2
+    }
+  }]
+  rrate_anchor_component <- if (identical(rrate_prior_type, "uniform") && !isTRUE(rrate_supplied)) 0 else ((candidates$rrate - rrate_prior) / rr_width)^2
+  candidates[, anchor_distance := sqrt(
+    rrate_anchor_component +
+      ((anchor_saturation - anchor_prior) / an_width)^2 +
+      (log(shape / shape_prior) / sh_width)^2
+  )]
+  candidates[, selection_score := cv_score * (
+    1 +
+      pmax(0, plausibility_penalty) * pmax(0, plausibility_penalty_units) +
+      pmax(0, rrate_complexity_penalty) * pmax(0, rrate_complexity_units)
+  )]
+  data.table::setorder(candidates, selection_score, cv_score, anchor_distance)
+  best <- candidates[1]
+  best_se <- if (is.finite(best$cv_score_se)) best$cv_score_se else 0
+  threshold <- best$selection_score + best_se
+  candidates[, within_one_se := selection_score <= threshold + 1e-12]
+  candidates[, selected := FALSE]
+  anchor_row <- candidates[which.min(
+    abs(rrate - rrate_prior) + abs(anchor_saturation - anchor_prior) + abs(shape - shape_prior)
+  )]
+  improvement <- if (nrow(anchor_row) && is.finite(anchor_row$selection_score[1]) && anchor_row$selection_score[1] > 0) {
+    pmax(0, (anchor_row$selection_score[1] - best$selection_score[1]) / anchor_row$selection_score[1])
+  } else NA_real_
+  strong_fit_gain <- is.finite(improvement) &&
+    improvement >= max(0.05, 5 * bau_num(rrate_one_se_keep_best_improvement)[1])
+  if (isTRUE(strong_fit_gain)) {
+    selected <- candidates[order(selection_score, cv_score, anchor_distance)][1]
+  } else {
+    competitive <- candidates[within_one_se == TRUE][order(anchor_distance, selection_score, cv_score)]
+    selected <- competitive[1]
+  }
+  if (!isTRUE(strong_fit_gain) && nrow(anchor_row) && selected$anchor_distance[1] <= 1e-12 &&
+      is.finite(improvement) && improvement >= rrate_one_se_keep_best_improvement) {
+    better_than_anchor <- candidates[
+      selection_score <= anchor_row$selection_score[1] * (1 - rrate_one_se_keep_best_improvement) &
+        selection_score <= threshold + 1e-12
+    ][order(selection_score, anchor_distance)]
+    if (nrow(better_than_anchor)) selected <- better_than_anchor[1]
+  }
+  selected_rrate <- selected$rrate[1]
+  selected_anchor <- selected$anchor_saturation[1]
+  selected_shape <- selected$shape[1]
+  candidates[rrate == selected_rrate & anchor_saturation == selected_anchor & shape == selected_shape, selected := TRUE]
+  selected_at_anchor <- selected$anchor_distance[1] <= 1e-12
+  source <- if (selected_at_anchor) "anchored_within_one_se" else "anchor_regularized_blocked_cv"
+  quality_flag <- if (grepl("invalid|high_mean_saturation|low_mean_saturation|flat_marginal_response|negative_observational|half_saturation_", selected$plausibility_flag[1])) {
+    "review_curve_plausibility"
+  } else if (isTRUE(selected$weak_curve_signal[1]) || (is.finite(improvement) && improvement < 0.01)) {
+    "weak_curve_signal"
+  } else {
+    "usable_bau_curve"
+  }
+  candidates[, `:=`(
+    variable = variable,
+    curve_type = curve_type,
+    one_se_threshold = threshold,
+    search_basis = panel$search_basis__[1]
+  )]
+  list(
+    diagnostic = data.table::data.table(
+      variable = variable, curve_search_status = "estimated", curve_search_source = source,
+      selected_rrate = selected_rrate, selected_anchor_saturation = selected_anchor,
+      selected_shape = selected_shape, raw_best_rrate = best$rrate,
+      raw_best_anchor_saturation = best$anchor_saturation, raw_best_shape = best$shape,
+      anchor_cv_score = anchor_row$cv_score, best_cv_score = best$cv_score,
+      selected_cv_score = selected$cv_score, one_se_threshold = threshold,
+      cv_improvement = improvement, active_periods = active_n, support_cv = support_cv,
+      cv_folds = selected$cv_folds, search_basis = panel$search_basis__[1],
+      observational_coef = selected$observational_coef, selected_at_anchor = selected_at_anchor,
+      rrate_prior_type = rrate_prior_type,
+      rrate_prior_mean = rrate_prior_mean,
+      rrate_prior_sd = rrate_prior_sd,
+      rrate_profile_status = retention_status,
+      rrate_profile_low = min(rr_grid), rrate_profile_high = max(rr_grid),
+      rrate_profile_best = retention_best$rrate,
+      rrate_profile_one_se_threshold = retention_threshold,
+      rrate_profile_improvement = retention_improvement,
+      median_to_mean_support = selected$median_to_mean_support,
+      active_median_support = selected$active_median_support,
+      active_mean_support = selected$active_mean_support,
+      anchor_basis = selected$anchor_basis,
+      anchor_x_support = selected$anchor_x_support,
+      half_saturation_support = selected$half_saturation_support,
+      half_saturation_band_low = selected$half_saturation_band_low,
+      half_saturation_band_high = selected$half_saturation_band_high,
+      saturation_at_mean_support = selected$saturation_at_mean_support,
+      marginal_response_at_mean_support = selected$marginal_response_at_mean_support,
+      selected_vs_anchor_delta = selected$selected_vs_anchor_delta,
+      plausibility_flag = selected$plausibility_flag,
+      weak_curve_signal = isTRUE(selected$weak_curve_signal),
+      curve_quality_flag = quality_flag
+    ),
+    candidates = data.table::rbindlist(list(
+      retention_profile[, `:=`(
+        variable = variable, curve_type = curve_type,
+        one_se_threshold = retention_threshold,
+        search_basis = panel$search_basis__[1], selected = FALSE,
+        anchor_distance = abs(rrate - rrate_prior) / rr_width
+      )],
+      candidates
+    ), fill = TRUE)
+  )
+}
+
 bau_fit_rrate_candidate <- function(y,
                                     x_raw,
                                     train_mask,
@@ -196,6 +1198,7 @@ bau_fit_rrate_candidate <- function(y,
                                     anchor_saturation,
                                     shape,
                                     curve_type,
+                                    anchor_basis = "active_median",
                                     curve_normalization_scope = "active_train",
                                     positive_effect = TRUE,
                                     wrong_sign_penalty = 25) {
@@ -209,7 +1212,7 @@ bau_fit_rrate_candidate <- function(y,
   if (!is.finite(carry_scale) || carry_scale <= 1e-10) carry_scale <- 1
   z <- carry / carry_scale
   active <- train_mask & is.finite(z) & z > 0 & is.finite(x_raw) & x_raw > 0
-  anchor_x <- stats::median(z[active], na.rm = TRUE)
+  anchor_x <- bau_anchor_x_from_values(z, active, anchor_basis)
   rate <- bau_rate_from_anchor(anchor_x, anchor_saturation = anchor_saturation, shape = shape, curve_type = curve_type)
   if (!is.finite(rate) || rate <= 0) {
     return(list(score = Inf, sse = Inf, coef = NA_real_, active_weeks = sum(active), rate = NA_real_))
@@ -253,6 +1256,7 @@ bau_estimate_rrate_one <- function(dt,
                                    anchor_saturation = 0.50,
                                    shape = 1,
                                    curve_type = "hill",
+                                   anchor_basis = "active_median",
                                    curve_normalization_scope = "active_train") {
   lo <- bau_num(rrate_bounds[1])
   hi <- bau_num(rrate_bounds[2])
@@ -315,6 +1319,7 @@ bau_estimate_rrate_one <- function(dt,
       anchor_saturation = anchor_saturation,
       shape = shape,
       curve_type = curve_type,
+      anchor_basis = anchor_basis,
       curve_normalization_scope = curve_normalization_scope
     )
     data.table::data.table(
@@ -376,6 +1381,8 @@ bau_estimate_rrate_one <- function(dt,
     status <- "estimated_pooled_univariate_diagnostic"
   }
   selected_fit <- finite_fit[which.min(abs(rrate - selected))]
+  grid_step <- suppressWarnings(min(diff(sort(unique(grid))), na.rm = TRUE))
+  if (!is.finite(grid_step) || grid_step <= 0) grid_step <- 1e-10
   data.table::data.table(
     variable = variable,
     rrate_selected = selected,
@@ -386,7 +1393,8 @@ bau_estimate_rrate_one <- function(dt,
     rrate_improvement = improvement,
     rrate_score_selected = selected_score,
     rrate_score_default = default_score,
-    rrate_at_bound = abs(best$rrate[1] - lo) < 1e-10 || abs(best$rrate[1] - hi) < 1e-10,
+    rrate_at_bound = abs(best$rrate[1] - lo) <= max(1e-10, grid_step) ||
+      abs(best$rrate[1] - hi) <= max(1e-10, grid_step),
     rrate_plateau_adjusted = plateau_adjusted,
     rrate_coef_sign = sign(selected_fit$coef[1])
   )
@@ -461,6 +1469,14 @@ bau_normalize_variable_map <- function(data,
   }
 
   if (!"curve_type" %in% names(vm)) vm[, curve_type := curve_type]
+  if (!"anchor_basis" %in% names(vm)) vm[, anchor_basis := NA_character_]
+  if ("anchor" %in% names(vm)) {
+    anchor_specs <- lapply(vm$anchor, bau_parse_anchor_spec)
+    for (ii in seq_along(anchor_specs)) {
+      if (nzchar(anchor_specs[[ii]]$basis %||% "")) vm[ii, anchor_basis := anchor_specs[[ii]]$basis]
+      if (is.finite(anchor_specs[[ii]]$saturation)) vm[ii, anchor_saturation := anchor_specs[[ii]]$saturation]
+    }
+  }
   if (!"anchor_saturation" %in% names(vm)) {
     acol <- bau_pick_col(vm, c("median_anchor_saturation", "saturation_at_median", "curve_anchor"))
     if (!is.na(acol)) vm[, anchor_saturation := bau_num(get(acol))] else vm[, anchor_saturation := anchor_saturation]
@@ -469,17 +1485,34 @@ bau_normalize_variable_map <- function(data,
     shcol <- bau_pick_col(vm, c("dvalue", "curve_shape", "hill_shape", "weibull_shape"))
     if (!is.na(shcol)) vm[, shape := bau_num(get(shcol))] else vm[, shape := shape]
   }
-  supplied_adstock__ <- "adstock_decay" %in% names(vm)
-  if (!"adstock_decay" %in% names(vm)) {
+  supplied_adstock_vec <- rep(FALSE, nrow(vm))
+  if ("adstock_decay" %in% names(vm)) {
+    raw_rr <- vm$adstock_decay
+    compact <- lapply(raw_rr, bau_parse_compact_prior)
+    compact_i <- vapply(compact, function(z) isTRUE(z$is_prior), logical(1))
+    supplied_adstock_vec <- is.finite(bau_num(raw_rr)) & !compact_i
+    vm[, adstock_decay := bau_num(raw_rr)]
+    if (any(compact_i)) {
+      if (!"rrate_prior" %in% names(vm)) vm[, rrate_prior := NA_character_]
+      vm[compact_i, rrate_prior := as.character(raw_rr)[compact_i]]
+    }
+  } else {
     rcol <- bau_pick_col(vm, c("rrate", "decay", "adstock_rate"))
     if (!is.na(rcol)) {
-      vm[, adstock_decay := bau_num(get(rcol))]
-      supplied_adstock__ <- TRUE
+      raw_rr <- vm[[rcol]]
+      compact <- lapply(raw_rr, bau_parse_compact_prior)
+      compact_i <- vapply(compact, function(z) isTRUE(z$is_prior), logical(1))
+      supplied_adstock_vec <- is.finite(bau_num(raw_rr)) & !compact_i
+      vm[, adstock_decay := bau_num(raw_rr)]
+      if (any(compact_i)) {
+        if (!"rrate_prior" %in% names(vm)) vm[, rrate_prior := NA_character_]
+        vm[compact_i, rrate_prior := as.character(raw_rr)[compact_i]]
+      }
     } else {
       vm[, adstock_decay := adstock_decay]
     }
   }
-  vm[, adstock_decay_supplied := is.finite(bau_num(adstock_decay)) & isTRUE(supplied_adstock__)]
+  vm[, adstock_decay_supplied := supplied_adstock_vec]
   if (!"adstock_decay_source" %in% names(vm)) {
     vm[, adstock_decay_source := data.table::fifelse(adstock_decay_supplied, "supplied", "default")]
   }
@@ -489,6 +1522,7 @@ bau_normalize_variable_map <- function(data,
   }
   vm[, `:=`(
     curve_type = bau_normalize_curve_type(curve_type),
+    anchor_basis = vapply(anchor_basis, bau_normalize_anchor_basis, character(1)),
     anchor_saturation = bau_clip(bau_num(anchor_saturation), 0.01, 0.99),
     shape = pmax(bau_num(shape), 0.05),
     adstock_decay = bau_clip(bau_num(adstock_decay), 0, 0.999),
@@ -591,16 +1625,15 @@ bau_prepare_scope_series <- function(dt,
 #'   `modeled_x_col`, optional `spend_col`, `curve_type`, `anchor_saturation`,
 #'   `shape`/`dvalue`, `adstock_decay`/`rrate`, and optional business-scale
 #'   fields (`current_contribution`, `current_roi`, `cost_per_kpi`).
-#' @param dep_var_col Optional dependent-variable/KPI column used only for
-#'   guarded pooled rrate diagnostics. If omitted, BAU never estimates rrate.
-#'   If supplied, BAU estimates one shared rrate per variable across the data
-#'   cut unless a per-variable rrate was supplied and `rrate_overwrite_supplied`
-#'   is `FALSE`.
+#' @param dep_var_col Optional dependent-variable/KPI column. When supplied,
+#'   BAU can run an anchor-regularized observational curve search with blocked
+#'   validation. Without it, curves remain anchored-only.
 #' @param channel_curve_anchors Optional named vector/list or table with
 #'   `variable` and `anchor_saturation` overrides. This is the median non-zero
 #'   support saturation anchor, for example 0.50 by default or 0.30 for a
 #'   channel you believe is less saturated at median support.
 #' @return A list with `response_curves`, `curve_metadata`,
+#'   `curve_search_diagnostics`, `curve_candidate_profile`,
 #'   `rrate_diagnostics`, and `settings`.
 create_bau_response_curves <- function(data,
                                        variable_map = NULL,
@@ -616,9 +1649,43 @@ create_bau_response_curves <- function(data,
                                        channel_curve_anchors = NULL,
                                        shape = 1,
                                        adstock_decay = 0,
+                                       estimate_curve_from_kpi = NULL,
+                                       curve_search_anchor_bounds = c(0.03, 0.90),
+                                       curve_search_shape_bounds = c(0.75, 2.50),
+                                       curve_search_coarse_rrate_grid = seq(0, 0.90, by = 0.15),
+                                       curve_search_coarse_anchor_grid = c(0.03, seq(0.10, 0.90, by = 0.10)),
+                                       curve_search_coarse_shape_grid = c(0.75, 1, 1.50, 2, 2.50),
+                                       estimate_shape = FALSE,
+                                       curve_search_fine_rrate_step = 0.025,
+                                       curve_search_fine_anchor_step = 0.025,
+                                       curve_search_fine_shape_step = 0.10,
+                                       curve_search_cv_folds = 4L,
+                                       curve_search_season_period = 52,
+                                       curve_search_fourier_order = 3L,
+                                       curve_search_group_specific_baseline = FALSE,
+                                       curve_search_objective = c("incremental_lift", "prediction_error"),
+                                       curve_search_joint_rrate = TRUE,
+                                       curve_search_rrate_complexity_penalty = 0.05,
+                                       curve_search_lead_placebo_penalty = 0.10,
+                                       curve_search_lead_placebo_min_gap = 0.02,
+                                       curve_search_min_active_periods = 12L,
+                                       curve_search_min_support_cv = 0.05,
+                                       rrate_one_se_keep_best_improvement = 0.005,
+                                       curve_search_mean_saturation_bounds = c(0.08, 0.92),
+                                       curve_search_min_marginal_response_at_mean = 0.015,
+                                       curve_search_skew_median_to_mean_threshold = 0.55,
+                                       curve_search_half_saturation_band_penalty_power = 2,
+                                       curve_search_plausibility_penalty = 0.20,
+                                       curve_sensitivity_max_candidates = 100L,
                                        estimate_rrate = NULL,
+                                       rrate_default = NA_real_,
+                                       rrate_prior = NULL,
+                                       rrate_prior_type = "uniform",
+                                       rrate_prior_mean = NA_real_,
+                                       rrate_prior_sd = NA_real_,
+                                       use_global_rrate_default = FALSE,
                                        rrate_grid = seq(0, 0.80, by = 0.05),
-                                       rrate_bounds = c(0, 0.90),
+                                       rrate_bounds = c(0, 0.999),
                                        rrate_min_active_weeks = 8L,
                                        rrate_min_improvement = 0.01,
                                        rrate_complexity_penalty = 0.002,
@@ -640,6 +1707,7 @@ create_bau_response_curves <- function(data,
   support_basis <- match.arg(support_basis)
   curve_scope <- match.arg(curve_scope)
   curve_normalization_scope <- bau_normalize_curve_normalization_scope(match.arg(curve_normalization_scope))
+  curve_search_objective <- match.arg(curve_search_objective)
   if (is.null(population_col) || !nzchar(as.character(population_col)[1])) {
     population_col <- bau_pick_col(dt, c("population", "pop", "households", "hh", "market_size", "market_population"))
   }
@@ -652,6 +1720,21 @@ create_bau_response_curves <- function(data,
   }
   if (is.null(estimate_rrate)) estimate_rrate <- !is.null(dep_var_col)
   estimate_rrate <- isTRUE(estimate_rrate)
+  if (is.null(estimate_curve_from_kpi)) estimate_curve_from_kpi <- !is.null(dep_var_col)
+  estimate_curve_from_kpi <- isTRUE(estimate_curve_from_kpi) && !is.null(dep_var_col)
+  global_rrate_compact <- bau_parse_compact_prior(rrate_prior, default_type = rrate_prior_type)
+  if (isTRUE(global_rrate_compact$is_prior)) {
+    rrate_prior_type <- global_rrate_compact$type
+    if (is.finite(global_rrate_compact$mean)) rrate_prior_mean <- global_rrate_compact$mean
+    if (is.finite(global_rrate_compact$sd)) rrate_prior_sd <- global_rrate_compact$sd
+    if (is.finite(global_rrate_compact$lower) || is.finite(global_rrate_compact$upper)) {
+      rb <- bau_num(rrate_bounds[1:2])
+      if (length(rb) < 2L || any(!is.finite(rb))) rb <- c(0, 0.999)
+      if (is.finite(global_rrate_compact$lower)) rb[1] <- max(rb[1], global_rrate_compact$lower)
+      if (is.finite(global_rrate_compact$upper)) rb[2] <- min(rb[2], global_rrate_compact$upper)
+      if (is.finite(rb[1]) && is.finite(rb[2]) && rb[1] < rb[2]) rrate_bounds <- rb
+    }
+  }
 
   vm <- bau_normalize_variable_map(
     dt,
@@ -665,6 +1748,40 @@ create_bau_response_curves <- function(data,
     adstock_decay = adstock_decay,
     channel_curve_anchors = channel_curve_anchors
   )
+  rrate_defaults_enabled <- !is.null(dep_var_col) && (isTRUE(estimate_curve_from_kpi) || isTRUE(estimate_rrate))
+  rrate_settings <- lapply(seq_len(nrow(vm)), function(ii) {
+    bau_rrate_settings_for_row(
+      vm,
+      ii,
+      global_bounds = rrate_bounds,
+      global_default = rrate_default,
+      global_prior_type = rrate_prior_type,
+      global_prior_mean = rrate_prior_mean,
+      global_prior_sd = rrate_prior_sd,
+      enable_default = rrate_defaults_enabled,
+      use_global_default = use_global_rrate_default
+    )
+  })
+  vm[, `:=`(
+    rrate_lower = vapply(rrate_settings, function(z) z$bounds[1], numeric(1)),
+    rrate_upper = vapply(rrate_settings, function(z) z$bounds[2], numeric(1)),
+    rrate_default_source = vapply(rrate_settings, function(z) z$default_source, character(1)),
+    rrate_bounds_source = vapply(rrate_settings, function(z) z$bounds_source, character(1)),
+    rrate_prior_type = vapply(rrate_settings, function(z) z$prior_type, character(1)),
+    rrate_prior_mean = vapply(rrate_settings, function(z) z$prior_mean, numeric(1)),
+    rrate_prior_sd = vapply(rrate_settings, function(z) z$prior_sd, numeric(1))
+  )]
+  if (isTRUE(rrate_defaults_enabled)) {
+    vm[adstock_decay_supplied != TRUE, `:=`(
+      adstock_decay = vapply(rrate_settings, function(z) z$default, numeric(1)),
+      adstock_decay_source = rrate_default_source
+    )]
+  }
+  vm[, `:=`(
+    anchor_saturation_prior = anchor_saturation,
+    shape_prior = shape,
+    adstock_decay_prior = adstock_decay
+  )]
 
   multiplier_grid <- sort(unique(pmax(bau_num(multiplier_grid), 0)))
   multiplier_grid <- multiplier_grid[is.finite(multiplier_grid)]
@@ -691,11 +1808,94 @@ create_bau_response_curves <- function(data,
   if (!length(scopes)) scopes <- "total"
 
   rrate_diag_rows <- vector("list", nrow(vm))
+  curve_search_rows <- vector("list", nrow(vm))
+  curve_candidate_rows <- vector("list", nrow(vm))
   for (ii in seq_len(nrow(vm))) {
     v <- as.character(vm$variable[ii])
     supplied <- isTRUE(vm$adstock_decay_supplied[ii])
-    can_estimate <- estimate_rrate && !is.null(dep_var_col) && (!supplied || isTRUE(rrate_overwrite_supplied))
-    if (isTRUE(can_estimate)) {
+    rrate_bounds_i <- c(bau_num(vm$rrate_lower[ii]), bau_num(vm$rrate_upper[ii]))
+    if (length(rrate_bounds_i) < 2L || any(!is.finite(rrate_bounds_i)) || rrate_bounds_i[1] >= rrate_bounds_i[2]) {
+      rrate_bounds_i <- rrate_bounds
+    }
+    shape_i <- bau_num(vm$shape[ii])
+    shape_bounds_i <- if (isTRUE(estimate_shape)) curve_search_shape_bounds else c(shape_i, shape_i)
+    coarse_shape_grid_i <- if (isTRUE(estimate_shape)) curve_search_coarse_shape_grid else shape_i
+    if (isTRUE(estimate_curve_from_kpi)) {
+      search <- bau_search_curve_one(
+        dt = dt,
+        variable = v,
+        support_col = as.character(vm$support_col[ii]),
+        dep_var_col = dep_var_col,
+        date_col = date_col,
+        group_col = group_col,
+        population_col = population_col,
+        train_col = "__bau_train__",
+        default_rrate = bau_num(vm$adstock_decay[ii]),
+        anchor_saturation = bau_num(vm$anchor_saturation[ii]),
+        anchor_basis = as.character(vm$anchor_basis[ii]),
+        shape = shape_i,
+        curve_type = as.character(vm$curve_type[ii]),
+        rrate_supplied = supplied,
+        rrate_overwrite_supplied = rrate_overwrite_supplied,
+        rrate_bounds = rrate_bounds_i,
+        rrate_prior_type = as.character(vm$rrate_prior_type[ii]),
+        rrate_prior_mean = bau_num(vm$rrate_prior_mean[ii]),
+        rrate_prior_sd = bau_num(vm$rrate_prior_sd[ii]),
+        anchor_bounds = curve_search_anchor_bounds,
+        shape_bounds = shape_bounds_i,
+        coarse_rrate_grid = curve_search_coarse_rrate_grid,
+        coarse_anchor_grid = curve_search_coarse_anchor_grid,
+        coarse_shape_grid = coarse_shape_grid_i,
+        fine_rrate_step = curve_search_fine_rrate_step,
+        fine_anchor_step = curve_search_fine_anchor_step,
+        fine_shape_step = curve_search_fine_shape_step,
+        cv_folds = curve_search_cv_folds,
+        season_period = curve_search_season_period,
+        fourier_order = curve_search_fourier_order,
+        group_specific_baseline = curve_search_group_specific_baseline,
+        objective = curve_search_objective,
+        lead_placebo_penalty = curve_search_lead_placebo_penalty,
+        lead_placebo_min_gap = curve_search_lead_placebo_min_gap,
+        min_active_periods = curve_search_min_active_periods,
+        min_support_cv = curve_search_min_support_cv,
+        rrate_one_se_keep_best_improvement = rrate_one_se_keep_best_improvement,
+        joint_rrate_search = curve_search_joint_rrate,
+        rrate_complexity_penalty = curve_search_rrate_complexity_penalty,
+        mean_saturation_bounds = curve_search_mean_saturation_bounds,
+        min_marginal_response_at_mean = curve_search_min_marginal_response_at_mean,
+        skew_median_to_mean_threshold = curve_search_skew_median_to_mean_threshold,
+        half_saturation_band_penalty_power = curve_search_half_saturation_band_penalty_power,
+        plausibility_penalty = curve_search_plausibility_penalty,
+        curve_normalization_scope = curve_normalization_scope
+      )
+      cdiag <- search$diagnostic[1]
+      vm[ii, `:=`(
+        adstock_decay = bau_clip(cdiag$selected_rrate, 0, 0.999),
+        anchor_saturation = bau_clip(cdiag$selected_anchor_saturation, 0.01, 0.99),
+        shape = pmax(cdiag$selected_shape, 0.05),
+        adstock_decay_source = cdiag$curve_search_source
+      )]
+      est <- data.table::data.table(
+        variable = v,
+        rrate_selected = cdiag$selected_rrate,
+        rrate_raw_best = cdiag$raw_best_rrate,
+        rrate_source = cdiag$curve_search_source,
+        rrate_estimation_status = cdiag$curve_search_status,
+        rrate_active_weeks = cdiag$active_periods,
+        rrate_improvement = cdiag$cv_improvement,
+        rrate_score_selected = cdiag$selected_cv_score,
+        rrate_score_default = cdiag$anchor_cv_score,
+        rrate_at_bound = is.finite(cdiag$raw_best_rrate) &&
+          (abs(cdiag$raw_best_rrate - rrate_bounds_i[1]) <= max(1e-10, curve_search_fine_rrate_step) ||
+             abs(cdiag$raw_best_rrate - rrate_bounds_i[2]) <= max(1e-10, curve_search_fine_rrate_step)),
+        rrate_plateau_adjusted = isTRUE(cdiag$selected_at_anchor),
+        rrate_coef_sign = sign(cdiag$observational_coef)
+      )
+      curve_search_rows[[ii]] <- cdiag
+      curve_candidate_rows[[ii]] <- search$candidates
+    } else {
+      can_estimate <- estimate_rrate && !is.null(dep_var_col) && (!supplied || isTRUE(rrate_overwrite_supplied))
+      if (isTRUE(can_estimate)) {
       est <- bau_estimate_rrate_one(
         dt = dt,
         variable = v,
@@ -705,7 +1905,7 @@ create_bau_response_curves <- function(data,
         train_col = "__bau_train__",
         default_rrate = bau_num(vm$adstock_decay[ii]),
         rrate_grid = rrate_grid,
-        rrate_bounds = rrate_bounds,
+        rrate_bounds = rrate_bounds_i,
         rrate_min_active_weeks = rrate_min_active_weeks,
         rrate_min_improvement = rrate_min_improvement,
         rrate_complexity_penalty = rrate_complexity_penalty,
@@ -714,32 +1914,45 @@ create_bau_response_curves <- function(data,
         anchor_saturation = bau_num(vm$anchor_saturation[ii]),
         shape = bau_num(vm$shape[ii]),
         curve_type = as.character(vm$curve_type[ii]),
+        anchor_basis = as.character(vm$anchor_basis[ii]),
         curve_normalization_scope = curve_normalization_scope
       )
       vm[ii, `:=`(
         adstock_decay = bau_clip(est$rrate_selected[1], 0, 0.999),
         adstock_decay_source = est$rrate_source[1]
       )]
-    } else {
-      est <- data.table::data.table(
+      } else {
+        est <- data.table::data.table(
+          variable = v,
+          rrate_selected = bau_num(vm$adstock_decay[ii]),
+          rrate_raw_best = NA_real_,
+          rrate_source = if (supplied) "supplied" else if (is.null(dep_var_col)) "default_no_dep_var" else "default_estimation_disabled",
+          rrate_estimation_status = if (supplied) "not_estimated_supplied_rrate" else if (is.null(dep_var_col)) "not_estimated_no_dep_var" else "not_estimated_disabled",
+          rrate_active_weeks = NA_integer_,
+          rrate_improvement = NA_real_,
+          rrate_score_selected = NA_real_,
+          rrate_score_default = NA_real_,
+          rrate_at_bound = FALSE,
+          rrate_plateau_adjusted = FALSE,
+          rrate_coef_sign = NA_real_
+        )
+        vm[ii, adstock_decay_source := est$rrate_source[1]]
+      }
+      curve_search_rows[[ii]] <- data.table::data.table(
         variable = v,
-        rrate_selected = bau_num(vm$adstock_decay[ii]),
-        rrate_raw_best = NA_real_,
-        rrate_source = if (supplied) "supplied" else if (is.null(dep_var_col)) "default_no_dep_var" else "default_estimation_disabled",
-        rrate_estimation_status = if (supplied) "not_estimated_supplied_rrate" else if (is.null(dep_var_col)) "not_estimated_no_dep_var" else "not_estimated_disabled",
-        rrate_active_weeks = NA_integer_,
-        rrate_improvement = NA_real_,
-        rrate_score_selected = NA_real_,
-        rrate_score_default = NA_real_,
-        rrate_at_bound = FALSE,
-        rrate_plateau_adjusted = FALSE,
-        rrate_coef_sign = NA_real_
+        curve_search_status = if (is.null(dep_var_col)) "anchored_no_kpi" else "curve_search_disabled",
+        curve_search_source = "anchored_default",
+        selected_rrate = vm$adstock_decay[ii],
+        selected_anchor_saturation = vm$anchor_saturation[ii],
+        selected_shape = vm$shape[ii],
+        selected_at_anchor = TRUE
       )
-      vm[ii, adstock_decay_source := est$rrate_source[1]]
     }
     rrate_diag_rows[[ii]] <- est
   }
   rrate_diagnostics <- data.table::rbindlist(rrate_diag_rows, fill = TRUE)
+  curve_search_diagnostics <- data.table::rbindlist(curve_search_rows, fill = TRUE)
+  curve_candidate_profile <- data.table::rbindlist(curve_candidate_rows, fill = TRUE)
 
   rows <- list()
   meta_rows <- list()
@@ -752,11 +1965,33 @@ create_bau_response_curves <- function(data,
     sh <- bau_num(vm$shape[ii])
     rr <- bau_num(vm$adstock_decay[ii])
     anchor <- bau_num(vm$anchor_saturation[ii])
+    anchor_basis_i <- bau_normalize_anchor_basis(vm$anchor_basis[ii])
+    anchor_prior <- bau_num(vm$anchor_saturation_prior[ii])
+    shape_prior <- bau_num(vm$shape_prior[ii])
+    adstock_decay_prior_i <- bau_num(vm$adstock_decay_prior[ii])
     current_contribution_input <- bau_num(vm$current_contribution[ii])
     current_roi_input <- bau_num(vm$current_roi[ii])
     current_cpkpi_input <- bau_num(vm$current_cost_per_kpi[ii])
     value_per_kpi_i <- bau_first_finite(vm$value_per_kpi[ii], value_per_kpi)
     rdiag <- rrate_diagnostics[variable == v][1]
+    cdiag <- curve_search_diagnostics[variable == v][1]
+    sensitivity_candidates <- if (nrow(curve_candidate_profile) &&
+      all(c("variable", "search_stage", "within_one_se") %in% names(curve_candidate_profile))) {
+      curve_candidate_profile[
+        variable == v & search_stage %in% c("coarse", "fine") & within_one_se == TRUE
+      ][order(anchor_distance, cv_score)]
+    } else {
+      data.table::data.table()
+    }
+    if (nrow(sensitivity_candidates) > as.integer(curve_sensitivity_max_candidates)) {
+      sensitivity_candidates <- sensitivity_candidates[seq_len(as.integer(curve_sensitivity_max_candidates))]
+    }
+    if (!nrow(sensitivity_candidates)) {
+      sensitivity_candidates <- data.table::data.table(
+        rrate = rr, anchor_saturation = anchor, shape = sh,
+        cv_score = NA_real_, anchor_distance = 0
+      )
+    }
 
     scope_groups <- list()
     if ("group" %in% scopes) {
@@ -797,7 +2032,7 @@ create_bau_response_curves <- function(data,
       if (!is.finite(carry_scale) || carry_scale <= 1e-10) carry_scale <- 1
       z <- carry / carry_scale
       active <- train_mask & is.finite(z) & z > 0 & is.finite(x_raw) & x_raw > 0
-      anchor_x <- stats::median(z[active], na.rm = TRUE)
+      anchor_x <- bau_anchor_x_from_values(z, active, anchor_basis_i)
       rate <- bau_rate_from_anchor(anchor_x, anchor_saturation = anchor, shape = sh, curve_type = ct)
       if (!is.finite(rate) || rate <= 0) {
         rate <- 1
@@ -808,6 +2043,23 @@ create_bau_response_curves <- function(data,
       sat_current <- bau_saturation(z, curve_rate = rate, shape = sh, curve_type = ct)
       current_response_mean <- mean(sat_current[norm_mask], na.rm = TRUE)
       if (!is.finite(current_response_mean) || current_response_mean <= 1e-10) current_response_mean <- 1
+      mean_z_active <- mean(z[active], na.rm = TRUE)
+      median_z_active <- stats::median(z[active], na.rm = TRUE)
+      median_to_mean_support <- if (is.finite(mean_z_active) && mean_z_active > 0) median_z_active / mean_z_active else NA_real_
+      half_saturation_support <- bau_half_saturation_x(rate, sh, ct)
+      half_saturation_band_low <- min(c(median_z_active, mean_z_active), na.rm = TRUE)
+      half_saturation_band_high <- max(c(median_z_active, mean_z_active), na.rm = TRUE)
+      saturation_at_mean_support <- if (is.finite(mean_z_active) && mean_z_active > 0) bau_saturation(mean_z_active, rate, sh, ct) else NA_real_
+      saturation_at_mean_support_up <- if (is.finite(mean_z_active) && mean_z_active > 0) bau_saturation(mean_z_active * (1 + step_pct), rate, sh, ct) else NA_real_
+      marginal_response_at_mean_support <- if (is.finite(saturation_at_mean_support) && is.finite(saturation_at_mean_support_up)) {
+        (saturation_at_mean_support_up - saturation_at_mean_support) / step_pct
+      } else {
+        NA_real_
+      }
+      curve_quality_flag <- as.character(cdiag$curve_quality_flag %||% NA_character_)
+      if (length(curve_quality_flag) != 1L || is.na(curve_quality_flag) || !nzchar(curve_quality_flag)) {
+        curve_quality_flag <- if (isTRUE(estimate_curve_from_kpi)) "weak_curve_signal" else "anchored_bau_curve_no_kpi"
+      }
       current_support <- sum(x_raw[train_mask], na.rm = TRUE)
       current_spend <- if (all(is.na(spend_raw))) NA_real_ else sum(spend_raw[train_mask], na.rm = TRUE)
 
@@ -820,6 +2072,31 @@ create_bau_response_curves <- function(data,
         current_contribution <- current_spend / current_cpkpi_input
       }
       optimizer_ready <- is.finite(current_contribution) && is.finite(current_spend) && current_spend > 0
+
+      evaluate_candidate <- function(m, rr_i, anchor_i, shape_i) {
+        carry_i <- bau_adstock(x_curve, decay = rr_i)
+        scale_i <- if (normalize_curve_x) mean(carry_i[norm_mask], na.rm = TRUE) else 1
+        if (!is.finite(scale_i) || scale_i <= 1e-10) scale_i <- 1
+        z_i <- carry_i / scale_i
+        active_i <- train_mask & is.finite(z_i) & z_i > 0 & x_raw > 0
+        anchor_x_i <- bau_anchor_x_from_values(z_i, active_i, anchor_basis_i)
+        rate_i <- bau_rate_from_anchor(anchor_x_i, anchor_i, shape_i, ct)
+        sat_base_i <- bau_saturation(z_i, rate_i, shape_i, ct)
+        response_base_i <- mean(sat_base_i[norm_mask], na.rm = TRUE)
+        if (!is.finite(response_base_i) || response_base_i <= 1e-10) response_base_i <- 1
+        carry_eval_i <- bau_adstock(x_curve * m, decay = rr_i)
+        sat_eval_i <- bau_saturation(carry_eval_i / scale_i, rate_i, shape_i, ct)
+        response_mean_i <- mean(sat_eval_i[norm_mask], na.rm = TRUE)
+        carry_up_i <- bau_adstock(x_curve * (m + step_pct), decay = rr_i)
+        sat_up_i <- bau_saturation(carry_up_i / scale_i, rate_i, shape_i, ct)
+        response_up_i <- mean(sat_up_i[norm_mask], na.rm = TRUE) / response_base_i
+        response_index_i <- response_mean_i / response_base_i
+        c(
+          response_index = response_index_i,
+          saturation = response_mean_i,
+          marginal_response_index = (response_up_i - response_index_i) / step_pct
+        )
+      }
 
       make_one <- function(m) {
         carry_eval <- bau_adstock(x_curve * m, decay = rr)
@@ -836,6 +2113,29 @@ create_bau_response_curves <- function(data,
         contribution <- if (is.finite(current_contribution)) current_contribution * response_index else NA_real_
         incremental_contribution_for_mroi <- if (is.finite(current_contribution)) current_contribution * (response_up - response_index) else NA_real_
         incremental_spend_for_mroi <- if (is.finite(current_spend)) current_spend * step_pct else NA_real_
+        sensitivity_values <- t(vapply(seq_len(nrow(sensitivity_candidates)), function(jj) {
+          evaluate_candidate(
+            m,
+            sensitivity_candidates$rrate[jj],
+            sensitivity_candidates$anchor_saturation[jj],
+            sensitivity_candidates$shape[jj]
+          )
+        }, numeric(3)))
+        q <- function(x, p) {
+          x <- x[is.finite(x)]
+          if (!length(x)) return(NA_real_)
+          as.numeric(stats::quantile(x, p, names = FALSE, type = 8, na.rm = TRUE))
+        }
+        response_q05 <- q(sensitivity_values[, "response_index"], 0.05)
+        response_q50 <- q(sensitivity_values[, "response_index"], 0.50)
+        response_q95 <- q(sensitivity_values[, "response_index"], 0.95)
+        saturation_q05 <- q(sensitivity_values[, "saturation"], 0.05)
+        saturation_q50 <- q(sensitivity_values[, "saturation"], 0.50)
+        saturation_q95 <- q(sensitivity_values[, "saturation"], 0.95)
+        marginal_q05 <- q(sensitivity_values[, "marginal_response_index"], 0.05)
+        marginal_q50 <- q(sensitivity_values[, "marginal_response_index"], 0.50)
+        marginal_q95 <- q(sensitivity_values[, "marginal_response_index"], 0.95)
+        anchor_values <- evaluate_candidate(m, adstock_decay_prior_i, anchor_prior, shape_prior)
         data.table::data.table(
           scope = sc,
           group = if (identical(sc, "total")) "ALL" else as.character(gg),
@@ -846,7 +2146,14 @@ create_bau_response_curves <- function(data,
           support = support,
           current_support = current_support,
           response_index = response_index,
+          response_index_q05 = response_q05,
+          response_index_q50 = response_q50,
+          response_index_q95 = response_q95,
+          anchor_response_index = anchor_values["response_index"],
           saturation = response_mean,
+          saturation_q05 = saturation_q05,
+          saturation_q50 = saturation_q50,
+          saturation_q95 = saturation_q95,
           current_saturation = current_response_mean,
           contribution = contribution,
           current_contribution = current_contribution,
@@ -858,17 +2165,45 @@ create_bau_response_curves <- function(data,
           cost_per_kpi = if (is.finite(contribution) && contribution > 1e-10 && is.finite(spend)) spend / contribution else NA_real_,
           value_per_cost = if (is.finite(value_per_kpi_i) && is.finite(spend) && spend > 1e-10 && is.finite(contribution)) contribution * value_per_kpi_i / spend else NA_real_,
           marginal_response_index = (response_up - response_index) / step_pct,
+          marginal_response_index_q05 = marginal_q05,
+          marginal_response_index_q50 = marginal_q50,
+          marginal_response_index_q95 = marginal_q95,
+          contribution_q05 = if (is.finite(current_contribution)) current_contribution * response_q05 else NA_real_,
+          contribution_q50 = if (is.finite(current_contribution)) current_contribution * response_q50 else NA_real_,
+          contribution_q95 = if (is.finite(current_contribution)) current_contribution * response_q95 else NA_real_,
+          roi_q05 = if (is.finite(spend) && spend > 1e-10 && is.finite(current_contribution)) current_contribution * response_q05 / spend else NA_real_,
+          roi_q50 = if (is.finite(spend) && spend > 1e-10 && is.finite(current_contribution)) current_contribution * response_q50 / spend else NA_real_,
+          roi_q95 = if (is.finite(spend) && spend > 1e-10 && is.finite(current_contribution)) current_contribution * response_q95 / spend else NA_real_,
           curve_type = ct,
+          anchor_basis = anchor_basis_i,
           anchor_saturation = anchor,
           curve_shape = sh,
+          dvalue = sh,
           adstock_decay = rr,
           adstock_decay_source = as.character(rdiag$rrate_source %||% vm$adstock_decay_source[ii]),
+          rrate_prior_type = as.character(vm$rrate_prior_type[ii] %||% NA_character_),
+          rrate_prior_mean = bau_num(vm$rrate_prior_mean[ii]),
+          rrate_prior_sd = bau_num(vm$rrate_prior_sd[ii]),
           curve_rate = rate,
+          cvalue = rate,
+          median_to_mean_support = median_to_mean_support,
+          active_median_support = median_z_active,
+          active_mean_support = mean_z_active,
+          half_saturation_support = half_saturation_support,
+          half_saturation_band_low = half_saturation_band_low,
+          half_saturation_band_high = half_saturation_band_high,
+          saturation_at_mean_support = saturation_at_mean_support,
+          marginal_response_at_mean_support = marginal_response_at_mean_support,
+          curve_quality_flag = curve_quality_flag,
           support_basis = ser$support_basis_used__[1],
           population_scale = ser$population_scale__[1],
           optimizer_ready = optimizer_ready,
-          response_curve_basis = "bau_anchor_from_historical_support",
-          uncertainty_note = "Deterministic BAU curve. Shape comes from historical support and anchor settings; business scale comes only from supplied contribution/ROI/cost-per-KPI inputs.",
+          response_curve_basis = if (isTRUE(estimate_curve_from_kpi)) "bau_anchor_regularized_observational_search" else "bau_anchor_from_historical_support",
+          uncertainty_note = if (isTRUE(estimate_curve_from_kpi)) {
+            "q05/q50/q95 are observational sensitivity envelopes across one-standard-error candidate curves, not Bayesian credible intervals."
+          } else {
+            "Anchored deterministic BAU curve; q05/q50/q95 equal the point curve because no KPI search was run."
+          },
           flighting_assumption = "Each curve scales the historical support path in the supplied data cut.",
           cost_assumption = if (is.na(spend_col)) "No spend_col was available; economics are not optimizer-ready." else "Spend scales with support using historical spend totals."
         )
@@ -881,18 +2216,52 @@ create_bau_response_curves <- function(data,
         support_col = support_col,
         spend_col = spend_col,
         curve_type = ct,
+        anchor_basis = anchor_basis_i,
+        anchor_saturation_prior = anchor_prior,
         anchor_saturation = anchor,
+        curve_shape_prior = shape_prior,
         curve_shape = sh,
+        dvalue = sh,
+        adstock_decay_prior = adstock_decay_prior_i,
         adstock_decay = rr,
         adstock_decay_source = as.character(rdiag$rrate_source %||% vm$adstock_decay_source[ii]),
+        rrate_lower = bau_num(vm$rrate_lower[ii]),
+        rrate_upper = bau_num(vm$rrate_upper[ii]),
+        rrate_default_source = as.character(vm$rrate_default_source[ii] %||% NA_character_),
+        rrate_bounds_source = as.character(vm$rrate_bounds_source[ii] %||% NA_character_),
+        rrate_prior_type = as.character(vm$rrate_prior_type[ii] %||% NA_character_),
+        rrate_prior_mean = bau_num(vm$rrate_prior_mean[ii]),
+        rrate_prior_sd = bau_num(vm$rrate_prior_sd[ii]),
         rrate_estimation_status = as.character(rdiag$rrate_estimation_status %||% NA_character_),
         rrate_improvement = bau_num(rdiag$rrate_improvement %||% NA_real_),
         rrate_active_weeks = as.integer(rdiag$rrate_active_weeks %||% NA_integer_),
         rrate_at_bound = isTRUE(rdiag$rrate_at_bound),
         rrate_plateau_adjusted = isTRUE(rdiag$rrate_plateau_adjusted),
+        curve_search_status = as.character(cdiag$curve_search_status %||% NA_character_),
+        curve_search_source = as.character(cdiag$curve_search_source %||% NA_character_),
+        curve_search_cv_improvement = bau_num(cdiag$cv_improvement %||% NA_real_),
+        curve_search_support_cv = bau_num(cdiag$support_cv %||% NA_real_),
+        curve_search_basis = as.character(cdiag$search_basis %||% NA_character_),
+        curve_search_candidate_n = nrow(sensitivity_candidates),
+        rrate_profile_status = as.character(cdiag$rrate_profile_status %||% NA_character_),
+        rrate_profile_low = bau_num(cdiag$rrate_profile_low %||% NA_real_),
+        rrate_profile_high = bau_num(cdiag$rrate_profile_high %||% NA_real_),
+        rrate_profile_improvement = bau_num(cdiag$rrate_profile_improvement %||% NA_real_),
         curve_rate = rate,
+        cvalue = rate,
         anchor_x = anchor_x,
         saturation_at_anchor = bau_saturation(anchor_x, rate, sh, ct),
+        median_to_mean_support = median_to_mean_support,
+        active_median_support = median_z_active,
+        active_mean_support = mean_z_active,
+        half_saturation_support = half_saturation_support,
+        half_saturation_band_low = half_saturation_band_low,
+        half_saturation_band_high = half_saturation_band_high,
+        saturation_at_mean_support = saturation_at_mean_support,
+        marginal_response_at_mean_support = marginal_response_at_mean_support,
+        selected_vs_anchor_delta = anchor - anchor_prior,
+        plausibility_flag = as.character(cdiag$plausibility_flag %||% NA_character_),
+        weak_curve_signal = isTRUE(cdiag$weak_curve_signal),
         current_support = current_support,
         current_spend = current_spend,
         current_contribution = current_contribution,
@@ -902,6 +2271,7 @@ create_bau_response_curves <- function(data,
         population_scale = ser$population_scale__[1],
         rows_used = sum(train_mask, na.rm = TRUE),
         curve_status = curve_status,
+        curve_quality_flag = curve_quality_flag,
         optimizer_ready = optimizer_ready,
         evidence_note = if (optimizer_ready) {
           "Curve has a business scale and can feed scenario/optimizer tools."
@@ -920,16 +2290,82 @@ create_bau_response_curves <- function(data,
   if (nrow(curve_metadata)) {
     data.table::setorderv(curve_metadata, c("variable", "scope", "group"))
   }
+  curve_export_table <- if (nrow(curve_metadata)) {
+    curve_metadata[, .(
+      group,
+      variable,
+      adstock_decay,
+      rrate_prior_type,
+      rrate_prior_mean,
+      rrate_prior_sd,
+      anchor_basis,
+      cvalue,
+      dvalue,
+      anchor_saturation,
+      anchor_x,
+      active_median_support,
+      active_mean_support,
+      half_saturation_support,
+      saturation_at_mean_support,
+      curve_quality_flag
+    )]
+  } else {
+    data.table::data.table(
+      group = character(),
+      variable = character(),
+      adstock_decay = numeric(),
+      rrate_prior_type = character(),
+      rrate_prior_mean = numeric(),
+      rrate_prior_sd = numeric(),
+      anchor_basis = character(),
+      cvalue = numeric(),
+      dvalue = numeric(),
+      anchor_saturation = numeric(),
+      anchor_x = numeric(),
+      active_median_support = numeric(),
+      active_mean_support = numeric(),
+      half_saturation_support = numeric(),
+      saturation_at_mean_support = numeric(),
+      curve_quality_flag = character()
+    )
+  }
   list(
+    package_info = econimap_output_metadata("create_bau_response_curves", surface = "bau_response_curves"),
     response_curves = response_curves[],
     curve_metadata = curve_metadata[],
+    curve_export_table = curve_export_table[],
+    curve_search_diagnostics = curve_search_diagnostics[],
+    curve_candidate_profile = curve_candidate_profile[],
     rrate_diagnostics = rrate_diagnostics[],
     settings = list(
       curve_type_default = curve_type,
       anchor_saturation_default = anchor_saturation,
       dep_var_col = dep_var_col,
+      estimate_curve_from_kpi = estimate_curve_from_kpi,
       estimate_rrate = estimate_rrate,
+      rrate_default = rrate_default,
+      rrate_prior = rrate_prior,
+      rrate_prior_type = rrate_prior_type,
+      rrate_prior_mean = rrate_prior_mean,
+      rrate_prior_sd = rrate_prior_sd,
+      use_global_rrate_default = use_global_rrate_default,
       rrate_overwrite_supplied = rrate_overwrite_supplied,
+      estimate_shape = estimate_shape,
+      curve_search_anchor_bounds = curve_search_anchor_bounds,
+      curve_search_shape_bounds = curve_search_shape_bounds,
+      curve_search_objective = curve_search_objective,
+      curve_search_joint_rrate = curve_search_joint_rrate,
+      curve_search_rrate_complexity_penalty = curve_search_rrate_complexity_penalty,
+      curve_search_fourier_order = curve_search_fourier_order,
+      curve_search_group_specific_baseline = curve_search_group_specific_baseline,
+      curve_search_lead_placebo_penalty = curve_search_lead_placebo_penalty,
+      curve_search_lead_placebo_min_gap = curve_search_lead_placebo_min_gap,
+      rrate_one_se_keep_best_improvement = rrate_one_se_keep_best_improvement,
+      curve_search_mean_saturation_bounds = curve_search_mean_saturation_bounds,
+      curve_search_min_marginal_response_at_mean = curve_search_min_marginal_response_at_mean,
+      curve_search_skew_median_to_mean_threshold = curve_search_skew_median_to_mean_threshold,
+      curve_search_half_saturation_band_penalty_power = curve_search_half_saturation_band_penalty_power,
+      curve_search_plausibility_penalty = curve_search_plausibility_penalty,
       support_basis = support_basis,
       curve_scope = curve_scope,
       normalize_curve_x = normalize_curve_x,
