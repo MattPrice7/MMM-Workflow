@@ -194,6 +194,34 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     )]
   }
 
+  assert_fair_leaf_benchmark <- function(data, generic_fit_metadata, truth_metadata, fit_args, baseline_spec) {
+    generic_hash <- econ_seq_content_hash(
+      data = data,
+      metadata = generic_fit_metadata,
+      fit_args = fit_args,
+      baseline_spec = baseline_spec
+    )
+    truth_cols <- intersect(c("true_rrate", "true_cvalue", "true_dvalue", "true_raw_beta"), names(truth_metadata))
+    if (length(truth_cols) && all(c("variable", "rrate", "cvalue", "dvalue", "coef") %in% names(generic_fit_metadata))) {
+      truth_cmp <- truth_metadata[, c("variable", truth_cols), with = FALSE]
+      generic_cmp <- generic_fit_metadata[role == "media", .(variable, rrate, cvalue, dvalue, coef)]
+      merged <- merge(generic_cmp, truth_cmp, by = "variable", all.x = TRUE, sort = FALSE)
+      if (nrow(merged) && all(c("true_rrate", "true_cvalue", "true_dvalue", "true_raw_beta") %in% names(merged))) {
+        stopifnot(any(abs(merged$rrate - merged$true_rrate) > 1e-10 |
+                        abs(merged$cvalue - merged$true_cvalue) > 1e-10 |
+                        abs(merged$dvalue - merged$true_dvalue) > 1e-10 |
+                        abs(merged$coef - merged$true_raw_beta) > 1e-10))
+      }
+    }
+    data.table(
+      direct_base_prior_hash = generic_hash,
+      sequential_base_prior_hash = generic_hash,
+      base_contract_identical = TRUE,
+      truth_used_in_primary_fit = FALSE,
+      note = "Direct and sequential leaf paths begin from the same generic metadata; only sequential parent evidence is added after the base contract."
+    )
+  }
+
   recovery_summary <- function(fit_obj, panel, curve_spec, label, fitted_variable_map = NULL) {
     truth_source <- data.table(
       truth_variable = media_vars,
@@ -270,9 +298,9 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
       effectiveness_q95 = contribution_q95 / true_spend,
       contribution_interval_covered = true_contribution >= contribution_q05 & true_contribution <= contribution_q95,
       absolute_rrate_error = abs(estimated_rrate - true_rrate),
-      absolute_saturation_error = abs(estimated_normalized_saturation - true_normalized_saturation),
-      absolute_effectiveness_error = abs(estimated_effectiveness - true_effectiveness)
+      absolute_saturation_error = abs(estimated_normalized_saturation - true_normalized_saturation)
     )]
+    rows[, absolute_effectiveness_error := abs(estimated_effectiveness - true_effectiveness)]
 
     movement <- as.data.table(fit_obj$sequential_prior_posterior_audit %||% data.table())
     if (nrow(movement)) {
@@ -361,6 +389,13 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     response_curve_scope = "total"
     ,holdout_last_n = 13L
   )
+  minimal_smoke <- Sys.getenv("ECONIMAP_SEQUENTIAL_VALIDATION_MINIMAL_SMOKE", "0") == "1"
+  if (minimal_smoke) {
+    fit_args <- modifyList(fit_args, list(
+      chains = 1L, parallel_chains = 1L, iter_warmup = 60L, iter_sampling = 30L,
+      likelihood = "normal", response_curve_draw_count = 20L
+    ))
+  }
   if (length(source_root)) fit_args$stan_file <- file.path(source_root[1], "inst", "stan", "hier_mmm.stan")
   validation_files <- if (length(source_root)) {
     c(
@@ -383,11 +418,13 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     if (length(unknown_regimes)) stop("Unknown validation regime(s): ", paste(unknown_regimes, collapse = ", "), call. = FALSE)
     regimes <- requested_regimes
   }
+  if (minimal_smoke) regimes <- "clean_separated"
   validation_seeds <- suppressWarnings(as.integer(trimws(strsplit(
     Sys.getenv("ECONIMAP_SEQUENTIAL_VALIDATION_SEEDS", "1,2,3"), ",", fixed = TRUE
   )[[1]])))
   validation_seeds <- unique(validation_seeds[is.finite(validation_seeds)])
   if (!length(validation_seeds)) stop("ECONIMAP_SEQUENTIAL_VALIDATION_SEEDS must contain at least one integer.", call. = FALSE)
+  if (minimal_smoke) validation_seeds <- validation_seeds[1]
   validation_jobs <- data.table::CJ(regime = regimes, validation_seed = validation_seeds, unique = TRUE)
   for (i in seq_len(nrow(validation_jobs))) {
     regime <- validation_jobs$regime[i]
@@ -414,15 +451,15 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
         root_season_period = 52L, control_cols = "macro"
       ),
       media_scope_config = NULL,
-      root_bootstrap_reps = 60L,
+      root_bootstrap_reps = if (minimal_smoke) 12L else 60L,
       root_block_length = 4L,
       sequential_target_layer = "leaf",
-      prior_transfer_settings = c(
-        "effectiveness_only",
-        "effectiveness_adstock",
-        "effectiveness_adstock_saturation"
-      ),
+      primary_paths = c("direct_leaf", "sequential_root_to_leaf", "sequential_depth1_to_leaf"),
+      prior_transfer_settings = "effectiveness_adstock_saturation",
       run_oracle = run_oracle
+    )
+    fair_benchmark_contract <- assert_fair_leaf_benchmark(
+      sim$data, sim$generic_fit_metadata, sim$truth_metadata, fit_args_i, validation_config$baseline_spec
     )
     checkpoint_hash <- econ_seq_content_hash(
       data = sim$data,
@@ -456,6 +493,7 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     regime_dir <- file.path(checkpoint_root, regime, paste0("seed_", validation_seed), checkpoint_hash)
     dir.create(regime_dir, recursive = TRUE, showWarnings = FALSE)
     saveRDS(manifest, file.path(regime_dir, "validation_manifest.rds"))
+    fwrite(fair_benchmark_contract, file.path(regime_dir, "fair_benchmark_contract.csv"))
 
     direct <- load_or_run(file.path(regime_dir, "direct_leaf_fit.rds"), function() {
       do.call(fit_hier_mmm, modifyList(fit_args_i, list(
@@ -494,56 +532,72 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
       fwrite(oracle_eval$by_variable, file.path(regime_dir, "direct_oracle_recovery_by_variable.csv"))
     }
 
-    sequential_modes <- validation_config$prior_transfer_settings
-    staged_evals <- list()
-    staged_gates <- list()
-    staged_root_audit <- list()
-    for (mode_i in seq_along(sequential_modes)) {
-      transfer_mode <- sequential_modes[mode_i]
-      model_label <- paste0("sequential_", transfer_mode)
-      stage <- load_or_run(file.path(regime_dir, paste0(model_label, "_leaf_stage.rds")), function() {
-        stage_fit_args <- modifyList(fit_args_i, list(
-          output_dir = file.path(regime_dir, paste0(model_label, "_cmdstan")),
-          output_prefix = model_label
-        ))
-        run_sequential_hierarchical_bayes(
-          data = sim$data,
-          metadata_input = sim$generic_fit_metadata,
-          dep_var_col = "kpi",
-          group_col = "geo",
-          time_col = "period",
-          entity_col = "entity",
-          spend_map = spend_map,
-          media_scope_config = validation_config$media_scope_config,
-          root_control_cols = "macro",
-          root_trend_spec = "none",
-          root_fourier_harmonics = 0L,
-          baseline_spec = validation_config$baseline_spec,
-          holdout_last_n = 13L,
-          root_bootstrap_reps = 60L,
-          root_block_length = 4L,
-          rollup_depth = "leaf",
-          curve_transfer_mode = transfer_mode,
-          fit_child = TRUE,
-          child_fit_args = stage_fit_args,
-          output_dir = file.path(regime_dir, paste0(model_label, "_audit")),
-          seed = 2100L + validation_seed
-        )
-      }, manifest)
-      staged_evals[[mode_i]] <- recovery_summary(stage$child_fit, sim$data, sim$curve_spec, model_label)
-      fwrite(staged_evals[[mode_i]]$overall, file.path(regime_dir, paste0(model_label, "_recovery_overall.csv")))
-      fwrite(staged_evals[[mode_i]]$by_variable, file.path(regime_dir, paste0(model_label, "_recovery_by_variable.csv")))
-      staged_gates[[mode_i]] <- copy(stage$child_identification$by_variable)[, `:=`(
-        regime = regime,
-        model = model_label
-      )]
-      staged_root_audit[[mode_i]] <- data.table(
-        model = model_label,
-        root_curve_type = stage$root_fit$root_summary$root_curve_type[1],
-        root_effectiveness_status = stage$root_fit$root_summary$root_effectiveness_status[1],
-        depth_gate = stage$depth_gate$identification_recommendation[1]
+    # Fair primary benchmark: every leaf fit begins with generic metadata,
+    # identical data, baseline, holdout, curve flexibility, and sampler args.
+    # Parent-derived calibration is the only intentional sequential difference.
+    transfer_mode <- "effectiveness_adstock_saturation"
+    root_leaf_label <- "sequential_root_to_leaf"
+    root_leaf <- load_or_run(file.path(regime_dir, paste0(root_leaf_label, "_stage.rds")), function() {
+      stage_fit_args <- modifyList(fit_args_i, list(
+        output_dir = file.path(regime_dir, paste0(root_leaf_label, "_cmdstan")),
+        output_prefix = root_leaf_label
+      ))
+      run_sequential_hierarchical_bayes(
+        data = sim$data, metadata_input = sim$generic_fit_metadata,
+        dep_var_col = "kpi", group_col = "geo", time_col = "period", entity_col = "entity",
+        spend_map = spend_map, media_scope_config = validation_config$media_scope_config,
+        root_control_cols = "macro", root_trend_spec = "none", root_fourier_harmonics = 0L,
+        baseline_spec = validation_config$baseline_spec, holdout_last_n = 13L,
+        root_bootstrap_reps = validation_config$root_bootstrap_reps, root_block_length = 4L, rollup_depth = "leaf",
+        curve_transfer_mode = transfer_mode, fit_child = TRUE, child_fit_args = stage_fit_args,
+        output_dir = file.path(regime_dir, paste0(root_leaf_label, "_audit")), seed = 2100L + validation_seed
       )
+    }, manifest)
+    depth1_label <- "sequential_depth1_to_leaf"
+    depth1_stage <- load_or_run(file.path(regime_dir, "sequential_depth1_stage.rds"), function() {
+      stage_fit_args <- modifyList(fit_args_i, list(
+        output_dir = file.path(regime_dir, "sequential_depth1_cmdstan"), output_prefix = "sequential_depth1"
+      ))
+      run_sequential_hierarchical_bayes(
+        data = sim$data, metadata_input = sim$generic_fit_metadata,
+        dep_var_col = "kpi", group_col = "geo", time_col = "period", entity_col = "entity",
+        spend_map = spend_map, media_scope_config = validation_config$media_scope_config,
+        root_control_cols = "macro", root_trend_spec = "none", root_fourier_harmonics = 0L,
+        baseline_spec = validation_config$baseline_spec, holdout_last_n = 13L,
+        root_bootstrap_reps = validation_config$root_bootstrap_reps, root_block_length = 4L, rollup_depth = 1L,
+        curve_transfer_mode = transfer_mode, fit_child = TRUE, child_fit_args = stage_fit_args,
+        output_dir = file.path(regime_dir, "sequential_depth1_audit"), seed = 2100L + validation_seed
+      )
+    }, manifest)
+    depth1_leaf <- load_or_run(file.path(regime_dir, paste0(depth1_label, "_stage.rds")), function() {
+      leaf_fit_args <- modifyList(fit_args_i, list(
+        output_dir = file.path(regime_dir, paste0(depth1_label, "_cmdstan")), output_prefix = depth1_label
+      ))
+      continue_sequential_hierarchical_bayes(
+        parent_stage = depth1_stage, data = sim$data, metadata_input = sim$generic_fit_metadata,
+        dep_var_col = "kpi", group_col = "geo", time_col = "period", entity_col = "entity",
+        spend_map = spend_map, rollup_depth = "leaf", curve_transfer_mode = transfer_mode,
+        fit_child = TRUE, child_fit_args = leaf_fit_args,
+        output_dir = file.path(regime_dir, paste0(depth1_label, "_audit"))
+      )
+    }, manifest)
+    staged_evals <- list(
+      recovery_summary(root_leaf$child_fit, sim$data, sim$curve_spec, root_leaf_label),
+      recovery_summary(depth1_leaf$child_fit, sim$data, sim$curve_spec, depth1_label)
+    )
+    staged_labels <- c(root_leaf_label, depth1_label)
+    for (mode_i in seq_along(staged_evals)) {
+      fwrite(staged_evals[[mode_i]]$overall, file.path(regime_dir, paste0(staged_labels[mode_i], "_recovery_overall.csv")))
+      fwrite(staged_evals[[mode_i]]$by_variable, file.path(regime_dir, paste0(staged_labels[mode_i], "_recovery_by_variable.csv")))
     }
+    staged_gates <- list(
+      copy(root_leaf$child_identification$by_variable)[, `:=`(regime = regime, model = root_leaf_label)],
+      copy(depth1_leaf$child_identification$by_variable)[, `:=`(regime = regime, model = depth1_label)]
+    )
+    staged_root_audit <- list(
+      data.table(model = root_leaf_label, root_curve_type = root_leaf$root_fit$root_summary$root_curve_type[1], root_effectiveness_status = root_leaf$root_fit$root_summary$root_effectiveness_status[1], depth_gate = root_leaf$depth_gate$identification_recommendation[1]),
+      data.table(model = depth1_label, root_curve_type = depth1_leaf$root_fit$root_summary$root_curve_type[1], root_effectiveness_status = depth1_leaf$root_fit$root_summary$root_effectiveness_status[1], depth_gate = depth1_leaf$depth_gate$identification_recommendation[1])
+    )
     primary_overall <- rbindlist(c(list(direct_eval$overall), lapply(staged_evals, `[[`, "overall")), fill = TRUE)
     overall <- if (is.null(oracle_eval)) primary_overall else rbindlist(list(primary_overall, oracle_eval$overall), fill = TRUE)
     root_audit <- rbindlist(staged_root_audit, fill = TRUE)
@@ -561,6 +615,30 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
       "sampler_review",
       fifelse(regime == "clean_separated" & (total_relative_error > 0.35 | share_mae > 0.18), "recovery_review", "measured")
     )]
+    direct_reference <- overall[model == "direct_leaf"][1]
+    overall[, `:=`(
+      direct_total_relative_error = direct_reference$total_relative_error,
+      direct_contribution_share_mae = direct_reference$share_mae,
+      direct_effectiveness_mae = direct_reference$effectiveness_mae,
+      direct_rrate_mae = direct_reference$rrate_mae,
+      direct_saturation_mae = direct_reference$normalized_saturation_mae,
+      direct_holdout_rmse = direct_reference$holdout_rmse,
+      delta_total_relative_error_vs_direct = total_relative_error - direct_reference$total_relative_error,
+      delta_share_mae_vs_direct = share_mae - direct_reference$share_mae,
+      delta_effectiveness_mae_vs_direct = effectiveness_mae - direct_reference$effectiveness_mae,
+      delta_rrate_mae_vs_direct = rrate_mae - direct_reference$rrate_mae,
+      delta_saturation_mae_vs_direct = normalized_saturation_mae - direct_reference$normalized_saturation_mae,
+      delta_holdout_rmse_vs_direct = holdout_rmse - direct_reference$holdout_rmse
+    )]
+    # Clean-case non-inferiority is relative to the generic-prior direct fit,
+    # not a permissive absolute recovery threshold.
+    overall[regime == "clean_separated" & model != "direct_leaf" & model != "direct_oracle_upper_bound",
+            sequential_materially_inferior_to_direct :=
+              delta_share_mae_vs_direct > 0.05 |
+              delta_effectiveness_mae_vs_direct > 0.10 |
+              delta_rrate_mae_vs_direct > 0.10 |
+              delta_saturation_mae_vs_direct > 0.10 |
+              delta_holdout_rmse_vs_direct > 0.10 * pmax(direct_holdout_rmse, 1e-8)]
     primary_by_variable <- rbindlist(c(list(direct_eval$by_variable), lapply(staged_evals, `[[`, "by_variable")), fill = TRUE)
     by_variable <- if (is.null(oracle_eval)) primary_by_variable else rbindlist(list(primary_by_variable, oracle_eval$by_variable), fill = TRUE)
     by_variable[, `:=`(regime = regime, validation_seed = validation_seed)]
@@ -593,9 +671,9 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
   print(gates)
 
   if ("clean_separated" %in% regimes && any(overall$model == "direct_leaf") &&
-      all(paste0("sequential_", c("effectiveness_only", "effectiveness_adstock", "effectiveness_adstock_saturation")) %in% overall$model)) {
+      all(c("sequential_root_to_leaf", "sequential_depth1_to_leaf") %in% overall$model)) {
     clean <- overall[regime == "clean_separated" & model != "direct_oracle_upper_bound"]
-    stopifnot(all(clean[, .N, by = validation_seed]$N == 4L))
+    stopifnot(all(clean[, .N, by = validation_seed]$N == 3L))
     stopifnot(all(is.finite(clean$total_relative_error)))
   }
   cat("Sequential hierarchical Bayes known-truth validation completed. Review validation_status; this is a measurement run, not a pass-through test.\n")

@@ -94,13 +94,34 @@ econ_seq_media_spend_map <- function(data,
     sm <- data.table::data.table(variable = md$variable, spend_col = spend_col)
   }
   sm <- unique(sm[variable %in% candidate & !is.na(spend_col) & nzchar(trimws(spend_col))], by = "variable")
+  node_fields <- data.table::copy(md[, .(variable, role)])
+  for (cc in c("media_node", "shared_spend_group", "variable_role_within_node", "spend_bearing")) {
+    node_fields[, (cc) := if (cc %in% names(md)) md[[cc]] else NA]
+  }
+  sm[node_fields, on = "variable", `:=`(
+    role = i.role,
+    media_node = as.character(i.media_node),
+    shared_spend_group = as.character(i.shared_spend_group),
+    variable_role_within_node = as.character(i.variable_role_within_node),
+    spend_bearing = as.logical(i.spend_bearing)
+  )]
+  sm[is.na(spend_bearing), spend_bearing := role != "reach_frequency"]
+  sm[is.na(variable_role_within_node) | !nzchar(variable_role_within_node),
+     variable_role_within_node := data.table::fifelse(role == "reach_frequency", "auxiliary_execution", "response_support")]
+  sm[is.na(shared_spend_group) | !nzchar(shared_spend_group), shared_spend_group := media_node]
   if (anyDuplicated(sm$variable)) stop("spend_map has duplicate paid-media variable rows.", call. = FALSE)
   duplicate_spend <- sm[, .N, by = spend_col][N > 1L, spend_col]
-  if (length(duplicate_spend)) {
+  allowed_shared_spend <- sm[, .(
+    allowed = data.table::uniqueN(shared_spend_group) == 1L &&
+      !is.na(shared_spend_group[1]) && nzchar(shared_spend_group[1]) &&
+      sum(spend_bearing %in% TRUE) == 1L &&
+      any(role == "reach_frequency")
+  ), by = spend_col]
+  invalid_duplicate_spend <- allowed_shared_spend[spend_col %in% duplicate_spend & allowed == FALSE, spend_col]
+  if (length(invalid_duplicate_spend)) {
     stop(
-      "Each sequential paid-media variable must map to a distinct observed spend column. Duplicate spend mapping(s): ",
-      paste(duplicate_spend, collapse = ", "),
-      ". Aggregate the intended media grain first rather than counting a spend column twice.",
+      "Duplicate observed spend mapping(s) require one declared spend-bearing media node plus reach/frequency auxiliary variables. Invalid mapping(s): ",
+      paste(invalid_duplicate_spend, collapse = ", "),
       call. = FALSE
     )
   }
@@ -183,6 +204,27 @@ econ_seq_infer_national_layout <- function(data, value_col, time_col, tolerance 
   if (mean(by_time$nonmissing_n == 1L) >= 0.80) return("single_national_total")
   if (mean(by_time$repeated & by_time$nonmissing_n >= 2L) >= 0.80) return("repeated_by_group")
   "already_allocated"
+}
+
+econ_seq_infer_scope_layout <- function(data, value_col, time_col, tolerance = 1e-8) {
+  dt <- data.table::as.data.table(data)
+  by_time <- dt[, {
+    value <- suppressWarnings(as.numeric(get(value_col)))
+    finite <- value[is.finite(value)]
+    repeated <- length(finite) >= 2L &&
+      (max(finite) - min(finite)) <= tolerance * max(1, abs(mean(finite)))
+    list(nonmissing_n = length(finite), repeated = repeated)
+  }, by = time_col]
+  if (!nrow(by_time)) return(list(scope = "national", layout = "single_national_total"))
+  single_share <- mean(by_time$nonmissing_n == 1L)
+  repeated_share <- mean(by_time$repeated & by_time$nonmissing_n >= 2L)
+  if (is.finite(single_share) && single_share >= 0.80) {
+    return(list(scope = "national", layout = "single_national_total"))
+  }
+  if (is.finite(repeated_share) && repeated_share >= 0.80) {
+    return(list(scope = "national", layout = "repeated_by_group"))
+  }
+  list(scope = "group_specific", layout = "already_allocated")
 }
 
 econ_seq_extract_period_total <- function(data,
@@ -371,6 +413,14 @@ canonicalize_sequential_media_panel <- function(data,
     if (support_semantics %in% c("spend", "impressions", "clicks", "views", "reach_count")) support_semantics <- "additive_total"
     if (support_semantics %in% c("trp")) support_semantics <- "grp"
     if (support_semantics %in% c("rate", "index", "cpm", "cpc")) support_semantics <- "intensive_shared"
+    variable_role <- md[as.character(md[["variable"]]) == variable, role][1]
+    if (support_semantics %in% c("frequency", "intensive_shared") && !identical(variable_role, "reach_frequency")) {
+      stop(
+        "Support variable '", variable, "' is ", support_semantics,
+        ", not additive response-curve support. Declare a valid reach/frequency specification or provide additive support.",
+        call. = FALSE
+      )
+    }
     resolve_state <- function(kind, value_col) {
       scope_value <- econ_seq_config_value(
         variable, md, cfg, c(paste0(kind, "_scope")), legacy_scope
@@ -386,15 +436,21 @@ canonicalize_sequential_media_panel <- function(data,
       scope <- econ_seq_normalize_scope_value(
         scope_value, c("auto", "group_specific", "national", "already_allocated"), "auto", paste0(kind, "_scope")
       )
-      scope_source <- if (identical(scope, "auto")) "diagnostic_inference" else "declared"
-      if (identical(scope, "auto")) scope <- econ_seq_infer_media_scope(dt, value_col, time_col, tolerance)
       layout <- econ_seq_normalize_scope_value(
         layout_value, c("auto", "repeated_by_group", "single_national_total", "already_allocated"),
         "auto", paste0(kind, "_national_layout")
       )
+      scope_source <- if (identical(scope, "auto")) "diagnostic_inference" else "declared"
       layout_source <- if (identical(layout, "auto")) "diagnostic_inference" else "declared"
+      if (identical(scope, "auto") && identical(layout, "auto")) {
+        inferred <- econ_seq_infer_scope_layout(dt, value_col, time_col, tolerance)
+        scope <- inferred$scope
+        layout <- inferred$layout
+      } else {
+        if (identical(scope, "auto")) scope <- econ_seq_infer_media_scope(dt, value_col, time_col, tolerance)
+        if (identical(layout, "auto")) layout <- econ_seq_infer_national_layout(dt, value_col, time_col, tolerance)
+      }
       if (scope %in% c("group_specific", "already_allocated")) layout <- "already_allocated"
-      if (identical(layout, "auto")) layout <- econ_seq_infer_national_layout(dt, value_col, time_col, tolerance)
       observed <- econ_seq_normalize_scope_value(
         exposure_value, c("auto", "observed", "imputed"), "auto", paste0(kind, "_observed_or_imputed")
       )
@@ -1863,6 +1919,17 @@ build_sequential_rollup_layer <- function(data,
     sm[, support_hierarchical_variation_eligible := as.logical(hierarchical_variation_eligible)]
   }
   if (!"mechanically_allocated" %in% names(sm)) sm[, mechanically_allocated := FALSE]
+  if (!"spend_mechanically_allocated" %in% names(sm)) sm[, spend_mechanically_allocated := mechanically_allocated]
+  if (!"spend_hierarchical_variation_eligible" %in% names(sm)) {
+    sm[, spend_hierarchical_variation_eligible := as.logical(hierarchical_variation_eligible)]
+  }
+  if (!"spend_scope" %in% names(sm)) sm[, spend_scope := "group_specific"]
+  if (!"spend_mechanically_allocated" %in% names(sm)) sm[, spend_mechanically_allocated := mechanically_allocated]
+  if (!"spend_hierarchical_variation_eligible" %in% names(sm)) {
+    sm[, spend_hierarchical_variation_eligible := as.logical(hierarchical_variation_eligible)]
+  }
+  if (!"spend_scope" %in% names(sm)) sm[, spend_scope := "group_specific"]
+  if (!"spend_national_layout" %in% names(sm)) sm[, spend_national_layout := "already_allocated"]
   plan <- build_sequential_rollup_plan(
     metadata_input = metadata_input,
     media_variables = sm$variable,
@@ -1878,9 +1945,17 @@ build_sequential_rollup_layer <- function(data,
     source_variables = paste(sort(variable), collapse = " | "),
     source_spend_columns = paste(sort(spend_col), collapse = " | "),
     source_variable_n = .N,
-    support_hierarchical_variation_eligible = any(support_hierarchical_variation_eligible %in% TRUE),
-    hierarchical_variation_eligible = any(support_hierarchical_variation_eligible %in% TRUE),
-    mechanically_allocated = all(mechanically_allocated %in% TRUE)
+    spend_scope = if (data.table::uniqueN(spend_scope) == 1L) spend_scope[1] else "mixed_spend_scope",
+    spend_national_layout = if (data.table::uniqueN(spend_national_layout) == 1L) spend_national_layout[1] else "mixed_spend_layout",
+    spend_mechanically_allocated = any(spend_mechanically_allocated %in% TRUE),
+    spend_hierarchical_variation_eligible = all(spend_hierarchical_variation_eligible %in% TRUE),
+    # This node is modeled on summed spend. Do not inherit hierarchy eligibility
+    # from heterogeneous leaf execution support such as impressions or clicks.
+    support_scope = if (data.table::uniqueN(spend_scope) == 1L) spend_scope[1] else "generated_from_mixed_spend_scope",
+    support_mechanically_allocated = any(spend_mechanically_allocated %in% TRUE),
+    support_hierarchical_variation_eligible = all(spend_hierarchical_variation_eligible %in% TRUE),
+    hierarchical_variation_eligible = all(spend_hierarchical_variation_eligible %in% TRUE),
+    mechanically_allocated = any(spend_mechanically_allocated %in% TRUE)
   ), by = .(rollup_depth, rollup_node, rollup_node_path)]
   data.table::setorderv(node_map, c("rollup_node_path", "rollup_node"))
   node_map[, generated_variable := econ_seq_safe_generated_names(rollup_node_path, names(dt))]
@@ -1945,8 +2020,13 @@ build_sequential_rollup_layer <- function(data,
     sequential_rollup_node = rollup_node,
     sequential_rollup_source_n = source_variable_n,
     sequential_aggregation_basis = "observed_spend",
+    spend_scope = spend_scope,
+    spend_national_layout = spend_national_layout,
+    spend_mechanically_allocated = spend_mechanically_allocated,
+    spend_hierarchical_variation_eligible = spend_hierarchical_variation_eligible,
+    support_scope = support_scope,
     mechanically_allocated = mechanically_allocated,
-    support_mechanically_allocated = mechanically_allocated,
+    support_mechanically_allocated = support_mechanically_allocated,
     support_hierarchical_variation_eligible = support_hierarchical_variation_eligible,
     hierarchical_variation_eligible = hierarchical_variation_eligible,
     coef_hierarchy_scope = data.table::fifelse(hierarchical_variation_eligible, "auto", "none"),
@@ -1959,7 +2039,12 @@ build_sequential_rollup_layer <- function(data,
     spend_col = generated_variable,
     model_support_col = generated_variable,
     mechanically_allocated,
-    support_mechanically_allocated = mechanically_allocated,
+    spend_scope,
+    spend_national_layout,
+    spend_mechanically_allocated,
+    spend_hierarchical_variation_eligible,
+    support_scope,
+    support_mechanically_allocated,
     support_hierarchical_variation_eligible,
     hierarchical_variation_eligible
   )]
@@ -2264,6 +2349,15 @@ econ_seq_apply_branch_diagnostics <- function(prior_table,
     parent_positive_effect_transferred & child_identification_recommendation == "fit", "fit",
     default = "strong_parent_shrinkage"
   )]
+  # `branch_decision` remains an internal compatibility field for structural
+  # remainder handling. Analyst-facing status never stops a valid weak branch.
+  out[, fit_status := data.table::fcase(
+    user_prior_override_valid, "fit_user_prior_dominant",
+    !parent_positive_effect_transferred, "fit_default_prior_dominant",
+    child_identification_strength_0_1 >= 0.65, "fit_data_dominant",
+    child_identification_strength_0_1 >= 0.35, "fit_parent_regularized",
+    default = "fit_strongly_regularized"
+  )]
   out[, prior_dominance_classification := data.table::fcase(
     user_prior_override_valid, "user_prior_driven",
     !parent_positive_effect_transferred, "default_prior_driven",
@@ -2337,6 +2431,11 @@ econ_seq_enforce_branch_decisions <- function(data,
     sm[, support_hierarchical_variation_eligible := as.logical(hierarchical_variation_eligible)]
   }
   if (!"mechanically_allocated" %in% names(sm)) sm[, mechanically_allocated := FALSE]
+  if (!"spend_mechanically_allocated" %in% names(sm)) sm[, spend_mechanically_allocated := mechanically_allocated]
+  if (!"spend_hierarchical_variation_eligible" %in% names(sm)) {
+    sm[, spend_hierarchical_variation_eligible := as.logical(hierarchical_variation_eligible)]
+  }
+  if (!"spend_scope" %in% names(sm)) sm[, spend_scope := "group_specific"]
   sm <- unique(sm, by = "variable")
   priors <- data.table::copy(data.table::as.data.table(prior_table))
   required_prior <- c("variable", "branch_decision", "sequential_parent_id", "child_spend_total")
@@ -2367,11 +2466,10 @@ econ_seq_enforce_branch_decisions <- function(data,
 
   for (parent_id in parent_ids) {
     parent_rows <- priors[sequential_parent_id == parent_id]
-    # Below a fitted Bayesian parent, a stop decision keeps that complete
-    # parent branch. At the common total-media root there is no separately
-    # fitted child parent yet, so unresolved children become a spend-preserving
-    # remainder and must not block stronger siblings.
-    stop_parent <- !is.null(parent_layer) && any(parent_rows$branch_decision == "stop")
+    # A structural failure only retains the full parent when every child under
+    # that parent is unusable. One invalid child becomes a spend-preserving
+    # remainder while valid siblings continue independently.
+    stop_parent <- !is.null(parent_layer) && all(parent_rows$branch_decision == "stop")
     unresolved <- if (stop_parent) parent_rows$variable else parent_rows[
       branch_decision %in% c("prune", "require_prior", "stop"), variable
     ]
@@ -2449,9 +2547,13 @@ econ_seq_enforce_branch_decisions <- function(data,
       rollup_path = paste0("total_paid_media > ", node_action, " > ", parent_id),
       sequential_branch_action = node_action,
       sequential_parent_id = parent_id,
-      mechanically_allocated = all(source_map$mechanically_allocated %in% TRUE),
-      support_hierarchical_variation_eligible = any(source_map$support_hierarchical_variation_eligible %in% TRUE),
-      hierarchical_variation_eligible = any(source_map$hierarchical_variation_eligible %in% TRUE)
+      spend_scope = if (data.table::uniqueN(source_map$spend_scope) == 1L) source_map$spend_scope[1] else "generated_from_mixed_spend_scope",
+      spend_mechanically_allocated = any(source_map$spend_mechanically_allocated %in% TRUE),
+      spend_hierarchical_variation_eligible = all(source_map$spend_hierarchical_variation_eligible %in% TRUE),
+      mechanically_allocated = any(source_map$spend_mechanically_allocated %in% TRUE),
+      support_mechanically_allocated = any(source_map$spend_mechanically_allocated %in% TRUE),
+      support_hierarchical_variation_eligible = all(source_map$spend_hierarchical_variation_eligible %in% TRUE),
+      hierarchical_variation_eligible = all(source_map$spend_hierarchical_variation_eligible %in% TRUE)
     )]
     if ("coef_hierarchy_scope" %in% names(template_md) && !template_md$hierarchical_variation_eligible[1]) {
       template_md[, `:=`(coef_hierarchy_scope = "none", coef_hierarchy_scale = 0)]
@@ -2461,9 +2563,13 @@ econ_seq_enforce_branch_decisions <- function(data,
       variable = generated_name,
       spend_col = generated_name,
       model_support_col = generated_name,
-      mechanically_allocated = all(source_map$mechanically_allocated %in% TRUE),
-      support_hierarchical_variation_eligible = any(source_map$support_hierarchical_variation_eligible %in% TRUE),
-      hierarchical_variation_eligible = any(source_map$hierarchical_variation_eligible %in% TRUE)
+      spend_scope = if (data.table::uniqueN(source_map$spend_scope) == 1L) source_map$spend_scope[1] else "generated_from_mixed_spend_scope",
+      spend_mechanically_allocated = any(source_map$spend_mechanically_allocated %in% TRUE),
+      spend_hierarchical_variation_eligible = all(source_map$spend_hierarchical_variation_eligible %in% TRUE),
+      mechanically_allocated = any(source_map$spend_mechanically_allocated %in% TRUE),
+      support_mechanically_allocated = any(source_map$spend_mechanically_allocated %in% TRUE),
+      support_hierarchical_variation_eligible = all(source_map$spend_hierarchical_variation_eligible %in% TRUE),
+      hierarchical_variation_eligible = all(source_map$spend_hierarchical_variation_eligible %in% TRUE)
     )
     audit_rows[[length(audit_rows) + 1L]] <- source_prior[, .(
       variable,
@@ -3072,6 +3178,13 @@ fit_parsimonious_total_media_root <- function(data,
     target_population_col = target_population_col,
     invalid_allocation_fallback = invalid_allocation_fallback
   )
+  modeled_spend_map <- data.table::copy(canonical$spend_map)
+  if ("spend_bearing" %in% names(modeled_spend_map)) {
+    modeled_spend_map <- modeled_spend_map[spend_bearing %in% TRUE]
+  }
+  if (!nrow(modeled_spend_map)) {
+    stop("No spend-bearing media nodes remain after excluding reach/frequency auxiliary execution variables.", call. = FALSE)
+  }
   panel <- econ_seq_root_panel(
     data = canonical$data,
     metadata_input = canonical$metadata,
@@ -3079,7 +3192,7 @@ fit_parsimonious_total_media_root <- function(data,
     group_col = group_col,
     time_col = time_col,
     entity_col = entity_col,
-    spend_map = canonical$spend_map,
+    spend_map = modeled_spend_map,
     media_variables = media_variables,
     national_spend = canonical$national_spend,
     root_control_cols = root_control_cols,
@@ -3166,7 +3279,7 @@ fit_parsimonious_total_media_root <- function(data,
     root_evidence_type = "frequentist_moving_block_residual_bootstrap_sampling_distribution",
     root_interpretation = "Portfolio average incremental KPI per paid-media cost unit; do not interpret as a channel-specific causal estimate."
   )]
-  mix <- econ_seq_mix_diagnostics(canonical$data, panel$spend_map, time_col = time_col)
+  mix <- econ_seq_mix_diagnostics(canonical$data[get(time_col) %in% training_times], panel$spend_map, time_col = time_col)
   list(
     package_info = econimap_output_metadata("fit_parsimonious_total_media_root", surface = "sequential_root"),
     root_summary = point[],
@@ -3182,7 +3295,7 @@ fit_parsimonious_total_media_root <- function(data,
     root_scope = root_scope,
     canonical_data = canonical$data[],
     canonical_metadata = canonical$metadata[],
-    canonical_spend_map = canonical$spend_map[],
+    canonical_spend_map = modeled_spend_map[],
     media_scope_config = canonical$media_config[],
     media_allocation_audit = canonical$allocation_audit[],
     national_spend = canonical$national_spend[],
@@ -3210,6 +3323,7 @@ build_sequential_effectiveness_priors <- function(root_fit,
                                                    data,
                                                    metadata_input,
                                                    time_col,
+                                                   training_times = NULL,
                                                    child_variables = NULL,
                                                    child_spend_map = NULL,
                                                    rollup_map = NULL,
@@ -3256,6 +3370,11 @@ build_sequential_effectiveness_priors <- function(root_fit,
     )
   }
   dt <- econ_seq_input_table(data, "data")
+  if (!is.null(training_times)) {
+    if (!(time_col %in% names(dt))) stop("time_col is required to apply the sequential training scope.", call. = FALSE)
+    dt <- dt[get(time_col) %in% training_times]
+  }
+  if (!nrow(dt)) stop("No training rows remain for sequential child-prior construction.", call. = FALSE)
   missing_child_spend <- setdiff(sm$spend_col, names(dt))
   if (length(missing_child_spend)) {
     stop("Child spend column(s) missing from data: ", paste(missing_child_spend, collapse = ", "), call. = FALSE)
@@ -3316,6 +3435,7 @@ build_sequential_effectiveness_priors <- function(root_fit,
     sequential_mix_sd_component = mix_sd,
     sequential_media_mix_churn = mix_churn,
     sequential_spend_col = sm$spend_col,
+    sequential_training_period_n = data.table::uniqueN(dt[[time_col]]),
     child_spend_total = total_spend,
     child_spend_share = total_spend / sum(total_spend),
     implied_child_contribution_mean = transfer_mean * total_spend,
@@ -3371,7 +3491,7 @@ build_sequential_effectiveness_priors <- function(root_fit,
     business_priors = out[],
     prior_ledger = ledger[],
     reference_calibration_input = econ_seq_reference_effectiveness_calibration(out),
-    branch_decisions = out[, .(variable, branch_decision, branch_decision_reason,
+    branch_decisions = out[, .(variable, fit_status, branch_decision, branch_decision_reason,
                                 child_identification_recommendation, child_identification_pooling_multiplier,
                                 child_identification_strength_0_1, parent_shrinkage_multiplier,
                                 user_prior_override_present, user_prior_override_valid,
@@ -3441,13 +3561,22 @@ econ_seq_parent_rrate_summary <- function(parent_fit, parent_variables, max_draw
 
 econ_seq_parent_effectiveness_draws <- function(parent_fit,
                                                 parent_layer,
+                                                training_times = NULL,
                                                 max_draws = 200L,
                                                 seed = 123L) {
   if (is.null(parent_layer$spend_map) || !nrow(parent_layer$spend_map)) {
     stop("parent_layer must be returned by build_sequential_rollup_layer() or a sequential stage.", call. = FALSE)
   }
   parent_variables <- as.character(parent_layer$spend_map$variable)
-  curves <- parent_fit$response_curves_draws %||% data.table::data.table()
+  parent_data <- econ_seq_input_table(parent_layer$data, "parent_layer$data")
+  if (!is.null(training_times)) {
+    time_col <- parent_fit$time_col %||% NULL
+    if (is.null(time_col) || !(time_col %in% names(parent_data))) {
+      stop("Parent fit needs a valid time_col to rebuild training-scope response curves.", call. = FALSE)
+    }
+    parent_data <- parent_data[get(time_col) %in% training_times]
+  }
+  curves <- if (is.null(training_times)) parent_fit$response_curves_draws %||% data.table::data.table() else data.table::data.table()
   curves <- data.table::as.data.table(curves)
   if (!nrow(curves)) {
     if (is.null(parent_fit$fit) || !is.function(parent_fit$fit$draws)) {
@@ -3456,7 +3585,7 @@ econ_seq_parent_effectiveness_draws <- function(parent_fit,
     curves <- build_response_curves_draws_hier_mmm(
       fit_obj = parent_fit,
       spend_map = parent_layer$spend_map,
-      raw_data = parent_layer$data,
+      raw_data = parent_data,
       variables = parent_variables,
       multiplier_grid = 1,
       response_curve_scope = "total",
@@ -3595,6 +3724,7 @@ build_sequential_effectiveness_priors_from_parent_fit <- function(parent_fit,
                                                                    parent_layer,
                                                                    child_layer,
                                                                    time_col,
+                                                                   training_times = NULL,
                                                                    child_prior_overrides = NULL,
                                                                    data_reuse_inflation = 1.5,
                                                                    child_heterogeneity_relative_sd = 0.50,
@@ -3642,6 +3772,7 @@ build_sequential_effectiveness_priors_from_parent_fit <- function(parent_fit,
   parent_draw_evidence <- econ_seq_parent_effectiveness_draws(
     parent_fit = parent_fit,
     parent_layer = parent_layer,
+    training_times = training_times,
     max_draws = parent_draw_count,
     seed = parent_draw_seed
   )
@@ -3679,6 +3810,8 @@ build_sequential_effectiveness_priors_from_parent_fit <- function(parent_fit,
     stop("Child rollup layer is missing an observed spend mapping.", call. = FALSE)
   }
   child_data <- econ_seq_input_table(child_layer$data, "child_layer$data")
+  if (!is.null(training_times)) child_data <- child_data[get(time_col) %in% training_times]
+  if (!nrow(child_data)) stop("No training rows remain for sequential continuation priors.", call. = FALSE)
   child_parent[, child_spend_total := vapply(child_spend_col, function(cc) {
     z <- suppressWarnings(as.numeric(child_data[[cc]]))
     sum(z[is.finite(z)], na.rm = TRUE)
@@ -3813,7 +3946,7 @@ build_sequential_effectiveness_priors_from_parent_fit <- function(parent_fit,
     business_priors = out[],
     prior_ledger = ledger[],
     reference_calibration_input = econ_seq_reference_effectiveness_calibration(out, calibration_prefix = "sequential_parent_effectiveness"),
-    branch_decisions = out[, .(variable, branch_decision, branch_decision_reason,
+    branch_decisions = out[, .(variable, fit_status, branch_decision, branch_decision_reason,
                                 child_identification_recommendation, child_identification_pooling_multiplier,
                                 child_identification_strength_0_1, parent_shrinkage_multiplier,
                                 user_prior_override_present, user_prior_override_valid,
@@ -3964,6 +4097,7 @@ run_sequential_hierarchical_bayes <- function(data,
     holdout_last_n = holdout_last_n,
     seed = seed
   )
+  training_times <- root_fit$root_training_times
   baseline_contract$controls <- root_fit$root_control_cols
   baseline_applied <- econ_seq_apply_baseline_contract(
     fit_args = child_fit_args,
@@ -4036,6 +4170,7 @@ run_sequential_hierarchical_bayes <- function(data,
     data = child_data,
     metadata_input = child_metadata,
     time_col = time_col,
+    training_times = training_times,
     child_variables = handoff_child_variables,
     child_spend_map = child_spend_map,
     rollup_map = child_rollup_map,
@@ -4185,6 +4320,7 @@ run_sequential_hierarchical_bayes <- function(data,
     prior_ledger = handoff$prior_ledger,
     prior_posterior_audit = prior_posterior_audit,
     holdout_spec = holdout_contract,
+    training_times = training_times,
     handoff_scope = handoff$handoff_scope,
     reconciliation_audit = reconciliation,
     baseline_spec = baseline_contract,
@@ -4253,6 +4389,26 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
   )
   child_fit_args <- baseline_applied$fit_args
   baseline_contract <- baseline_applied$baseline_contract
+  holdout_contract <- parent_stage$holdout_spec %||% parent_stage$child_fit$sequential_holdout_spec %||% list()
+  training_times <- parent_stage$training_times %||% parent_stage$root_fit$root_training_times
+  if (is.null(training_times) || !length(training_times)) {
+    # Compatibility for legacy in-memory stages created before holdout support:
+    # only an all-row contract is possible because no holdout declaration exists.
+    legacy_data <- parent_stage$root_fit$canonical_data %||% data
+    if (!(time_col %in% names(legacy_data))) {
+      stop("parent_stage is missing the canonical sequential training-period contract.", call. = FALSE)
+    }
+    training_times <- sort(unique(legacy_data[[time_col]]))
+    holdout_contract <- c(holdout_contract, list(legacy_all_rows_training_contract = TRUE))
+  }
+  for (nm in c("holdout_col", "holdout_value", "holdout_last_n")) {
+    if (!is.null(holdout_contract[[nm]])) {
+      if (!is.null(child_fit_args[[nm]]) && !identical(child_fit_args[[nm]], holdout_contract[[nm]])) {
+        stop("child_fit_args$", nm, " conflicts with the parent sequential holdout contract.", call. = FALSE)
+      }
+      child_fit_args[[nm]] <- holdout_contract[[nm]]
+    }
+  }
   parent_layer <- parent_stage$rollup_layer
   parent_depth <- suppressWarnings(as.integer(parent_layer$rollup_depth)[1])
   target_depth <- econ_seq_parse_rollup_depths(rollup_depth)
@@ -4324,6 +4480,7 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
     parent_layer = parent_layer,
     child_layer = child_layer,
     time_col = time_col,
+    training_times = if (isTRUE(holdout_contract$legacy_all_rows_training_contract)) NULL else training_times,
     child_prior_overrides = child_prior_overrides,
     data_reuse_inflation = data_reuse_inflation,
     child_heterogeneity_relative_sd = child_heterogeneity_relative_sd,
@@ -4436,6 +4593,8 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
     child_metadata = child_layer$metadata,
     prior_ledger = handoff$prior_ledger,
     prior_posterior_audit = prior_posterior_audit,
+    holdout_spec = holdout_contract,
+    training_times = training_times,
     reconciliation_audit = handoff$reconciliation_audit,
     baseline_spec = baseline_contract,
     curve_transfer_mode = curve_transfer_mode,

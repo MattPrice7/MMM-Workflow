@@ -180,6 +180,18 @@ stopifnot(!cross_scope$media_config$spend_hierarchical_variation_eligible[1])
 stopifnot(cross_scope$media_config$support_hierarchical_variation_eligible[1])
 stopifnot(cross_scope$metadata[variable == "geo_impressions", coef_hierarchy_scope] != "none")
 
+# A spend-based intermediate rollup uses the spend contract, not the leaf's
+# real geo execution support. National allocated spend therefore cannot create
+# artificial geo hierarchy eligibility for the generated parent.
+cross_rollup <- build_sequential_rollup_layer(
+  data = cross_scope$data,
+  metadata_input = cross_scope$metadata,
+  spend_map = cross_scope$spend_map,
+  rollup_depth = 1L
+)
+stopifnot(!cross_rollup$spend_map$support_hierarchical_variation_eligible[1])
+stopifnot(cross_rollup$metadata[role == "media", coef_hierarchy_scope][1] == "none")
+
 # Conversely, observed geo spend can coexist with national GRP support. GRPs
 # are converted to gross impressions, and the audit reconstructs the source
 # rating points instead of pretending the units reconcile directly.
@@ -268,6 +280,23 @@ stopifnot(all(frequency$data$national_tv_frequency == 2.5))
 stopifnot(any(frequency$allocation_audit$fallback_used == "kept_as_shared_national_intensive_measure"))
 stopifnot(!any(frequency$media_config$hierarchical_variation_eligible))
 
+# One spend-bearing reach node and one auxiliary frequency node may share spend
+# without creating duplicate economic contribution. Unrelated duplicates remain
+# invalid in the map validator.
+rf_metadata <- data.table(
+  variable = c("tv_reach", "tv_frequency"),
+  role = c("reach_frequency", "reach_frequency"),
+  spend_col = c("national_tv_spend", "national_tv_spend"),
+  media_node = "tv", shared_spend_group = "tv",
+  variable_role_within_node = c("reach", "frequency"),
+  spend_bearing = c(TRUE, FALSE), coef = 0, coef_precision = 1
+)
+panel[, `:=`(tv_reach = national_tv_spend * 10, tv_frequency = national_tv_frequency)]
+rf_map <- econ_seq_media_spend_map(panel, rf_metadata)
+stopifnot(nrow(rf_map) == 2L, sum(rf_map$spend_bearing) == 1L)
+bad_shared <- copy(rf_metadata)[, `:=`(media_node = c("tv", "other"), shared_spend_group = c("tv", "other"), spend_bearing = c(TRUE, TRUE))]
+stopifnot(inherits(try(econ_seq_media_spend_map(panel, bad_shared), silent = TRUE), "try-error"))
+
 # Mixed scope totals reconcile and the national root uses every national
 # variable-period total exactly once.
 mixed_metadata <- metadata[variable %in% c("national_tv_spend", "local_search_spend")]
@@ -337,5 +366,34 @@ missing_error <- try(econ_seq_root_panel(
   incomplete_period_action = "error"
 ), silent = TRUE)
 stopifnot(inherits(missing_error, "try-error"))
+
+# Joint auto inference recognizes a single national total with missing rows in
+# the other geographies; it is not mistaken for a sparse group-specific series.
+single_total_panel <- copy(panel)
+single_total_panel[, sparse_national_spend := NA_real_]
+single_total_panel[geo == "g1", sparse_national_spend := 500 + as.integer(factor(period))]
+single_total_metadata <- data.table(
+  variable = "sparse_national_spend", role = "media", spend_col = "sparse_national_spend",
+  coef = 0, coef_precision = 1, rollup_path = "total_paid_media > sparse > sparse_national"
+)
+single_total <- canonicalize_sequential_media_panel(
+  single_total_panel, single_total_metadata, "geo", "period", "entity",
+  spend_map = single_total_metadata[, .(variable, spend_col)]
+)
+stopifnot(single_total$media_config$spend_scope[1] == "national")
+stopifnot(single_total$media_config$spend_national_layout[1] == "single_national_total")
+
+# A group-specific intensive metric cannot silently enter an ordinary adstock /
+# response-curve path merely because it is not national.
+rate_panel <- copy(panel)[, local_cpm := 8 + match(geo, geos)]
+rate_metadata <- data.table(
+  variable = "local_cpm", role = "media", spend_col = "local_search_spend",
+  coef = 0, coef_precision = 1, rollup_path = "total_paid_media > display > cpm"
+)
+rate_error <- try(canonicalize_sequential_media_panel(
+  rate_panel, rate_metadata, "geo", "period", "entity",
+  spend_map = rate_metadata[, .(variable, spend_col)]
+), silent = TRUE)
+stopifnot(inherits(rate_error, "try-error"))
 
 cat("Sequential national media allocation tests passed.\n")

@@ -312,8 +312,10 @@ parent_enforced <- econ_seq_enforce_branch_decisions(
   prior_table = parent_branch_prior,
   parent_layer = parent_layer
 )
-stopifnot(setequal(parent_enforced$spend_map$variable, c("parent_a", "b1")))
-stopifnot(parent_enforced$action_audit[variable == "a1", enforced_action] == "parent_retained")
+stopifnot("a2" %in% parent_enforced$spend_map$variable)
+stopifnot("b1" %in% parent_enforced$spend_map$variable)
+stopifnot(any(parent_enforced$action_audit[variable == "a1", enforced_action] == "parent_remainder"))
+stopifnot(parent_enforced$action_audit[variable == "a2", independent_child_retained])
 stopifnot(parent_enforced$action_audit[variable == "b1", independent_child_retained])
 stopifnot(parent_enforced$reconciliation$max_abs_row_spend_reconciliation_error[1] < 1e-10)
 
@@ -446,6 +448,34 @@ stopifnot(inherits(try(econ_seq_training_time_values(
   mixed_holdout, "geo", "period", holdout_col = "explicit_holdout"
 ), silent = TRUE), "try-error"))
 
+# Parent evidence and child calibration use one canonical training scope.
+# Altering held-out spend or mix cannot change the inherited child prior.
+handoff_training_times <- head(sort(unique(nonlinear_root$canonical_data$period)), -8L)
+handoff_training_a <- build_sequential_effectiveness_priors(
+  root_fit = nonlinear_root,
+  data = nonlinear_root$canonical_data,
+  metadata_input = metadata,
+  time_col = "period",
+  training_times = handoff_training_times
+)
+holdout_changed <- copy(nonlinear_root$canonical_data)
+holdout_changed[!(period %in% handoff_training_times), `:=`(
+  tv_spend = tv_spend * 100,
+  search_spend = search_spend * 0.01
+)]
+handoff_training_b <- build_sequential_effectiveness_priors(
+  root_fit = nonlinear_root,
+  data = holdout_changed,
+  metadata_input = metadata,
+  time_col = "period",
+  training_times = handoff_training_times
+)
+stopifnot(isTRUE(all.equal(
+  handoff_training_a$business_priors[, .(variable, child_spend_total, implied_child_contribution_mean)],
+  handoff_training_b$business_priors[, .(variable, child_spend_total, implied_child_contribution_mean)],
+  check.attributes = FALSE
+)))
+
 continued <- continue_sequential_hierarchical_bayes(
   parent_stage = list(
     child_fit = fake_parent_fit,
@@ -484,6 +514,7 @@ hash_case <- function(data = synthetic[1:5],
                       baseline = shared_baseline,
                       transfer = list(curve_transfer_mode = "effectiveness_adstock_saturation"),
                       fit_args = list(a = 1),
+                      holdout = list(holdout_last_n = 0L),
                       seed = 1) {
   econ_seq_content_hash(
     data = data,
@@ -493,6 +524,7 @@ hash_case <- function(data = synthetic[1:5],
     baseline_spec = baseline,
     prior_transfer_settings = transfer,
     fit_args = fit_args,
+    train_holdout_split = holdout,
     seed = seed,
     files = tmp_code
   )
@@ -505,6 +537,7 @@ stopifnot(base_hash != hash_case(media_scope = data.table(variable = "tv_support
 stopifnot(base_hash != hash_case(baseline = utils::modifyList(shared_baseline, list(seasonal_period = 26))))
 stopifnot(base_hash != hash_case(transfer = list(curve_transfer_mode = "effectiveness_only")))
 stopifnot(base_hash != hash_case(fit_args = list(a = 2)))
+stopifnot(base_hash != hash_case(holdout = list(holdout_last_n = 8L)))
 stopifnot(base_hash != hash_case(seed = 2))
 writeLines("x <- 2", tmp_code)
 stopifnot(base_hash != hash_case())
@@ -524,6 +557,10 @@ if (file.exists(validation_path)) {
   stopifnot(grepl("contribution_interval_coverage", validation_text, fixed = TRUE))
   stopifnot(grepl("holdout_rmse", validation_text, fixed = TRUE))
   stopifnot(grepl("ECONIMAP_SEQUENTIAL_VALIDATION_SEEDS", validation_text, fixed = TRUE))
+  stopifnot(grepl("sequential_root_to_leaf", validation_text, fixed = TRUE))
+  stopifnot(grepl("sequential_depth1_to_leaf", validation_text, fixed = TRUE))
+  stopifnot(grepl("continue_sequential_hierarchical_bayes", validation_text, fixed = TRUE))
+  stopifnot(grepl("delta_share_mae_vs_direct", validation_text, fixed = TRUE))
 }
 
 cat("Sequential hierarchical Bayes hardening tests passed.\n")
