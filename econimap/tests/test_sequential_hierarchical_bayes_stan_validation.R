@@ -361,6 +361,69 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     )
   }
 
+  # A nonlinear aggregate has no meaningful "true average child rrate" or
+  # saturation parameter. Evaluate intermediate rollups on the quantities that
+  # do aggregate exactly: contribution, spend, and effectiveness.
+  aggregate_recovery_summary <- function(fit_obj, panel, curve_spec, label, variable_mapping) {
+    map <- unique(as.data.table(variable_mapping)[, .(
+      truth_variable = as.character(variable),
+      variable = as.character(generated_variable)
+    )])
+    truth_source <- data.table(
+      truth_variable = media_vars,
+      true_contribution = vapply(truth_cols, function(x) sum(panel[[x]]), numeric(1)),
+      true_spend = vapply(spend_cols, function(x) sum(panel[[x]]), numeric(1))
+    )
+    truth <- merge(map, truth_source, by = "truth_variable", all.x = TRUE, sort = FALSE)[,
+      .(true_aggregated_contribution = sum(true_contribution),
+        aggregated_spend = sum(true_spend)), by = variable]
+    truth[, true_effectiveness := true_aggregated_contribution / pmax(aggregated_spend, 1e-8)]
+    est <- as.data.table(fit_obj$long_decomp)[variable %in% truth$variable,
+      .(estimated_aggregated_contribution = sum(contribution, na.rm = TRUE)), by = variable]
+    out <- merge(truth, est, by = "variable", all.x = TRUE, sort = FALSE)
+    draws <- as.data.table(fit_obj$response_curves_draws %||% data.table())
+    if (nrow(draws) && all(c(".draw", "variable", "contribution") %in% names(draws))) {
+      if ("scope" %in% names(draws)) draws <- draws[scope == "total"]
+      if ("spend_multiplier" %in% names(draws)) draws <- draws[abs(spend_multiplier - 1) < 1e-8]
+      intervals <- draws[variable %in% truth$variable,
+        .(draw_contribution = sum(contribution, na.rm = TRUE)), by = .(variable, .draw)][,
+        .(contribution_q05 = quantile(draw_contribution, 0.05, na.rm = TRUE),
+          contribution_q50 = quantile(draw_contribution, 0.50, na.rm = TRUE),
+          contribution_q95 = quantile(draw_contribution, 0.95, na.rm = TRUE)), by = variable]
+      intervals[, posterior_width := contribution_q95 - contribution_q05]
+      out <- merge(out, intervals, by = "variable", all.x = TRUE, sort = FALSE)
+    }
+    for (cc in c("contribution_q05", "contribution_q50", "contribution_q95", "posterior_width")) {
+      if (!(cc %in% names(out))) out[, (cc) := NA_real_]
+    }
+    out[, estimated_effectiveness := estimated_aggregated_contribution / pmax(aggregated_spend, 1e-8)]
+    out[, `:=`(
+      contribution_error = estimated_aggregated_contribution - true_aggregated_contribution,
+      absolute_contribution_error = abs(estimated_aggregated_contribution - true_aggregated_contribution),
+      effectiveness_error = estimated_effectiveness - true_effectiveness,
+      contribution_interval_covered = true_aggregated_contribution >= contribution_q05 &
+        true_aggregated_contribution <= contribution_q95,
+      model = label
+    )]
+    sampler <- sampler_summary(fit_obj)
+    holdout <- as.data.table(fit_obj$diagnostics$fit_quality_overall %||% data.table())
+    holdout <- if (nrow(holdout) && "sample" %in% names(holdout)) holdout[sample == "holdout"] else data.table()
+    list(
+      by_node = out[],
+      overall = data.table(
+        model = label,
+        aggregated_contribution_mae = mean(out$absolute_contribution_error, na.rm = TRUE),
+        aggregated_effectiveness_mae = mean(abs(out$effectiveness_error), na.rm = TRUE),
+        contribution_interval_coverage = mean(out$contribution_interval_covered, na.rm = TRUE),
+        mean_posterior_width = mean(out$posterior_width, na.rm = TRUE),
+        holdout_rmse = holdout$rmse[1], holdout_mae = holdout$mae[1], holdout_r2 = holdout$r2[1],
+        divergences_total = sampler$divergences_total[1], treedepth_hits_total = sampler$treedepth_hits_total[1],
+        min_bfmi = sampler$min_bfmi[1], max_rhat = sampler$max_rhat[1], min_ess_bulk = sampler$min_ess_bulk[1],
+        model_readiness = sampler$model_readiness[1]
+      )
+    )
+  }
+
   fit_args <- list(
     chains = 4L,
     parallel_chains = 4L,
@@ -581,6 +644,28 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
         output_dir = file.path(regime_dir, paste0(depth1_label, "_audit"))
       )
     }, manifest)
+    direct_base_prior_specification <- econ_seq_base_prior_specification(
+      sim$generic_fit_metadata, variables = media_vars, baseline_spec = validation_config$baseline_spec
+    )
+    root_leaf_base_prior_audit <- econ_seq_assert_base_prior_equivalence(
+      direct_base_prior_specification, root_leaf$child_base_prior_specification,
+      context = "direct generic leaves versus root-to-leaf pre-transfer specification"
+    )
+    depth1_leaf_base_prior_audit <- econ_seq_assert_base_prior_equivalence(
+      direct_base_prior_specification, depth1_leaf$child_base_prior_specification,
+      context = "direct generic leaves versus depth-1-to-leaf pre-transfer specification"
+    )
+    base_prior_audit <- rbindlist(list(
+      root_leaf_base_prior_audit[, path := root_leaf_label],
+      depth1_leaf_base_prior_audit[, path := depth1_label]
+    ), fill = TRUE)
+    fwrite(base_prior_audit, file.path(regime_dir, "pre_transfer_base_prior_equivalence_audit.csv"))
+    depth1_parent_eval <- aggregate_recovery_summary(
+      depth1_stage$child_fit, sim$data, sim$curve_spec, "sequential_depth1_parent",
+      depth1_stage$rollup_layer$variable_mapping
+    )
+    fwrite(depth1_parent_eval$by_node, file.path(regime_dir, "sequential_depth1_parent_recovery_by_node.csv"))
+    fwrite(depth1_parent_eval$overall, file.path(regime_dir, "sequential_depth1_parent_recovery_overall.csv"))
     staged_evals <- list(
       recovery_summary(root_leaf$child_fit, sim$data, sim$curve_spec, root_leaf_label),
       recovery_summary(depth1_leaf$child_fit, sim$data, sim$curve_spec, depth1_label)
@@ -610,11 +695,6 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
       regime = regime,
       validation_seed = validation_seed
     )]
-    overall[, validation_status := fifelse(
-      divergences_total > 0 | (!is.na(max_rhat) & max_rhat > 1.05) | (!is.na(min_bfmi) & min_bfmi < 0.3),
-      "sampler_review",
-      fifelse(regime == "clean_separated" & (total_relative_error > 0.35 | share_mae > 0.18), "recovery_review", "measured")
-    )]
     direct_reference <- overall[model == "direct_leaf"][1]
     overall[, `:=`(
       direct_total_relative_error = direct_reference$total_relative_error,
@@ -639,6 +719,25 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
               delta_rrate_mae_vs_direct > 0.10 |
               delta_saturation_mae_vs_direct > 0.10 |
               delta_holdout_rmse_vs_direct > 0.10 * pmax(direct_holdout_rmse, 1e-8)]
+    overall[, direct_relative_status := "direct_reference"]
+    overall[model != "direct_leaf" & model != "direct_oracle_upper_bound", direct_relative_status := data.table::fcase(
+      sequential_materially_inferior_to_direct %in% TRUE, "materially_inferior_to_direct",
+      delta_total_relative_error_vs_direct < -0.05 &
+        delta_effectiveness_mae_vs_direct < -0.05 &
+        delta_saturation_mae_vs_direct < -0.02 &
+        delta_holdout_rmse_vs_direct <= 0.10 * pmax(direct_holdout_rmse, 1e-8),
+        "materially_better_parameter_recovery_holdout_equivalent",
+      default = "approximately_equivalent_to_direct"
+    )]
+    overall[, sampler_valid := divergences_total == 0 & treedepth_hits_total == 0 &
+              (is.na(max_rhat) | max_rhat <= 1.05) & (is.na(min_bfmi) | min_bfmi >= 0.3)]
+    overall[, validation_status := data.table::fcase(
+      !sampler_valid, "sampler_review",
+      direct_relative_status == "materially_inferior_to_direct", "direct_relative_recovery_review",
+      regime == "clean_separated" & (total_relative_error > 0.35 | share_mae > 0.18), "absolute_recovery_review",
+      direct_relative_status == "materially_better_parameter_recovery_holdout_equivalent", "promising_vs_direct",
+      default = "measured"
+    )]
     primary_by_variable <- rbindlist(c(list(direct_eval$by_variable), lapply(staged_evals, `[[`, "by_variable")), fill = TRUE)
     by_variable <- if (is.null(oracle_eval)) primary_by_variable else rbindlist(list(primary_by_variable, oracle_eval$by_variable), fill = TRUE)
     by_variable[, `:=`(regime = regime, validation_seed = validation_seed)]
@@ -648,6 +747,7 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     fwrite(overall, file.path(regime_dir, "comparison_overall.csv"))
     fwrite(by_variable, file.path(regime_dir, "comparison_by_variable.csv"))
     fwrite(all_gates[[i]], file.path(regime_dir, "depth_gate_by_variable.csv"))
+    fwrite(depth1_parent_eval$overall, file.path(regime_dir, "depth1_parent_sampler_and_holdout.csv"))
   }
 
   overall <- rbindlist(all_overall, fill = TRUE)
@@ -675,6 +775,18 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     clean <- overall[regime == "clean_separated" & model != "direct_oracle_upper_bound"]
     stopifnot(all(clean[, .N, by = validation_seed]$N == 3L))
     stopifnot(all(is.finite(clean$total_relative_error)))
+    # Guard the observed staged benefit without pinning the test to one exact
+    # posterior realization. This applies only to the deliberately fixed,
+    # one-seed cheap regression smoke.
+    if (minimal_smoke && length(unique(clean$validation_seed)) == 1L) {
+      root_leaf <- clean[model == "sequential_root_to_leaf"][1]
+      depth1_leaf <- clean[model == "sequential_depth1_to_leaf"][1]
+      direct_leaf <- clean[model == "direct_leaf"][1]
+      stopifnot(depth1_leaf$total_relative_error < root_leaf$total_relative_error)
+      stopifnot(depth1_leaf$effectiveness_mae < root_leaf$effectiveness_mae)
+      stopifnot(depth1_leaf$normalized_saturation_mae < root_leaf$normalized_saturation_mae)
+      stopifnot(depth1_leaf$holdout_rmse <= 1.10 * direct_leaf$holdout_rmse)
+    }
   }
   cat("Sequential hierarchical Bayes known-truth validation completed. Review validation_status; this is a measurement run, not a pass-through test.\n")
 }

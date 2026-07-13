@@ -1915,15 +1915,7 @@ build_sequential_rollup_layer <- function(data,
   if (!"support_hierarchical_variation_eligible" %in% names(sm)) {
     sm[, support_hierarchical_variation_eligible := as.logical(hierarchical_variation_eligible)]
   }
-  if (!"support_hierarchical_variation_eligible" %in% names(sm)) {
-    sm[, support_hierarchical_variation_eligible := as.logical(hierarchical_variation_eligible)]
-  }
   if (!"mechanically_allocated" %in% names(sm)) sm[, mechanically_allocated := FALSE]
-  if (!"spend_mechanically_allocated" %in% names(sm)) sm[, spend_mechanically_allocated := mechanically_allocated]
-  if (!"spend_hierarchical_variation_eligible" %in% names(sm)) {
-    sm[, spend_hierarchical_variation_eligible := as.logical(hierarchical_variation_eligible)]
-  }
-  if (!"spend_scope" %in% names(sm)) sm[, spend_scope := "group_specific"]
   if (!"spend_mechanically_allocated" %in% names(sm)) sm[, spend_mechanically_allocated := mechanically_allocated]
   if (!"spend_hierarchical_variation_eligible" %in% names(sm)) {
     sm[, spend_hierarchical_variation_eligible := as.logical(hierarchical_variation_eligible)]
@@ -2448,7 +2440,21 @@ econ_seq_enforce_branch_decisions <- function(data,
   if (length(missing_decisions)) {
     stop("No branch decision is available for modeled media: ", paste(missing_decisions, collapse = ", "), call. = FALSE)
   }
-  unknown_decisions <- setdiff(unique(priors$branch_decision), c("fit", "strong_parent_shrinkage", "prune", "require_prior", "stop"))
+  # Earlier prototypes used stop/prune/require-prior as identification exits.
+  # Identification weakness now changes regularization only, so normalize an
+  # old in-memory prior table rather than silently terminating a branch.
+  legacy_decisions <- priors$branch_decision %in% c("prune", "require_prior", "stop")
+  if (any(legacy_decisions)) {
+    old_reason <- if ("branch_decision_reason" %in% names(priors)) as.character(priors$branch_decision_reason) else rep("", nrow(priors))
+    priors[legacy_decisions, `:=`(
+      branch_decision = "strong_parent_shrinkage",
+      branch_decision_reason = paste0(
+        "legacy_identification_exit_normalized_to_strong_parent_shrinkage",
+        ifelse(nzchar(old_reason[legacy_decisions]), paste0(": ", old_reason[legacy_decisions]), "")
+      )
+    )]
+  }
+  unknown_decisions <- setdiff(unique(priors$branch_decision), c("fit", "strong_parent_shrinkage"))
   if (length(unknown_decisions)) {
     stop("Unknown sequential branch decision(s): ", paste(unknown_decisions, collapse = ", "), call. = FALSE)
   }
@@ -2737,6 +2743,92 @@ econ_seq_carry_stopped_parent_nodes <- function(parent_layer, child_layer) {
   out
 }
 
+econ_seq_base_prior_specification <- function(metadata_input,
+                                              variables = NULL,
+                                              baseline_spec = NULL) {
+  raw <- econ_seq_input_table(metadata_input, "metadata_input")
+  # Validate only the modeled child rows. A raw input table may legitimately
+  # carry blank media-only curve fields on controls before model preparation.
+  if (!is.null(variables)) raw <- raw[variable %in% as.character(variables)]
+  md <- clean_metadata(raw)
+  md[, `:=`(variable = as.character(variable), role = standardize_role(role))]
+  keep <- intersect(c(
+    "variable", "role", "curve_type", "rrate", "rrate_precision",
+    "anchor_saturation", "anchor_saturation_precision", "cvalue", "cvalue_precision",
+    "dvalue", "dvalue_precision", "coef", "coef_precision", "coef_bound",
+    "coef_lower", "coef_upper", "cvalue_from_anchor"
+  ), names(md))
+  out <- md[, ..keep]
+  data.table::setorderv(out, "variable")
+  attr(out, "baseline_spec") <- baseline_spec
+  out[]
+}
+
+econ_seq_assert_base_prior_equivalence <- function(reference_spec,
+                                                    candidate_spec,
+                                                    context = "sequential child handoff") {
+  ref <- data.table::copy(data.table::as.data.table(reference_spec))
+  cand <- data.table::copy(data.table::as.data.table(candidate_spec))
+  if (!"variable" %in% names(ref) || !"variable" %in% names(cand)) {
+    stop("Base-prior equivalence audit requires a variable column.", call. = FALSE)
+  }
+  columns <- sort(unique(c(names(ref), names(cand))))
+  columns <- setdiff(columns, "variable")
+  for (cc in setdiff(columns, names(ref))) ref[, (cc) := NA]
+  for (cc in setdiff(columns, names(cand))) cand[, (cc) := NA]
+  data.table::setcolorder(ref, c("variable", columns))
+  data.table::setcolorder(cand, c("variable", columns))
+  audit <- merge(ref, cand, by = "variable", all = TRUE, suffixes = c("_reference", "_candidate"), sort = TRUE)
+  mismatch <- rep(FALSE, nrow(audit))
+  mismatch_fields <- rep("", nrow(audit))
+  for (cc in columns) {
+    left <- audit[[paste0(cc, "_reference")]]
+    right <- audit[[paste0(cc, "_candidate")]]
+    same <- if (is.numeric(left) || is.integer(left)) {
+      (is.na(left) & is.na(right)) | (!is.na(left) & !is.na(right) & abs(as.numeric(left) - as.numeric(right)) <= 1e-12)
+    } else {
+      (is.na(left) & is.na(right)) | (!is.na(left) & !is.na(right) & as.character(left) == as.character(right))
+    }
+    bad <- !same
+    mismatch <- mismatch | bad
+    mismatch_fields[bad] <- paste0(mismatch_fields[bad], ifelse(nzchar(mismatch_fields[bad]), " | ", ""), cc)
+  }
+  audit[, `:=`(base_prior_equivalent = !mismatch, mismatch_fields = mismatch_fields, audit_context = context)]
+  if (any(mismatch)) {
+    bad <- audit[mismatch, paste0(variable, " [", mismatch_fields, "]")]
+    stop("Base-prior equivalence audit failed for ", context, ": ", paste(bad, collapse = "; "), call. = FALSE)
+  }
+  audit[]
+}
+
+econ_seq_combine_normal_priors <- function(base_mean,
+                                           base_precision,
+                                           evidence_mean,
+                                           evidence_precision) {
+  base_mean <- suppressWarnings(as.numeric(base_mean))
+  base_precision <- suppressWarnings(as.numeric(base_precision))
+  evidence_mean <- suppressWarnings(as.numeric(evidence_mean))
+  evidence_precision <- suppressWarnings(as.numeric(evidence_precision))
+  use_base <- is.finite(base_mean) & is.finite(base_precision) & base_precision > 0
+  use_evidence <- is.finite(evidence_mean) & is.finite(evidence_precision) & evidence_precision > 0
+  combined_precision <- ifelse(use_base, base_precision, 0) + ifelse(use_evidence, evidence_precision, 0)
+  combined_mean <- rep(NA_real_, length(combined_precision))
+  both <- use_base & use_evidence
+  combined_mean[both] <- (base_mean[both] * base_precision[both] + evidence_mean[both] * evidence_precision[both]) / combined_precision[both]
+  combined_mean[use_base & !use_evidence] <- base_mean[use_base & !use_evidence]
+  combined_mean[!use_base & use_evidence] <- evidence_mean[!use_base & use_evidence]
+  data.table::data.table(
+    prior_mean = combined_mean,
+    prior_precision = combined_precision,
+    combination_mode = data.table::fcase(
+      both, "generic_plus_parent_evidence",
+      use_evidence, "parent_evidence_no_generic_prior",
+      use_base, "generic_metadata_preserved",
+      default = "no_usable_prior"
+    )
+  )
+}
+
 econ_seq_apply_rrate_priors <- function(metadata_input,
                                         prior_table,
                                         curve_transfer_mode = c("effectiveness_adstock_saturation", "effectiveness_adstock", "effectiveness_only"),
@@ -2763,10 +2855,27 @@ econ_seq_apply_rrate_priors <- function(metadata_input,
   priors[, rrate_prior_precision__ := rrate_prior_precision / rrate_prior_sd_multiplier^2]
   if (!"rrate" %in% names(md)) md[, rrate := NA_real_]
   if (!"rrate_precision" %in% names(md)) md[, rrate_precision := NA_real_]
-  md[priors, on = "variable", `:=`(
-    rrate = i.rrate_prior_mean,
-    rrate_precision = i.rrate_prior_precision__,
-    sequential_rrate_prior_source = i.rrate_prior_source
+  rrate_base <- md[priors, on = "variable", .(
+    variable = i.variable,
+    base_mean = x.rrate,
+    base_precision = x.rrate_precision,
+    parent_mean = i.rrate_prior_mean,
+    parent_precision = i.rrate_prior_precision__,
+    parent_source = i.rrate_prior_source
+  )]
+  rrate_combined <- econ_seq_combine_normal_priors(
+    rrate_base$base_mean, rrate_base$base_precision,
+    rrate_base$parent_mean, rrate_base$parent_precision
+  )
+  rrate_base[, `:=`(
+    combined_mean = rrate_combined$prior_mean,
+    combined_precision = rrate_combined$prior_precision,
+    combination_mode = rrate_combined$combination_mode
+  )]
+  md[rrate_base, on = "variable", `:=`(
+    rrate = i.combined_mean,
+    rrate_precision = i.combined_precision,
+    sequential_rrate_prior_source = i.combination_mode
   )]
   saturation_required <- c("anchor_saturation_prior_mean", "anchor_saturation_prior_precision")
   if (identical(curve_transfer_mode, "effectiveness_adstock_saturation") && all(saturation_required %in% names(priors))) {
@@ -2778,11 +2887,30 @@ econ_seq_apply_rrate_priors <- function(metadata_input,
     if (!"anchor_saturation" %in% names(md)) md[, anchor_saturation := NA_real_]
     if (!"anchor_saturation_precision" %in% names(md)) md[, anchor_saturation_precision := NA_real_]
     if (!"cvalue_from_anchor" %in% names(md)) md[, cvalue_from_anchor := FALSE]
-    md[saturation_priors, on = "variable", `:=`(
-      anchor_saturation = i.anchor_saturation_prior_mean,
-      anchor_saturation_precision = i.anchor_saturation_prior_precision * saturation_prior_precision_multiplier,
+    saturation_priors[, anchor_saturation_prior_precision__ :=
+                        anchor_saturation_prior_precision * saturation_prior_precision_multiplier]
+    saturation_base <- md[saturation_priors, on = "variable", .(
+      variable = i.variable,
+      base_mean = x.anchor_saturation,
+      base_precision = x.anchor_saturation_precision,
+      parent_mean = i.anchor_saturation_prior_mean,
+      parent_precision = i.anchor_saturation_prior_precision__,
+      parent_source = i.anchor_saturation_prior_source
+    )]
+    saturation_combined <- econ_seq_combine_normal_priors(
+      saturation_base$base_mean, saturation_base$base_precision,
+      saturation_base$parent_mean, saturation_base$parent_precision
+    )
+    saturation_base[, `:=`(
+      combined_mean = saturation_combined$prior_mean,
+      combined_precision = saturation_combined$prior_precision,
+      combination_mode = saturation_combined$combination_mode
+    )]
+    md[saturation_base, on = "variable", `:=`(
+      anchor_saturation = i.combined_mean,
+      anchor_saturation_precision = i.combined_precision,
       cvalue_from_anchor = TRUE,
-      sequential_saturation_prior_source = i.anchor_saturation_prior_source
+      sequential_saturation_prior_source = i.combination_mode
     )]
   }
   md[]
@@ -3099,7 +3227,7 @@ econ_seq_training_time_values <- function(data,
       raw <- tolower(trimws(as.character(dt[[holdout_col]])))
       raw[is.na(raw)] <- ""
       truthy <- c("true", "t", "yes", "y", "1", "on", "holdout", "test")
-      falsy <- c("false", "f", "no", "n", "0", "off", "holdout", "test")
+      falsy <- c("false", "f", "no", "n", "0", "off", "train", "training")
       dt[, is_holdout__ := raw %in% if (isTRUE(holdout_value)) truthy else falsy]
     } else {
       dt[, is_holdout__ := as.character(get(holdout_col)) %in% as.character(holdout_value)]
@@ -3416,7 +3544,10 @@ build_sequential_effectiveness_priors <- function(root_fit,
     sequential_root_sd = root_sd,
     sequential_root_effectiveness_status = root_status,
     parent_positive_effect_transferred = transferable,
-    curve_prior_available = transferable && isTRUE(root_rrate_prior$curve_prior_available[1]),
+    # Generic root defaults are not nonlinear parent evidence. Preserve the
+    # child metadata untouched unless a root Hill/adstock candidate carries
+    # actual model-supported nonlinear information.
+    curve_prior_available = transferable && isTRUE(root_rrate_prior$parent_curve_evidence_available[1]),
     curve_prior_mode = root_rrate_prior$curve_prior_mode[1],
     root_nonlinear_model_weight = root_rrate_prior$root_nonlinear_model_weight[1],
     root_nonlinear_model_weight_source = root_rrate_prior$root_nonlinear_model_weight_source[1],
@@ -3797,8 +3928,8 @@ build_sequential_effectiveness_priors_from_parent_fit <- function(parent_fit,
     "sequential_parent_stan_posterior",
     "generic_default_no_parent_curve_draws"
   )]
-  child_parent[curve_prior_available == FALSE, rrate_prior_source := "generic_default_no_parent_curve_draws"]
-  child_parent[saturation_prior_available == FALSE, anchor_saturation_prior_source := "generic_default_no_parent_saturation_draws"]
+  child_parent[curve_prior_available == FALSE, rrate_prior_source := "no_parent_curve_evidence_generic_metadata_preserved"]
+  child_parent[saturation_prior_available == FALSE, anchor_saturation_prior_source := "no_parent_saturation_evidence_generic_metadata_preserved"]
   if (any(!is.finite(child_parent$parent_effectiveness))) {
     bad <- child_parent[!is.finite(parent_effectiveness), child_variable]
     stop("No posterior effectiveness evidence is available for parent of: ", paste(bad, collapse = ", "), call. = FALSE)
@@ -4221,6 +4352,14 @@ run_sequential_hierarchical_bayes <- function(data,
     rollup_layer$branch_action_audit <- enforcement$action_audit
     rollup_layer$branch_action_reconciliation <- enforcement$reconciliation
   }
+  # This is the unmodified generic child specification. It is retained so a
+  # direct leaf benchmark can prove that sequential differences arise only
+  # after parent evidence is applied.
+  child_base_prior_specification <- econ_seq_base_prior_specification(
+    child_metadata,
+    variables = child_spend_map$variable,
+    baseline_spec = baseline_contract
+  )
   child_metadata <- econ_seq_apply_rrate_priors(
     child_metadata,
     handoff$business_priors,
@@ -4317,6 +4456,7 @@ run_sequential_hierarchical_bayes <- function(data,
     branch_decisions_pre_enforcement = handoff$branch_decisions_pre_enforcement,
     branch_action_reconciliation = handoff$branch_action_reconciliation,
     child_metadata = child_metadata,
+    child_base_prior_specification = child_base_prior_specification,
     prior_ledger = handoff$prior_ledger,
     prior_posterior_audit = prior_posterior_audit,
     holdout_spec = holdout_contract,
@@ -4521,6 +4661,11 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
   handoff$branch_decisions <- enforcement$action_audit
   handoff$branch_action_reconciliation <- enforcement$reconciliation
   child_layer <- econ_seq_update_layer_mapping_after_enforcement(child_layer, enforcement)
+  child_base_prior_specification <- econ_seq_base_prior_specification(
+    child_layer$metadata,
+    variables = child_layer$spend_map$variable,
+    baseline_spec = baseline_contract
+  )
   child_layer$metadata <- econ_seq_apply_rrate_priors(
     child_layer$metadata,
     handoff$business_priors,
@@ -4591,6 +4736,7 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
     child_reference_calibration_input = handoff$reference_calibration_input,
     branch_decisions = handoff$branch_decisions,
     child_metadata = child_layer$metadata,
+    child_base_prior_specification = child_base_prior_specification,
     prior_ledger = handoff$prior_ledger,
     prior_posterior_audit = prior_posterior_audit,
     holdout_spec = holdout_contract,

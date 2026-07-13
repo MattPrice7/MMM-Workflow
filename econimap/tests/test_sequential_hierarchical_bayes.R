@@ -98,10 +98,10 @@ linear_handoff <- build_sequential_effectiveness_priors(
   metadata_input = linear_md,
   time_col = "period"
 )
-stopifnot(all(linear_handoff$business_priors$curve_prior_available))
+stopifnot(!any(linear_handoff$business_priors$curve_prior_available))
 linear_md_after <- econ_seq_apply_rrate_priors(linear_md, linear_handoff$business_priors)
-stopifnot(all(abs(linear_md_after[role == "media", rrate] - 0.20) < 1e-12))
-stopifnot(all(abs(linear_md_after[role == "media", anchor_saturation] - 0.50) < 1e-12))
+stopifnot(all(abs(linear_md_after[role == "media", rrate] - 0.18) < 1e-12))
+stopifnot(all(abs(linear_md_after[role == "media", anchor_saturation] - 0.44) < 1e-12))
 
 # Nonlinear transfer is conditional on actual model evidence and weighted by
 # bootstrap selection frequency rather than the selected model alone.
@@ -119,6 +119,31 @@ stopifnot(nonlinear_evidence$curve_prior_available[1])
 stopifnot(abs(nonlinear_evidence$root_nonlinear_model_weight[1] - 0.8) < 1e-12)
 stopifnot(is.finite(nonlinear_evidence$rrate_prior_precision[1]))
 stopifnot(is.finite(nonlinear_evidence$anchor_saturation_prior_precision[1]))
+
+# Parent curve evidence combines with, rather than replaces, the exact generic
+# child prior. This preserves a fair direct baseline when no parent evidence
+# exists and makes the extra sequential evidence auditable when it does.
+nonlinear_md <- copy(linear_md)
+nonlinear_handoff <- build_sequential_effectiveness_priors(
+  root_fit = nonlinear_root,
+  data = nonlinear_root$canonical_data,
+  metadata_input = nonlinear_md,
+  time_col = "period"
+)
+nonlinear_md_after <- econ_seq_apply_rrate_priors(nonlinear_md, nonlinear_handoff$business_priors)
+tv_curve_prior <- nonlinear_handoff$business_priors[variable == "tv_support"]
+expected_rrate <- (0.18 * 9 + tv_curve_prior$rrate_prior_mean * tv_curve_prior$rrate_prior_precision) /
+  (9 + tv_curve_prior$rrate_prior_precision)
+stopifnot(abs(nonlinear_md_after[variable == "tv_support", rrate] - expected_rrate) < 1e-12)
+stopifnot(abs(nonlinear_md_after[variable == "tv_support", rrate_precision] -
+              (9 + tv_curve_prior$rrate_prior_precision)) < 1e-12)
+stopifnot(nonlinear_md_after[variable == "tv_support", sequential_rrate_prior_source] ==
+            "generic_plus_parent_evidence")
+base_spec <- econ_seq_base_prior_specification(nonlinear_md, variables = c("tv_support", "search_support"))
+same_spec_audit <- econ_seq_assert_base_prior_equivalence(base_spec, copy(base_spec), "unit-test equal specification")
+stopifnot(all(same_spec_audit$base_prior_equivalent))
+different_spec <- copy(base_spec)[variable == "tv_support", rrate_precision := rrate_precision + 1]
+stopifnot(inherits(try(econ_seq_assert_base_prior_equivalence(base_spec, different_spec, "unit-test mismatch"), silent = TRUE), "try-error"))
 
 # There is no 50% evidence cliff: adjacent bootstrap weights produce adjacent
 # prior widths and both remain valid model-averaged curve priors.
@@ -252,8 +277,8 @@ stopifnot(valid_handoff$business_priors[variable == "search_support", branch_dec
 stopifnot(valid_handoff$business_priors[variable == "search_support", user_prior_override_valid])
 stopifnot(nrow(valid_handoff$reference_calibration_input) == 1L)
 
-# Enforced actions alter the modeled grain. Pruned/unresolved children are not
-# left as independent generic-prior variables, while all spend is preserved.
+# Legacy stop/prune/require-prior values are normalized to stronger shrinkage.
+# Weak identification never removes a child from the Bayesian model.
 branch_data <- synthetic[, .(period, geo, entity, kpi, tv_support = tv_spend,
                              search_support = search_spend, tv_spend, search_spend)]
 branch_prior <- copy(identified)
@@ -265,12 +290,12 @@ enforced <- econ_seq_enforce_branch_decisions(
   prior_table = branch_prior
 )
 stopifnot("tv_support" %in% enforced$spend_map$variable)
-stopifnot(!"search_support" %in% enforced$spend_map$variable)
-stopifnot(any(enforced$action_audit$enforced_action == "parent_remainder"))
+stopifnot("search_support" %in% enforced$spend_map$variable)
+stopifnot(enforced$action_audit[variable == "search_support", enforced_action] == "strong_parent_shrinkage")
 stopifnot(enforced$reconciliation$max_abs_row_spend_reconciliation_error[1] < 1e-10)
 
-# Below a fitted parent, a stop retains that parent branch while a strong
-# sibling parent proceeds at the deeper grain.
+# The same legacy normalization applies below a fitted parent: valid children
+# remain independently modeled and no weak branch becomes a forced remainder.
 branch_panel <- data.table(
   period = rep(1:20, each = 2),
   geo = rep(c("a", "b"), 20),
@@ -314,7 +339,7 @@ parent_enforced <- econ_seq_enforce_branch_decisions(
 )
 stopifnot("a2" %in% parent_enforced$spend_map$variable)
 stopifnot("b1" %in% parent_enforced$spend_map$variable)
-stopifnot(any(parent_enforced$action_audit[variable == "a1", enforced_action] == "parent_remainder"))
+stopifnot(parent_enforced$action_audit[variable == "a1", enforced_action] == "strong_parent_shrinkage")
 stopifnot(parent_enforced$action_audit[variable == "a2", independent_child_retained])
 stopifnot(parent_enforced$action_audit[variable == "b1", independent_child_retained])
 stopifnot(parent_enforced$reconciliation$max_abs_row_spend_reconciliation_error[1] < 1e-10)
@@ -442,6 +467,15 @@ explicit_training <- econ_seq_training_time_values(
 )
 stopifnot(length(last_n_training) == 4L)
 stopifnot(identical(sort(last_n_training), sort(explicit_training)))
+holdout_labels <- copy(holdout_fixture)[, explicit_holdout := rep(c("train", "training", "holdout", "test", "FALSE", "0"), 2L)]
+label_training <- econ_seq_training_time_values(
+  holdout_labels, "geo", "period", holdout_col = "explicit_holdout", holdout_value = TRUE
+)
+stopifnot(identical(sort(label_training), sort(unique(holdout_labels[explicit_holdout %in% c("train", "training", "FALSE", "0"), period]))))
+logical_training <- econ_seq_training_time_values(
+  copy(holdout_fixture), "geo", "period", holdout_col = "explicit_holdout", holdout_value = TRUE
+)
+stopifnot(identical(sort(logical_training), sort(explicit_training)))
 mixed_holdout <- copy(holdout_fixture)
 mixed_holdout[geo == "b" & period == max(period), explicit_holdout := FALSE]
 stopifnot(inherits(try(econ_seq_training_time_values(
