@@ -82,12 +82,11 @@ stopifnot(nrow(root$national_spend) == length(periods) * nrow(spend_map))
 # A linear root emits broad generic curve defaults and labels them as generic;
 # it never mislabels the 50% anchor as parent nonlinear evidence.
 linear_curve_evidence <- econ_seq_root_rrate_distribution(root)
-stopifnot(linear_curve_evidence$curve_prior_available[1])
+stopifnot(!linear_curve_evidence$curve_prior_available[1])
 stopifnot(!linear_curve_evidence$parent_curve_evidence_available[1])
-stopifnot(abs(linear_curve_evidence$rrate_prior_mean[1] - 0.20) < 1e-12)
-stopifnot(abs(linear_curve_evidence$anchor_saturation_prior_mean[1] - 0.50) < 1e-12)
-stopifnot(linear_curve_evidence$curve_prior_mode[1] == "predominantly_generic_curve_default")
-stopifnot(grepl("generic_default", linear_curve_evidence$rrate_prior_source[1], fixed = TRUE))
+stopifnot(is.na(linear_curve_evidence$rrate_prior_mean[1]))
+stopifnot(is.na(linear_curve_evidence$anchor_saturation_prior_mean[1]))
+stopifnot(linear_curve_evidence$curve_prior_mode[1] == "no_parent_nonlinear_curve_evidence")
 
 linear_md <- copy(metadata)
 linear_md[role == "media", `:=`(rrate = 0.18, rrate_precision = 9, anchor_saturation = 0.44,
@@ -119,6 +118,40 @@ stopifnot(nonlinear_evidence$curve_prior_available[1])
 stopifnot(abs(nonlinear_evidence$root_nonlinear_model_weight[1] - 0.8) < 1e-12)
 stopifnot(is.finite(nonlinear_evidence$rrate_prior_precision[1]))
 stopifnot(is.finite(nonlinear_evidence$anchor_saturation_prior_precision[1]))
+
+# Nonlinear model support attenuates only parent evidence. The child generic
+# prior enters later, exactly once, so zero support leaves it unchanged.
+weight_fixture <- function(weight) {
+  x <- nonlinear_root
+  hill_n <- as.integer(round(20 * weight))
+  x$bootstrap_draws <- data.table(
+    draw = 1:20, fit_ok = TRUE,
+    root_curve_type = c(rep("adstock_hill", hill_n), rep("linear", 20 - hill_n)),
+    root_rrate = c(rep(0.30, hill_n), rep(0, 20 - hill_n)),
+    root_anchor_saturation = c(rep(0.60, hill_n), rep(NA_real_, 20 - hill_n))
+  )
+  econ_seq_root_rrate_distribution(x)
+}
+weights <- c(0, 0.1, 0.5, 1)
+weight_evidence <- lapply(weights, weight_fixture)
+stopifnot(!weight_evidence[[1]]$curve_prior_available[1])
+stopifnot(all(vapply(weight_evidence[-1], function(x) x$curve_prior_available[1], logical(1))))
+parent_precision <- vapply(weight_evidence, function(x) x$rrate_prior_precision[1], numeric(1))
+stopifnot(is.na(parent_precision[1]))
+stopifnot(all(diff(parent_precision[-1]) > 0))
+weight_prior <- function(evidence) data.table(
+  variable = "tv_support", curve_prior_available = evidence$curve_prior_available[1], branch_decision = "fit",
+  rrate_prior_mean = evidence$rrate_prior_mean[1], rrate_prior_precision = evidence$rrate_prior_precision[1],
+  anchor_saturation_prior_mean = evidence$anchor_saturation_prior_mean[1],
+  anchor_saturation_prior_precision = evidence$anchor_saturation_prior_precision[1]
+)
+weight_md <- data.table(variable = "tv_support", role = "media", coef = 0, coef_precision = 1, coef_bound = "pos",
+                        rrate = 0.18, rrate_precision = 9, anchor_saturation = 0.44,
+                        anchor_saturation_precision = 4, cvalue_from_anchor = TRUE)
+weight_outputs <- lapply(weight_evidence, function(x) econ_seq_apply_rrate_priors(weight_md, weight_prior(x)))
+stopifnot(weight_outputs[[1]]$rrate == 0.18, weight_outputs[[1]]$rrate_precision == 9)
+stopifnot(weight_outputs[[1]]$anchor_saturation == 0.44, weight_outputs[[1]]$anchor_saturation_precision == 4)
+stopifnot(all(diff(vapply(weight_outputs[-1], function(x) x$rrate_precision, numeric(1))) > 0))
 
 # Parent curve evidence combines with, rather than replaces, the exact generic
 # child prior. This preserves a fair direct baseline when no parent evidence

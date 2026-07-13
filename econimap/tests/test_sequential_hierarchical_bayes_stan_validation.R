@@ -58,6 +58,54 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
   spend_cols <- sub("_support$", "_spend", media_vars)
   truth_cols <- sub("_support$", "_truth", media_vars)
 
+  make_fixed_generic_fit_metadata <- function(media_variables, media_spend_cols) {
+    # Deliberately accepts labels and columns only. It has no route to truth
+    # parameters, generated contributions, or simulation curve settings.
+    data.table(
+      variable = c(media_variables, "macro"),
+      role = c(rep("media", length(media_variables)), "control"),
+      spend_col = c(media_spend_cols, NA_character_),
+      rollup_path = c(
+        "total_paid_media > video > tv",
+        "total_paid_media > social > meta",
+        "total_paid_media > social > tiktok",
+        "business_controls > macro"
+      ),
+      has_curve = c(rep(1L, length(media_variables)), 0L),
+      curve_type = c(rep("hill", length(media_variables)), NA_character_),
+      rrate = c(rep(0.20, length(media_variables)), 0),
+      rrate_precision = c(rep(16, length(media_variables)), 1),
+      anchor_saturation = c(rep(0.50, length(media_variables)), NA_real_),
+      anchor_saturation_precision = c(rep(4, length(media_variables)), NA_real_),
+      cvalue_from_anchor = c(rep(TRUE, length(media_variables)), FALSE),
+      dvalue = c(rep(1, length(media_variables)), 0),
+      dvalue_precision = c(rep(25, length(media_variables)), 1),
+      coef = c(rep(0.05, length(media_variables)), 0),
+      coef_precision = c(rep(4, length(media_variables)), 1),
+      coef_bound = c(rep("pos", length(media_variables)), "free"),
+      prior_source = "fixed_generic"
+    )
+  }
+
+  make_meridian_equivalent_business_priors <- function(data, training_times) {
+    train <- as.data.table(data)[period %in% training_times]
+    total_kpi <- sum(as.numeric(train$kpi), na.rm = TRUE)
+    total_spend <- sum(unlist(lapply(spend_cols, function(cc) as.numeric(train[[cc]]))), na.rm = TRUE)
+    if (!is.finite(total_kpi) || total_kpi <= 0 || !is.finite(total_spend) || total_spend <= 0) {
+      stop("Meridian-equivalent benchmark requires positive training KPI and total media spend.", call. = FALSE)
+    }
+    data.table(
+      variable = media_vars,
+      prior_metric = "ikpc",
+      prior_mean = 0.40 * total_kpi / total_spend,
+      prior_sd = 0.20 * total_kpi / total_spend,
+      prior_uncertainty_basis = "sd",
+      prior_distribution = "normal",
+      prior_source = "meridian_equivalent_total_paid_media_contribution_default",
+      evidence_notes = "Non-revenue KPI translation of a 40% +/- 20% total paid-media contribution prior; common outcome-per-cost center across channels."
+    )
+  }
+
   make_panel <- function(regime, seed) {
     set.seed(seed)
     periods <- seq.Date(as.Date("2023-01-02"), by = "week", length.out = 104L)
@@ -130,29 +178,7 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
       true_dvalue = curve_spec$dvalue,
       true_raw_beta = curve_spec$raw_beta
     )
-    generic_fit_metadata <- data.table(
-      variable = c(media_vars, "macro"),
-      role = c(rep("media", length(media_vars)), "control"),
-      spend_col = c(spend_cols, NA_character_),
-      rollup_path = c(
-        "total_paid_media > video > tv",
-        "total_paid_media > social > meta",
-        "total_paid_media > social > tiktok",
-        "business_controls > macro"
-      ),
-      has_curve = c(rep(1L, length(media_vars)), 0L),
-      curve_type = c(rep("hill", length(media_vars)), NA_character_),
-      rrate = c(rep(0.20, length(media_vars)), 0),
-      rrate_precision = c(rep(16, length(media_vars)), 1),
-      anchor_saturation = c(rep(0.50, length(media_vars)), NA_real_),
-      anchor_saturation_precision = c(rep(4, length(media_vars)), NA_real_),
-      cvalue_from_anchor = c(rep(TRUE, length(media_vars)), FALSE),
-      dvalue = c(rep(1, length(media_vars)), 0),
-      dvalue_precision = c(rep(25, length(media_vars)), 1),
-      coef = c(rep(0.05, length(media_vars)), 0),
-      coef_precision = c(rep(4, length(media_vars)), 1),
-      coef_bound = c(rep("pos", length(media_vars)), "free")
-    )
+    generic_fit_metadata <- make_fixed_generic_fit_metadata(media_vars, spend_cols)
     oracle_fit_metadata <- data.table(
         variable = c(media_vars, "macro"),
         role = c(rep("media", length(media_vars)), "control"),
@@ -194,30 +220,25 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     )]
   }
 
-  assert_fair_leaf_benchmark <- function(data, generic_fit_metadata, truth_metadata, fit_args, baseline_spec) {
+  assert_fair_leaf_benchmark <- function(data, generic_fit_metadata, fit_args, baseline_spec, holdout_contract) {
     generic_hash <- econ_seq_content_hash(
       data = data,
       metadata = generic_fit_metadata,
       fit_args = fit_args,
       baseline_spec = baseline_spec
     )
-    truth_cols <- intersect(c("true_rrate", "true_cvalue", "true_dvalue", "true_raw_beta"), names(truth_metadata))
-    if (length(truth_cols) && all(c("variable", "rrate", "cvalue", "dvalue", "coef") %in% names(generic_fit_metadata))) {
-      truth_cmp <- truth_metadata[, c("variable", truth_cols), with = FALSE]
-      generic_cmp <- generic_fit_metadata[role == "media", .(variable, rrate, cvalue, dvalue, coef)]
-      merged <- merge(generic_cmp, truth_cmp, by = "variable", all.x = TRUE, sort = FALSE)
-      if (nrow(merged) && all(c("true_rrate", "true_cvalue", "true_dvalue", "true_raw_beta") %in% names(merged))) {
-        stopifnot(any(abs(merged$rrate - merged$true_rrate) > 1e-10 |
-                        abs(merged$cvalue - merged$true_cvalue) > 1e-10 |
-                        abs(merged$dvalue - merged$true_dvalue) > 1e-10 |
-                        abs(merged$coef - merged$true_raw_beta) > 1e-10))
-      }
-    }
+    stopifnot(!any(grepl("true|truth", names(generic_fit_metadata), ignore.case = TRUE)))
+    stopifnot("prior_source" %in% names(generic_fit_metadata))
+    stopifnot(all(generic_fit_metadata$prior_source == "fixed_generic"))
+    declared <- make_fixed_generic_fit_metadata(media_vars, spend_cols)
+    stopifnot(isTRUE(all.equal(generic_fit_metadata, declared, check.attributes = FALSE)))
     data.table(
       direct_base_prior_hash = generic_hash,
       sequential_base_prior_hash = generic_hash,
       base_contract_identical = TRUE,
       truth_used_in_primary_fit = FALSE,
+      generic_prior_source = "fixed_generic",
+      holdout_contract_hash = econ_seq_content_hash(holdout_contract),
       note = "Direct and sequential leaf paths begin from the same generic metadata; only sequential parent evidence is added after the base contract."
     )
   }
@@ -521,8 +542,9 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
       prior_transfer_settings = "effectiveness_adstock_saturation",
       run_oracle = run_oracle
     )
+    validation_holdout_contract <- list(holdout_last_n = 13L)
     fair_benchmark_contract <- assert_fair_leaf_benchmark(
-      sim$data, sim$generic_fit_metadata, sim$truth_metadata, fit_args_i, validation_config$baseline_spec
+      sim$data, sim$generic_fit_metadata, fit_args_i, validation_config$baseline_spec, validation_holdout_contract
     )
     checkpoint_hash <- econ_seq_content_hash(
       data = sim$data,
@@ -574,6 +596,26 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     direct_eval <- recovery_summary(direct, sim$data, sim$curve_spec, "direct_leaf")
     fwrite(direct_eval$overall, file.path(regime_dir, "direct_leaf_recovery_overall.csv"))
     fwrite(direct_eval$by_variable, file.path(regime_dir, "direct_leaf_recovery_by_variable.csv"))
+
+    meridian_equivalent_priors <- make_meridian_equivalent_business_priors(
+      sim$data, training_times = head(sort(unique(sim$data$period)), -13L)
+    )
+    fwrite(meridian_equivalent_priors, file.path(regime_dir, "meridian_equivalent_business_priors.csv"))
+    direct_meridian_equivalent <- load_or_run(file.path(regime_dir, "direct_econimap_meridian_default_priors_fit.rds"), function() {
+      do.call(fit_hier_mmm, modifyList(fit_args_i, list(
+        data = sim$data,
+        metadata_input = sim$generic_fit_metadata,
+        dep_var_col = "kpi", group_col = "geo", time_col = "period", entity_col = "entity",
+        spend_map = spend_map, business_priors = meridian_equivalent_priors,
+        output_dir = file.path(regime_dir, "direct_econimap_meridian_default_priors_cmdstan"),
+        output_prefix = "direct_econimap_meridian_default_priors"
+      )))
+    }, manifest)
+    direct_meridian_equivalent_eval <- recovery_summary(
+      direct_meridian_equivalent, sim$data, sim$curve_spec, "direct_econimap_meridian_default_priors"
+    )
+    fwrite(direct_meridian_equivalent_eval$overall, file.path(regime_dir, "direct_econimap_meridian_default_priors_recovery_overall.csv"))
+    fwrite(direct_meridian_equivalent_eval$by_variable, file.path(regime_dir, "direct_econimap_meridian_default_priors_recovery_by_variable.csv"))
 
     oracle_eval <- NULL
     if (run_oracle) {
@@ -649,11 +691,19 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     )
     root_leaf_base_prior_audit <- econ_seq_assert_base_prior_equivalence(
       direct_base_prior_specification, root_leaf$child_base_prior_specification,
-      context = "direct generic leaves versus root-to-leaf pre-transfer specification"
+      context = "direct generic leaves versus root-to-leaf pre-transfer specification",
+      reference_context = list(baseline_spec = validation_config$baseline_spec, controls = "macro",
+                               holdout_contract = validation_holdout_contract, fit_args = fit_args_i),
+      candidate_context = list(baseline_spec = root_leaf$baseline_spec, controls = "macro",
+                               holdout_contract = root_leaf$holdout_spec, fit_args = fit_args_i)
     )
     depth1_leaf_base_prior_audit <- econ_seq_assert_base_prior_equivalence(
       direct_base_prior_specification, depth1_leaf$child_base_prior_specification,
-      context = "direct generic leaves versus depth-1-to-leaf pre-transfer specification"
+      context = "direct generic leaves versus depth-1-to-leaf pre-transfer specification",
+      reference_context = list(baseline_spec = validation_config$baseline_spec, controls = "macro",
+                               holdout_contract = validation_holdout_contract, fit_args = fit_args_i),
+      candidate_context = list(baseline_spec = depth1_leaf$baseline_spec, controls = "macro",
+                               holdout_contract = depth1_leaf$holdout_spec, fit_args = fit_args_i)
     )
     base_prior_audit <- rbindlist(list(
       root_leaf_base_prior_audit[, path := root_leaf_label],
@@ -683,7 +733,9 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
       data.table(model = root_leaf_label, root_curve_type = root_leaf$root_fit$root_summary$root_curve_type[1], root_effectiveness_status = root_leaf$root_fit$root_summary$root_effectiveness_status[1], depth_gate = root_leaf$depth_gate$identification_recommendation[1]),
       data.table(model = depth1_label, root_curve_type = depth1_leaf$root_fit$root_summary$root_curve_type[1], root_effectiveness_status = depth1_leaf$root_fit$root_summary$root_effectiveness_status[1], depth_gate = depth1_leaf$depth_gate$identification_recommendation[1])
     )
-    primary_overall <- rbindlist(c(list(direct_eval$overall), lapply(staged_evals, `[[`, "overall")), fill = TRUE)
+    primary_overall <- rbindlist(c(
+      list(direct_eval$overall, direct_meridian_equivalent_eval$overall), lapply(staged_evals, `[[`, "overall")
+    ), fill = TRUE)
     overall <- if (is.null(oracle_eval)) primary_overall else rbindlist(list(primary_overall, oracle_eval$overall), fill = TRUE)
     root_audit <- rbindlist(staged_root_audit, fill = TRUE)
     overall[root_audit, on = "model", `:=`(
@@ -738,7 +790,9 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
       direct_relative_status == "materially_better_parameter_recovery_holdout_equivalent", "promising_vs_direct",
       default = "measured"
     )]
-    primary_by_variable <- rbindlist(c(list(direct_eval$by_variable), lapply(staged_evals, `[[`, "by_variable")), fill = TRUE)
+    primary_by_variable <- rbindlist(c(
+      list(direct_eval$by_variable, direct_meridian_equivalent_eval$by_variable), lapply(staged_evals, `[[`, "by_variable")
+    ), fill = TRUE)
     by_variable <- if (is.null(oracle_eval)) primary_by_variable else rbindlist(list(primary_by_variable, oracle_eval$by_variable), fill = TRUE)
     by_variable[, `:=`(regime = regime, validation_seed = validation_seed)]
     all_overall[[i]] <- overall
@@ -773,7 +827,7 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
   if ("clean_separated" %in% regimes && any(overall$model == "direct_leaf") &&
       all(c("sequential_root_to_leaf", "sequential_depth1_to_leaf") %in% overall$model)) {
     clean <- overall[regime == "clean_separated" & model != "direct_oracle_upper_bound"]
-    stopifnot(all(clean[, .N, by = validation_seed]$N == 3L))
+    stopifnot(all(clean[, .N, by = validation_seed]$N == 4L))
     stopifnot(all(is.finite(clean$total_relative_error)))
     # Guard the observed staged benefit without pinning the test to one exact
     # posterior realization. This applies only to the deliberately fixed,

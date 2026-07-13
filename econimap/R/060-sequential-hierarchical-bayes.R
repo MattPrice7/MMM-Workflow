@@ -2195,7 +2195,7 @@ econ_seq_root_rrate_distribution <- function(root_fit) {
 
   center <- spread <- anchor_center <- anchor_sd <- NA_real_
   rrate_source <- anchor_source <- "generic_default_with_linear_model_probability"
-  if (nrow(bootstrap_hill) >= 10L) {
+  if (nrow(bootstrap_hill) >= 2L) {
     center <- mean(bootstrap_hill$root_rrate)
     spread <- stats::sd(bootstrap_hill$root_rrate)
     anchor_center <- mean(bootstrap_hill$root_anchor_saturation)
@@ -2210,52 +2210,41 @@ econ_seq_root_rrate_distribution <- function(root_fit) {
     anchor_sd <- sqrt(sum(hill_candidates$hill_weight__ * (hill_candidates$root_anchor_saturation - anchor_center)^2))
     rrate_source <- anchor_source <- "sequential_root_hill_conditional_aicc_candidates"
   }
-  generic_rrate_mean <- 0.20
-  generic_rrate_sd <- 0.25
-  generic_anchor_mean <- 0.50
-  generic_anchor_sd <- 0.25
-  parent_rrate_mean <- if (is.finite(center)) pmin(pmax(center, 0), 0.95) else generic_rrate_mean
-  parent_rrate_sd <- max(if (is.finite(spread)) spread else generic_rrate_sd, 0.10)
-  parent_anchor_mean <- if (is.finite(anchor_center)) pmin(pmax(anchor_center, 0.01), 0.99) else generic_anchor_mean
-  parent_anchor_sd <- max(if (is.finite(anchor_sd)) anchor_sd else generic_anchor_sd, 0.10)
+  # This object carries parent-only nonlinear evidence. The child model's
+  # generic curve prior is deliberately absent here and is combined exactly
+  # once in econ_seq_apply_rrate_priors().
+  parent_rrate_mean <- if (is.finite(center)) pmin(pmax(center, 0), 0.95) else NA_real_
+  parent_rrate_sd <- if (is.finite(spread)) max(spread, 0.10) else NA_real_
+  parent_anchor_mean <- if (is.finite(anchor_center)) pmin(pmax(anchor_center, 0.01), 0.99) else NA_real_
+  parent_anchor_sd <- if (is.finite(anchor_sd)) max(anchor_sd, 0.10) else NA_real_
   evidence_weight <- if (isTRUE(parent_curve_evidence_available)) nonlinear_weight else 0
-  mixed_rrate_mean <- evidence_weight * parent_rrate_mean + (1 - evidence_weight) * generic_rrate_mean
-  mixed_rrate_var <- evidence_weight * (parent_rrate_sd^2 + (parent_rrate_mean - mixed_rrate_mean)^2) +
-    (1 - evidence_weight) * (generic_rrate_sd^2 + (generic_rrate_mean - mixed_rrate_mean)^2)
-  mixed_anchor_mean <- evidence_weight * parent_anchor_mean + (1 - evidence_weight) * generic_anchor_mean
-  mixed_anchor_var <- evidence_weight * (parent_anchor_sd^2 + (parent_anchor_mean - mixed_anchor_mean)^2) +
-    (1 - evidence_weight) * (generic_anchor_sd^2 + (generic_anchor_mean - mixed_anchor_mean)^2)
   curve_mode <- if (evidence_weight >= 0.67) {
     "predominantly_parent_nonlinear_evidence"
   } else if (evidence_weight > 0.10) {
-    "model_averaged_parent_and_generic_curve_evidence"
+    "attenuated_parent_nonlinear_evidence"
   } else {
-    "predominantly_generic_curve_default"
+    "no_parent_nonlinear_curve_evidence"
   }
-  if (evidence_weight <= 0.10) {
-    rrate_source <- anchor_source <- "generic_default_with_linear_model_probability"
-  } else {
-    rrate_source <- paste0(rrate_source, "_model_averaged_with_generic_default")
-    anchor_source <- paste0(anchor_source, "_model_averaged_with_generic_default")
-  }
+  if (evidence_weight <= 0) rrate_source <- anchor_source <- "no_parent_nonlinear_curve_evidence"
   out <- data.table::data.table(
-    curve_prior_available = TRUE,
+    curve_prior_available = evidence_weight > 0,
     parent_curve_evidence_available = isTRUE(parent_curve_evidence_available),
     curve_prior_mode = curve_mode,
     root_nonlinear_model_weight = nonlinear_weight,
     root_nonlinear_model_weight_source = weight_source,
-    rrate_prior_mean = mixed_rrate_mean,
-    rrate_prior_sd = sqrt(mixed_rrate_var),
+    rrate_prior_mean = parent_rrate_mean,
+    rrate_prior_sd = parent_rrate_sd,
     rrate_prior_source = rrate_source,
-    anchor_saturation_prior_mean = mixed_anchor_mean,
-    anchor_saturation_prior_sd = sqrt(mixed_anchor_var),
+    anchor_saturation_prior_mean = parent_anchor_mean,
+    anchor_saturation_prior_sd = parent_anchor_sd,
     anchor_saturation_prior_source = anchor_source
   )
   out[, `:=`(
-    rrate_prior_precision = data.table::fifelse(is.finite(rrate_prior_sd) & rrate_prior_sd > 0, 1 / rrate_prior_sd^2, NA_real_),
+    rrate_prior_precision = data.table::fifelse(is.finite(rrate_prior_sd) & rrate_prior_sd > 0,
+                                                 root_nonlinear_model_weight / rrate_prior_sd^2, NA_real_),
     anchor_saturation_prior_precision = data.table::fifelse(
       is.finite(anchor_saturation_prior_sd) & anchor_saturation_prior_sd > 0,
-      1 / anchor_saturation_prior_sd^2,
+      root_nonlinear_model_weight / anchor_saturation_prior_sd^2,
       NA_real_
     )
   )]
@@ -2766,7 +2755,9 @@ econ_seq_base_prior_specification <- function(metadata_input,
 
 econ_seq_assert_base_prior_equivalence <- function(reference_spec,
                                                     candidate_spec,
-                                                    context = "sequential child handoff") {
+                                                    context = "sequential child handoff",
+                                                    reference_context = list(),
+                                                    candidate_context = list()) {
   ref <- data.table::copy(data.table::as.data.table(reference_spec))
   cand <- data.table::copy(data.table::as.data.table(candidate_spec))
   if (!"variable" %in% names(ref) || !"variable" %in% names(cand)) {
@@ -2794,8 +2785,20 @@ econ_seq_assert_base_prior_equivalence <- function(reference_spec,
     mismatch_fields[bad] <- paste0(mismatch_fields[bad], ifelse(nzchar(mismatch_fields[bad]), " | ", ""), cc)
   }
   audit[, `:=`(base_prior_equivalent = !mismatch, mismatch_fields = mismatch_fields, audit_context = context)]
-  if (any(mismatch)) {
-    bad <- audit[mismatch, paste0(variable, " [", mismatch_fields, "]")]
+  context_fields <- c("baseline_spec", "controls", "holdout_contract", "fit_args")
+  for (field in context_fields) {
+    ref_hash <- econ_seq_content_hash(reference_context[[field]] %||% NULL)
+    cand_hash <- econ_seq_content_hash(candidate_context[[field]] %||% NULL)
+    audit[, (paste0(field, "_equivalent")) := identical(ref_hash, cand_hash)]
+    if (!identical(ref_hash, cand_hash)) {
+      audit[, `:=`(
+        base_prior_equivalent = FALSE,
+        mismatch_fields = paste0(mismatch_fields, ifelse(nzchar(mismatch_fields), " | ", ""), field)
+      )]
+    }
+  }
+  if (any(!audit$base_prior_equivalent)) {
+    bad <- audit[!base_prior_equivalent, paste0(variable, " [", mismatch_fields, "]")]
     stop("Base-prior equivalence audit failed for ", context, ": ", paste(bad, collapse = "; "), call. = FALSE)
   }
   audit[]
@@ -2843,6 +2846,8 @@ econ_seq_apply_rrate_priors <- function(metadata_input,
   if (!"curve_prior_available" %in% names(priors)) {
     priors[, curve_prior_available := is.finite(rrate_prior_mean) & is.finite(rrate_prior_precision) & rrate_prior_precision > 0]
   }
+  if (!"rrate_prior_source" %in% names(priors)) priors[, rrate_prior_source := NA_character_]
+  if (!"anchor_saturation_prior_source" %in% names(priors)) priors[, anchor_saturation_prior_source := NA_character_]
   if (!"branch_decision" %in% names(priors)) priors[, branch_decision := "fit"]
   priors <- priors[
     curve_prior_available %in% TRUE &
@@ -3785,6 +3790,7 @@ econ_seq_parent_effectiveness_draws <- function(parent_fit,
 econ_seq_sequential_prior_posterior_audit <- function(prior_table,
                                                        fit_obj = NULL,
                                                        layer = NULL,
+                                                       training_times = NULL,
                                                        max_draws = 200L,
                                                        seed = 123L) {
   priors <- data.table::copy(data.table::as.data.table(prior_table))
@@ -3817,7 +3823,9 @@ econ_seq_sequential_prior_posterior_audit <- function(prior_table,
   )]
   if (is.null(fit_obj) || is.null(layer)) return(out[])
   posterior <- tryCatch(
-    econ_seq_parent_effectiveness_draws(fit_obj, layer, max_draws = max_draws, seed = seed)$summary,
+    econ_seq_parent_effectiveness_draws(
+      fit_obj, layer, training_times = training_times, max_draws = max_draws, seed = seed
+    )$summary,
     error = function(e) data.table::data.table()
   )
   if (!nrow(posterior)) return(out[])
@@ -4399,6 +4407,7 @@ run_sequential_hierarchical_bayes <- function(data,
       handoff$business_priors,
       fit_obj = child_fit,
       layer = audit_layer,
+      training_times = training_times,
       seed = seed
     )
     child_fit$sequential_prior_posterior_audit <- prior_posterior_audit
@@ -4702,6 +4711,7 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
       handoff$business_priors,
       fit_obj = child_fit,
       layer = child_layer,
+      training_times = if (isTRUE(holdout_contract$legacy_all_rows_training_contract)) NULL else training_times,
       seed = parent_draw_seed
     )
     child_fit$sequential_prior_posterior_audit <- prior_posterior_audit
