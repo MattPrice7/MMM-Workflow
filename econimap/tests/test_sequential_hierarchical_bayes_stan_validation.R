@@ -479,6 +479,14 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
   minimal_smoke <- Sys.getenv("ECONIMAP_SEQUENTIAL_VALIDATION_MINIMAL_SMOKE", "0") == "1"
   focused_one_chain <- Sys.getenv("ECONIMAP_SEQUENTIAL_VALIDATION_FOCUSED_ONE_CHAIN", "0") == "1"
   if (minimal_smoke) {
+    # A 60-warmup test is an execution contract, not adequate adaptation for
+    # free nonlinear adstock/saturation parameters. Keep this path fixed-curve
+    # so a cheap CI smoke cannot manufacture a treedepth failure. The focused
+    # one-chain and full benchmarks retain sampled curves.
+    if (identical(sample_curve_mode, "always")) {
+      message("Minimal sequential smoke uses fixed curves; use ECONIMAP_SEQUENTIAL_VALIDATION_FOCUSED_ONE_CHAIN=1 for sampled-curve recovery.")
+    }
+    sample_curve_mode <- "never"
     fit_args <- modifyList(fit_args, list(
       chains = 1L, parallel_chains = 1L, iter_warmup = 60L, iter_sampling = 30L,
       likelihood = "normal", response_curve_draw_count = 20L
