@@ -700,5 +700,110 @@ stopifnot(all(collinear_id$identification_evidence_band != "data_driven"))
 stopifnot(all(constant_id$identification_evidence_band == "predominantly_prior_driven"))
 stopifnot(all(clean_id$thresholds_calibrated))
 stopifnot(length(unique(clean_id$identification_calibration_version)) == 1L)
+stopifnot(eval(formals(run_sequential_hierarchical_bayes)$sequential_effectiveness_application)[1] == "hierarchical_tau")
+stopifnot(eval(formals(run_sequential_hierarchical_bayes)$sequential_adstock_application)[1] == "hierarchical_tau")
+stopifnot(eval(formals(continue_sequential_hierarchical_bayes)$sequential_effectiveness_application)[1] == "hierarchical_tau")
+
+# Parent level and sibling dispersion are separate contracts. Identification
+# diagnostics remain reporting inputs; they no longer manufacture child-specific
+# prior precision in the default hierarchical-tau path.
+tau_handoff <- data.table(
+  variable = c("tv_support", "search_support"),
+  sequential_parent_id = "total_paid_media",
+  prior_mean = c(.70, .70),
+  prior_sd = c(.30, .30),
+  sequential_root_mean = c(.70, .70),
+  sequential_root_sd = c(.12, .12),
+  sequential_root_sd_component = c(.18, .18),
+  sequential_child_heterogeneity_sd_component = c(.35, .35),
+  sequential_mix_sd_component = c(.04, .04),
+  parent_positive_effect_transferred = TRUE,
+  child_spend_total = c(3000, 1000),
+  curve_prior_available = TRUE,
+  rrate_prior_mean = c(.30, .30),
+  rrate_prior_sd = c(.08, .08)
+)
+tau_input <- econ_seq_hierarchical_transfer_input(
+  tau_handoff,
+  tau_overrides = data.table(
+    parent_id = "total_paid_media",
+    effectiveness_tau_sd = .22,
+    adstock_tau_sd = .06
+  )
+)
+stopifnot(nrow(tau_input$effectiveness) == 2L, nrow(tau_input$adstock) == 2L)
+stopifnot(all(tau_input$effectiveness$tau_prior_sd == .22))
+stopifnot(all(tau_input$adstock$tau_prior_sd == .06))
+# Multiple parent centers still share exactly one learned layer-dispersion
+# prior. A conflicting parent-specific tau override is rejected.
+multi_parent_handoff <- rbindlist(list(
+  copy(tau_handoff),
+  copy(tau_handoff)[, `:=`(
+    variable = paste0(variable, "_second"),
+    sequential_parent_id = "second_parent",
+    child_spend_total = child_spend_total / 2
+  )]
+))
+multi_tau <- econ_seq_hierarchical_transfer_input(multi_parent_handoff)
+stopifnot(data.table::uniqueN(multi_tau$effectiveness$tau_prior_sd) == 1L)
+conflicting_tau <- try(econ_seq_hierarchical_transfer_input(
+  multi_parent_handoff,
+  tau_overrides = data.table(
+    parent_id = c("total_paid_media", "second_parent"),
+    effectiveness_tau_sd = c(.20, .40)
+  )
+), silent = TRUE)
+stopifnot(inherits(conflicting_tau, "try-error"))
+
+tau_prep <- prepare_stan_data_hier_mmm(
+  data = synthetic,
+  metadata_input = metadata,
+  dep_var_col = "kpi",
+  group_col = "geo",
+  time_col = "period",
+  entity_col = "entity",
+  holdout_last_n = 4L,
+  sequential_transfer_input = tau_input,
+  sample_curve_parameters = "always",
+  stop_on_zero_variance = FALSE
+)
+stopifnot(tau_prep$stan_data$S_seq_effect == 2L)
+stopifnot(tau_prep$stan_data$P_seq_effect == 1L)
+stopifnot(tau_prep$stan_data$H_seq_effect == 1L)
+stopifnot(length(tau_prep$stan_data$seq_effect_tau_prior_sd) == 1L)
+stopifnot(abs(sum(tau_prep$stan_data$seq_effect_child_share[1, ]) - 1) < 1e-12)
+stopifnot(all.equal(as.numeric(tau_prep$stan_data$seq_effect_child_share[1, ]), c(.75, .25), tolerance = 1e-12))
+stopifnot(tau_prep$stan_data$S_seq_adstock == 2L)
+stopifnot(tau_prep$stan_data$P_seq_adstock == 1L)
+stopifnot(tau_prep$stan_data$H_seq_adstock == 1L)
+stopifnot(all(tau_prep$stan_data$seq_effect_weight[tau_prep$holdout_idx, , drop = FALSE] == 0))
+fake_fit <- list(fit = list(summary = function(variables) {
+  n <- if (variables == "seq_effectiveness") 2L else 1L
+  data.table(
+    variable = if (variables %in% c("seq_effect_tau", "seq_adstock_tau_logit")) variables else paste0(variables, "[", seq_len(n), "]"),
+    mean = seq_len(n) / 10, median = seq_len(n) / 10,
+    sd = .02, q5 = .05, q95 = .25, rhat = 1, ess_bulk = 100, ess_tail = 90
+  )
+}))
+tau_audit <- econ_seq_hierarchical_transfer_posterior_audit(fake_fit, tau_input)
+stopifnot(nrow(tau_audit$effectiveness_parents) == 1L)
+stopifnot(nrow(tau_audit$effectiveness_children) == 2L)
+stopifnot(nrow(tau_audit$effectiveness_layer) == 1L)
+stopifnot(nrow(tau_audit$adstock_parents) == 1L)
+stopifnot(nrow(tau_audit$adstock_layer) == 1L)
+tau_base_prep <- prepare_stan_data_hier_mmm(
+  data = synthetic,
+  metadata_input = metadata,
+  dep_var_col = "kpi",
+  group_col = "geo",
+  time_col = "period",
+  entity_col = "entity",
+  holdout_last_n = 4L,
+  sample_curve_parameters = "always",
+  stop_on_zero_variance = FALSE
+)
+stopifnot(identical(tau_prep$metadata$rrate, tau_base_prep$metadata$rrate))
+stopifnot(tau_base_prep$stan_data$H_seq_effect == 0L)
+stopifnot(tau_base_prep$stan_data$H_seq_adstock == 0L)
 
 cat("Sequential hierarchical Bayes hardening tests passed.\n")

@@ -2,6 +2,9 @@
 
 ## Checkpoints
 
+- `rolling_latest_sequential_hierarchical_tau_transfer`
+  - Replaced the default identification-score-to-prior-width handoff with explicit Stan partial pooling. Parent posterior uncertainty now enters once through training-only, spend-weighted aggregate-child effectiveness constraints; one shared layer-level `tau_effectiveness` is estimated from sibling deviations around distinct latent parent centers. Parent-informed adstock uses a separate shared `tau_adstock` on the logit-retention scale. Generic child priors remain intact, individual saturation is not centered on parent saturation, collective shape reconciliation remains optional, and legacy reference-calibration/coefficient-conversion paths remain explicit opt-ins. Added analyst layer-level tau overrides, posterior tau audits, holdout-safe transfer weights, data-contract tests, and a successful Stan compilation. Long recovery and sampler-geometry validation remain the next checkpoint.
+
 - `rolling_latest_bau_anchor_regularized_curve_search`
   - Upgraded standalone and package-native BAU curves for minimal-data analysts. No-KPI workflows remain anchored at the supplied/default median-active saturation point. KPI plus support/spend workflows now profile retention separately, constrain saturation/shape search to statistically competitive retention values, run coarse-to-fine rolling blocked validation, and apply the one-standard-error rule to select the curve closest to the anchor when fits are indistinguishable. Geo population data uses per-capita support and KPI evidence; geo data without population uses group mean indexing. Outputs now include the anchored and selected curves, candidate profile, search diagnostics, and q05/q50/q95 observational sensitivity envelopes. Targeted tests cover strong-lag recovery, weak-lag anchor fallback, holdout leakage, per-capita evidence, and ordered bands.
 

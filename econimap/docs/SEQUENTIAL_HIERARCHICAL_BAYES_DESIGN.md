@@ -1,5 +1,18 @@
 # Sequential Hierarchical Bayes Design
 
+The default parent-to-child handoff now uses explicit partial pooling inside
+Stan. Parent posterior uncertainty constrains the training-period,
+spend-weighted aggregate child effectiveness once; a model-estimated
+One shared layer-level `tau_effectiveness` governs sibling dispersion around
+distinct latent parent centers. Adstock uses one independent shared
+`tau_adstock` on the logit-retention scale. Individual child saturation priors
+remain generic, with optional collective parent-shape reconciliation.
+
+Identification diagnostics remain visible for audit and branch qualification,
+but they no longer convert directly into child prior precision in the default
+hierarchical-tau path. Legacy reference-calibration and coefficient-conversion
+paths remain explicit opt-ins for reproducibility.
+
 ## Purpose and Terminology
 
 Econimap's proposed coarse-to-fine workflow uses the safest identifiable

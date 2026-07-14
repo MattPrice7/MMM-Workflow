@@ -98,6 +98,32 @@ data {
   matrix[N, C_calibration] calibration_weight;
   vector[C_calibration] calibration_observed_lift;
   vector<lower=0>[C_calibration] calibration_observed_sd;
+  // Sequential empirical-Bayes transfer. Parent evidence constrains the
+  // spend-weighted aggregate once; tau is learned from sibling deviations.
+  int<lower=0> S_seq_effect;
+  int<lower=0> P_seq_effect;
+  int<lower=0, upper=1> H_seq_effect;
+  array[S_seq_effect] int<lower=1, upper=J> seq_effect_variable_idx;
+  array[S_seq_effect] int<lower=1, upper=max(P_seq_effect, 1)> seq_effect_parent_idx;
+  matrix[N, S_seq_effect] seq_effect_weight;
+  vector<lower=0>[S_seq_effect] seq_effect_reference_spend;
+  vector<lower=0>[S_seq_effect] seq_effect_child_noise_sd;
+  matrix[P_seq_effect, S_seq_effect] seq_effect_child_share;
+  vector[P_seq_effect] seq_effect_parent_mu;
+  vector<lower=0>[P_seq_effect] seq_effect_parent_sd;
+  real<lower=0> seq_effect_tau_prior_mean;
+  real<lower=0> seq_effect_tau_prior_sd;
+  vector<lower=0>[P_seq_effect] seq_effect_aggregate_sd;
+  int<lower=0> S_seq_adstock;
+  int<lower=0> P_seq_adstock;
+  int<lower=0, upper=1> H_seq_adstock;
+  array[S_seq_adstock] int<lower=1, upper=max(J_curve, 1)> seq_adstock_curve_idx;
+  array[S_seq_adstock] int<lower=1, upper=max(P_seq_adstock, 1)> seq_adstock_parent_idx;
+  vector[P_seq_adstock] seq_adstock_parent_mu_logit;
+  vector<lower=0>[P_seq_adstock] seq_adstock_parent_sd_logit;
+  real<lower=0> seq_adstock_tau_prior_mean_logit;
+  real<lower=0> seq_adstock_tau_prior_sd_logit;
+  vector<lower=0>[S_seq_adstock] seq_adstock_child_noise_sd_logit;
   // Sequential saturation handoff: one likelihood term can reconcile the
   // combined contribution of multiple child variables to a parent response
   // target at an observed training-period media mix.
@@ -322,6 +348,10 @@ parameters {
   vector<lower=0>[K_context_pos] context_coef_pos;
   vector<upper=0>[K_context_neg] context_coef_neg;
   vector[K_context_free] context_coef_free;
+  vector[P_seq_effect] seq_effect_parent;
+  vector<lower=0>[H_seq_effect] seq_effect_tau;
+  vector[P_seq_adstock] seq_adstock_parent_logit;
+  vector<lower=0>[H_seq_adstock] seq_adstock_tau_logit;
   real<lower=sigma_y_floor, upper=sigma_y_upper> sigma_y;
 }
 transformed parameters {
@@ -337,6 +367,9 @@ transformed parameters {
   vector[N] level_state;
   vector[N] mu;
   vector[C_calibration] calibration_pred;
+  vector[S_seq_effect] seq_effect_contribution;
+  vector[S_seq_effect] seq_effectiveness;
+  vector[P_seq_effect] seq_effect_aggregate;
   vector[C_collective_reconciliation] collective_reconciliation_pred;
   vector[C_collective_shape] collective_shape_reference_pred;
   vector[C_collective_shape] collective_shape_scenario_pred;
@@ -557,6 +590,9 @@ transformed parameters {
 
   mu = rep_vector(0, N);
   calibration_pred = rep_vector(0, C_calibration);
+  seq_effect_contribution = rep_vector(0, S_seq_effect);
+  seq_effectiveness = rep_vector(0, S_seq_effect);
+  seq_effect_aggregate = rep_vector(0, P_seq_effect);
   collective_reconciliation_pred = rep_vector(0, C_collective_reconciliation);
   collective_shape_reference_pred = rep_vector(0, C_collective_shape);
   collective_shape_scenario_pred = rep_vector(0, C_collective_shape);
@@ -590,6 +626,10 @@ transformed parameters {
             for (c in 1:C_calibration)
               if (calibration_variable_idx[c] == linear_idx[k])
                 calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
+          if (S_seq_effect > 0)
+            for (s in 1:S_seq_effect)
+              if (seq_effect_variable_idx[s] == linear_idx[k])
+                seq_effect_contribution[s] += seq_effect_weight[n, s] * raw_contribution;
           if (C_collective_reconciliation > 0)
             for (c in 1:C_collective_reconciliation)
               collective_reconciliation_pred[c] += collective_reconciliation_weight[c][n, linear_idx[k]] * raw_contribution;
@@ -604,6 +644,10 @@ transformed parameters {
             for (c in 1:C_calibration)
               if (calibration_variable_idx[c] == linear_idx[k])
                 calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
+          if (S_seq_effect > 0)
+            for (s in 1:S_seq_effect)
+              if (seq_effect_variable_idx[s] == linear_idx[k])
+                seq_effect_contribution[s] += seq_effect_weight[n, s] * raw_contribution;
           if (C_collective_reconciliation > 0)
             for (c in 1:C_collective_reconciliation)
               collective_reconciliation_pred[c] += collective_reconciliation_weight[c][n, linear_idx[k]] * raw_contribution;
@@ -630,6 +674,10 @@ transformed parameters {
               for (c in 1:C_calibration)
                 if (calibration_variable_idx[c] == j)
                   calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
+            if (S_seq_effect > 0)
+              for (s in 1:S_seq_effect)
+                if (seq_effect_variable_idx[s] == j)
+                  seq_effect_contribution[s] += seq_effect_weight[n, s] * raw_contribution;
             if (C_collective_reconciliation > 0)
               for (c in 1:C_collective_reconciliation)
                 collective_reconciliation_pred[c] += collective_reconciliation_weight[c][n, j] * raw_contribution;
@@ -695,6 +743,10 @@ transformed parameters {
                   for (c in 1:C_calibration)
                     if (calibration_variable_idx[c] == j)
                       calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
+                if (S_seq_effect > 0)
+                  for (s in 1:S_seq_effect)
+                    if (seq_effect_variable_idx[s] == j)
+                      seq_effect_contribution[s] += seq_effect_weight[n, s] * raw_contribution;
                 if (C_collective_reconciliation > 0)
                   for (c in 1:C_collective_reconciliation)
                     collective_reconciliation_pred[c] += collective_reconciliation_weight[c][n, j] * raw_contribution;
@@ -801,6 +853,10 @@ transformed parameters {
                 for (c in 1:C_calibration)
                   if (calibration_variable_idx[c] == j)
                     calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
+              if (S_seq_effect > 0)
+                for (s in 1:S_seq_effect)
+                  if (seq_effect_variable_idx[s] == j)
+                    seq_effect_contribution[s] += seq_effect_weight[n, s] * raw_contribution;
               if (C_collective_reconciliation > 0)
                 for (c in 1:C_collective_reconciliation)
                   collective_reconciliation_pred[c] += collective_reconciliation_weight[c][n, j] * raw_contribution;
@@ -813,6 +869,12 @@ transformed parameters {
         }
       }
     }
+  }
+  if (S_seq_effect > 0) {
+    for (s in 1:S_seq_effect)
+      seq_effectiveness[s] = seq_effect_contribution[s] / seq_effect_reference_spend[s];
+    for (p in 1:P_seq_effect)
+      seq_effect_aggregate[p] = seq_effect_child_share[p] * seq_effectiveness;
   }
   // Re-evaluate only the selected training-period mix after perturbing its
   // support. Baseline normalization remains the fitted, unperturbed training
@@ -1082,6 +1144,31 @@ model {
         if (coef_override_sd[g, j] > 0)
           beta[g, j] ~ normal(coef_override_mu[g, j], coef_override_sd[g, j]);
       }
+    }
+  }
+
+  if (P_seq_effect > 0) {
+    seq_effect_tau[1] ~ normal(seq_effect_tau_prior_mean, seq_effect_tau_prior_sd);
+    seq_effect_parent ~ normal(seq_effect_parent_mu, seq_effect_parent_sd);
+    for (p in 1:P_seq_effect)
+      seq_effect_aggregate[p] ~ normal(seq_effect_parent[p], seq_effect_aggregate_sd[p]);
+    for (s in 1:S_seq_effect) {
+      int p = seq_effect_parent_idx[s];
+      seq_effectiveness[s] - seq_effect_aggregate[p]
+        ~ normal(0, sqrt(square(seq_effect_tau[1]) + square(seq_effect_child_noise_sd[s])));
+    }
+  }
+
+  if (P_seq_adstock > 0) {
+    seq_adstock_tau_logit[1] ~ normal(seq_adstock_tau_prior_mean_logit, seq_adstock_tau_prior_sd_logit);
+    seq_adstock_parent_logit ~ normal(seq_adstock_parent_mu_logit, seq_adstock_parent_sd_logit);
+    for (s in 1:S_seq_adstock) {
+      int p = seq_adstock_parent_idx[s];
+      real child_logit_rrate = logit(fmin(fmax(rrate[seq_adstock_curve_idx[s]], 1e-6), 1 - 1e-6));
+      child_logit_rrate ~ normal(
+        seq_adstock_parent_logit[p],
+        sqrt(square(seq_adstock_tau_logit[1]) + square(seq_adstock_child_noise_sd_logit[s]))
+      );
     }
   }
 

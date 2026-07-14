@@ -25,13 +25,15 @@ This package directory is the canonical source of truth. See
 - `bau_response_curves.R`: conservative fallback response-curve creation when a
   full MMM is not available.
 - `run_sequential_hierarchical_bayes()`: national total-paid-media root by
-  default, separate spend/support scope, train-only root evidence, continuous
-  identification-driven effectiveness/adstock handoff, and an optional joint
-  Stan child fit using reference-spend calibration plus collective shape-only
-  reconciliation evidence. The Stan term is a covariance-aware,
+  default, separate spend/support scope, train-only root evidence, and an
+  optional joint Stan child fit. The default handoff estimates sibling
+  shared layer-level `tau_effectiveness` around distinct spend-weighted parent
+  aggregates and a separate shared logit-scale `tau_adstock`; it does not turn identification scores into prior
+  precision. Saturation remains child-specific with optional collective
+  shape-only reconciliation. That Stan term is a covariance-aware,
   cross-multiplied response residual rather than a fragile contribution ratio.
-  Weak identification
-  increases auditable prior regularization; it does not stop valid branches.
+  Legacy reference-calibration and coefficient-conversion handoffs remain
+  explicit opt-ins.
 
 ## Usage
 

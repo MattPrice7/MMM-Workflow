@@ -2634,6 +2634,180 @@ econ_seq_reference_effectiveness_calibration <- function(prior_table,
   )
 }
 
+econ_seq_hierarchical_transfer_input <- function(prior_table,
+                                                 tau_overrides = NULL,
+                                                 include_effectiveness = TRUE,
+                                                 include_adstock = TRUE) {
+  x <- data.table::copy(data.table::as.data.table(prior_table))
+  if (!nrow(x)) return(list(effectiveness = data.table::data.table(), adstock = data.table::data.table()))
+  value_from <- function(candidates, default = NA_real_) {
+    hit <- candidates[candidates %in% names(x)]
+    if (!length(hit)) return(rep(default, nrow(x)))
+    out <- rep(NA_real_, nrow(x))
+    for (cc in hit) {
+      z <- suppressWarnings(as.numeric(x[[cc]]))
+      fill <- !is.finite(out) & is.finite(z)
+      out[fill] <- z[fill]
+    }
+    out[!is.finite(out)] <- default
+    out
+  }
+  if (!"sequential_parent_id" %in% names(x)) x[, sequential_parent_id := "total_paid_media"]
+  x[, `:=`(
+    parent_mean__ = value_from(c("sequential_parent_mean", "sequential_root_mean", "prior_mean")),
+    parent_sd__ = value_from(c("sequential_parent_sd_component", "sequential_root_sd_component", "sequential_parent_sd", "sequential_root_sd", "prior_sd")),
+    heterogeneity_sd__ = value_from(c("sequential_child_heterogeneity_sd_component"), NA_real_),
+    mix_sd__ = value_from(c("sequential_mix_sd_component"), 0)
+  )]
+  x[!is.finite(heterogeneity_sd__) | heterogeneity_sd__ <= 0,
+    heterogeneity_sd__ := pmax(abs(parent_mean__) * 0.50, parent_sd__, 1e-6)]
+  x[, `:=`(
+    effect_tau_mean__ = 0,
+    effect_tau_sd__ = pmax(heterogeneity_sd__, 1e-6),
+    effect_aggregate_sd__ = pmax(abs(parent_mean__) * 0.20, mix_sd__, parent_sd__ * 0.25, 1e-6),
+    effect_child_noise_sd__ = pmax(abs(parent_mean__) * 0.05, parent_sd__ * 0.05, 1e-6),
+    adstock_tau_mean__ = 0,
+    adstock_tau_sd__ = pmax(value_from(c("rrate_prior_sd"), 0.10), 0.05),
+    adstock_child_noise_sd__ = pmax(value_from(c("rrate_prior_sd"), 0.05) * 0.10, 0.01)
+  )]
+  # tau is a layer-level dispersion parameter. Parent centers remain distinct,
+  # but all sibling sets in this transition inform one shared deviation scale.
+  x[, `:=`(
+    effect_tau_mean__ = stats::median(effect_tau_mean__, na.rm = TRUE),
+    effect_tau_sd__ = stats::median(effect_tau_sd__, na.rm = TRUE),
+    adstock_tau_mean__ = stats::median(adstock_tau_mean__, na.rm = TRUE),
+    adstock_tau_sd__ = stats::median(adstock_tau_sd__, na.rm = TRUE)
+  )]
+
+  if (!is.null(tau_overrides) && nrow(data.table::as.data.table(tau_overrides))) {
+    ov <- econ_seq_input_table(tau_overrides, "sequential_tau_overrides")
+    if (!"parent_id" %in% names(ov)) stop("sequential_tau_overrides must include parent_id.", call. = FALSE)
+    if (anyDuplicated(ov$parent_id)) stop("sequential_tau_overrides has duplicate parent_id rows.", call. = FALSE)
+    layer_mapping <- c(
+      effectiveness_tau_mean = "effect_tau_mean__",
+      effectiveness_tau_sd = "effect_tau_sd__",
+      adstock_tau_mean = "adstock_tau_mean__",
+      adstock_tau_sd = "adstock_tau_sd__"
+    )
+    parent_mapping <- c(
+      effectiveness_aggregate_sd = "effect_aggregate_sd__",
+      effectiveness_child_noise_sd = "effect_child_noise_sd__",
+      adstock_child_noise_sd = "adstock_child_noise_sd__"
+    )
+    ov[, parent_id := as.character(parent_id)]
+    for (src in names(layer_mapping)) {
+      if (!src %in% names(ov)) next
+      vals <- suppressWarnings(as.numeric(ov[[src]]))
+      vals <- vals[is.finite(vals)]
+      if (!length(vals)) next
+      if (data.table::uniqueN(round(vals, 12)) > 1L) {
+        stop(src, " is a shared layer override and must have one value.", call. = FALSE)
+      }
+      x[, (layer_mapping[[src]]) := vals[1]]
+    }
+    for (src in names(parent_mapping)) {
+      if (!src %in% names(ov)) next
+      dest <- parent_mapping[[src]]
+      vals <- suppressWarnings(as.numeric(ov[[src]]))
+      tmp <- data.table::data.table(parent_id = ov$parent_id, value__ = vals)
+      global <- tmp[parent_id == "*" & is.finite(value__)]$value__
+      if (length(global)) x[, (dest) := global[1]]
+      x[tmp[parent_id != "*" & is.finite(value__)], on = c("sequential_parent_id" = "parent_id"), (dest) := i.value__]
+    }
+  }
+
+  effect <- data.table::data.table()
+  if (isTRUE(include_effectiveness)) {
+    effect <- x[
+      parent_positive_effect_transferred %in% TRUE & is.finite(child_spend_total) & child_spend_total > 0,
+      .(
+        variable, parent_id = sequential_parent_id,
+        parent_mean = parent_mean__, parent_sd = pmax(parent_sd__, 1e-6),
+        reference_spend = child_spend_total,
+        tau_prior_mean = pmax(effect_tau_mean__, 0), tau_prior_sd = pmax(effect_tau_sd__, 1e-6),
+        aggregate_sd = pmax(effect_aggregate_sd__, 1e-6),
+        child_noise_sd = pmax(effect_child_noise_sd__, 1e-6)
+      )
+    ]
+  }
+  adstock <- data.table::data.table()
+  if (isTRUE(include_adstock)) {
+    adstock <- x[
+      parent_positive_effect_transferred %in% TRUE & curve_prior_available %in% TRUE &
+        is.finite(rrate_prior_mean) & rrate_prior_mean > 0 & rrate_prior_mean < 1 &
+        is.finite(rrate_prior_sd) & rrate_prior_sd > 0,
+      .(
+        variable, parent_id = sequential_parent_id,
+        parent_mean = rrate_prior_mean, parent_sd = pmax(rrate_prior_sd, 1e-6),
+        tau_prior_mean = pmax(adstock_tau_mean__, 0), tau_prior_sd = pmax(adstock_tau_sd__, 1e-6),
+        child_noise_sd = pmax(adstock_child_noise_sd__, 1e-6)
+      )
+    ]
+  }
+  list(effectiveness = effect[], adstock = adstock[])
+}
+
+econ_seq_hierarchical_transfer_posterior_audit <- function(fit_obj, transfer_input) {
+  empty <- function() list(
+    effectiveness_parents = data.table::data.table(),
+    effectiveness_children = data.table::data.table(),
+    effectiveness_layer = data.table::data.table(),
+    adstock_parents = data.table::data.table(),
+    adstock_layer = data.table::data.table()
+  )
+  if (is.null(fit_obj$fit) || !is.function(fit_obj$fit$summary)) return(empty())
+  summarize <- function(variable, labels, value_name) {
+    if (!length(labels)) return(data.table::data.table())
+    sm <- tryCatch(data.table::as.data.table(fit_obj$fit$summary(variables = variable)), error = function(e) data.table::data.table())
+    if (!nrow(sm)) return(data.table::data.table())
+    sm[, index__ := suppressWarnings(as.integer(sub("^.*\\[([0-9]+)\\]$", "\\1", variable)))]
+    sm[get("variable") == variable, index__ := 1L]
+    sm <- sm[is.finite(index__) & index__ <= length(labels)]
+    sm[, label__ := labels[index__]]
+    keep <- intersect(c("mean", "median", "sd", "q5", "q95", "rhat", "ess_bulk", "ess_tail"), names(sm))
+    out <- sm[, c(list(label = label__), mget(keep))]
+    data.table::setnames(out, keep, paste0(value_name, "_", keep))
+    out[]
+  }
+  eff <- data.table::as.data.table(transfer_input$effectiveness %||% data.table::data.table())
+  ad <- data.table::as.data.table(transfer_input$adstock %||% data.table::data.table())
+  eff_parent <- unique(eff$parent_id)
+  ad_parent <- unique(ad$parent_id)
+  parent_effect <- summarize("seq_effect_parent", eff_parent, "parent_effectiveness")
+  effect_layer <- summarize("seq_effect_tau", "layer", "tau_effectiveness")
+  parent_aggregate <- summarize("seq_effect_aggregate", eff_parent, "aggregate_child_effectiveness")
+  effect_parents <- Reduce(
+    function(a, b) merge(a, b, by = "label", all = TRUE, sort = FALSE),
+    Filter(nrow, list(parent_effect, parent_aggregate)),
+    init = data.table::data.table(label = eff_parent)
+  )
+  if (nrow(effect_layer) && nrow(effect_parents)) {
+    tau_cols <- setdiff(names(effect_layer), "label")
+    for (cc in tau_cols) effect_parents[, (cc) := effect_layer[[cc]][1]]
+  }
+  child_effect <- summarize("seq_effectiveness", eff$variable, "child_effectiveness")
+  if (nrow(child_effect)) {
+    child_effect[eff[, .(label = variable, parent_id, reference_spend)], on = "label", `:=`(
+      parent_id = i.parent_id,
+      reference_spend = i.reference_spend
+    )]
+  }
+  ad_parent_effect <- summarize("seq_adstock_parent_logit", ad_parent, "parent_adstock_logit")
+  adstock_layer <- summarize("seq_adstock_tau_logit", "layer", "tau_adstock_logit")
+  adstock_parents <- merge(data.table::data.table(label = ad_parent), ad_parent_effect, by = "label", all = TRUE, sort = FALSE)
+  if (nrow(adstock_layer) && nrow(adstock_parents)) {
+    tau_cols <- setdiff(names(adstock_layer), "label")
+    for (cc in tau_cols) adstock_parents[, (cc) := adstock_layer[[cc]][1]]
+  }
+  list(
+    effectiveness_parents = effect_parents[],
+    effectiveness_children = child_effect[],
+    effectiveness_layer = effect_layer[],
+    adstock_parents = adstock_parents[],
+    adstock_layer = adstock_layer[]
+  )
+}
+
 econ_seq_merge_calibration_inputs <- function(existing, inherited) {
   if (is.null(existing) || !nrow(existing)) return(data.table::as.data.table(inherited))
   if (is.null(inherited) || !nrow(inherited)) return(data.table::as.data.table(existing))
@@ -5007,7 +5181,9 @@ run_sequential_hierarchical_bayes <- function(data,
                                               strong_child_prior_relaxation = 1.20,
                                               curve_transfer_mode = c("effectiveness_adstock_saturation", "effectiveness_adstock", "effectiveness_only"),
                                               saturation_handoff = c("generic_child_prior", "collective_parent_shape_reconciliation", "independent_parent_prior"),
-                                              sequential_effectiveness_application = c("reference_calibration", "coefficient_approximation"),
+                                              sequential_effectiveness_application = c("hierarchical_tau", "reference_calibration", "coefficient_approximation"),
+                                              sequential_adstock_application = c("hierarchical_tau", "independent_prior"),
+                                              sequential_tau_overrides = NULL,
                                               fit_child = FALSE,
                                               child_fit_args = list(),
                                               output_dir = NULL,
@@ -5023,8 +5199,12 @@ run_sequential_hierarchical_bayes <- function(data,
   invalid_allocation_fallback <- match.arg(invalid_allocation_fallback)
   root_trend_spec <- match.arg(root_trend_spec)
   sequential_effectiveness_application <- match.arg(sequential_effectiveness_application)
+  sequential_adstock_application <- match.arg(sequential_adstock_application)
   curve_transfer_mode <- match.arg(curve_transfer_mode)
   saturation_handoff <- match.arg(saturation_handoff)
+  if (identical(sequential_adstock_application, "hierarchical_tau") && identical(saturation_handoff, "independent_parent_prior")) {
+    stop("hierarchical_tau adstock cannot be combined with independent_parent_prior saturation; use generic_child_prior or collective_parent_shape_reconciliation.", call. = FALSE)
+  }
   if (!is.list(child_fit_args)) stop("child_fit_args must be a list.", call. = FALSE)
   holdout_contract <- list(
     holdout_col = holdout_col,
@@ -5212,6 +5392,13 @@ run_sequential_hierarchical_bayes <- function(data,
   handoff$branch_decisions_pre_enforcement <- handoff$branch_decisions
   handoff$branch_decisions <- enforcement$action_audit
   handoff$branch_action_reconciliation <- enforcement$reconciliation
+  sequential_transfer_input <- econ_seq_hierarchical_transfer_input(
+    enforcement$prior_table,
+    tau_overrides = sequential_tau_overrides,
+    include_effectiveness = identical(sequential_effectiveness_application, "hierarchical_tau"),
+    include_adstock = identical(sequential_adstock_application, "hierarchical_tau") &&
+      !identical(curve_transfer_mode, "effectiveness_only")
+  )
   if (!is.null(rollup_layer)) {
     rollup_layer <- econ_seq_update_layer_mapping_after_enforcement(rollup_layer, enforcement)
     rollup_layer$data <- child_data
@@ -5228,14 +5415,19 @@ run_sequential_hierarchical_bayes <- function(data,
     variables = child_spend_map$variable,
     baseline_spec = baseline_contract
   )
-  child_metadata <- econ_seq_apply_rrate_priors(
-    child_metadata,
-    handoff$business_priors,
-    curve_transfer_mode = curve_transfer_mode,
-    # The frequentist root has no joint child likelihood. Its nonlinear
-    # evidence regularizes child adstock only; child saturation stays generic.
-    saturation_handoff = if (identical(saturation_handoff, "collective_parent_shape_reconciliation")) "generic_child_prior" else saturation_handoff
-  )
+  if (identical(sequential_adstock_application, "independent_prior")) {
+    child_metadata <- econ_seq_apply_rrate_priors(
+      child_metadata,
+      handoff$business_priors,
+      curve_transfer_mode = curve_transfer_mode,
+      # The frequentist root has no joint child likelihood. Its nonlinear
+      # evidence regularizes child adstock only; child saturation stays generic.
+      saturation_handoff = if (identical(saturation_handoff, "collective_parent_shape_reconciliation")) "generic_child_prior" else saturation_handoff
+    )
+  } else {
+    child_metadata[, sequential_rrate_prior_source := "generic_child_prior_plus_hierarchical_parent_tau"]
+    child_metadata[, sequential_saturation_prior_source := "generic_child_saturation_no_individual_parent_anchor"]
+  }
   if (!is.null(rollup_layer)) rollup_layer$metadata <- child_metadata
   child_fit <- NULL
   prior_posterior_audit <- econ_seq_sequential_prior_posterior_audit(handoff$business_priors)
@@ -5243,9 +5435,9 @@ run_sequential_hierarchical_bayes <- function(data,
     inherited_calibration <- if (identical(sequential_effectiveness_application, "reference_calibration")) {
       econ_seq_merge_calibration_inputs(child_fit_args$calibration_input %||% NULL, handoff$reference_calibration_input)
     } else child_fit_args$calibration_input %||% NULL
-    inherited_business_priors <- if (identical(sequential_effectiveness_application, "reference_calibration")) {
-      child_fit_args$business_priors %||% NULL
-    } else handoff$business_priors
+    inherited_business_priors <- if (identical(sequential_effectiveness_application, "coefficient_approximation")) {
+      handoff$business_priors
+    } else child_fit_args$business_priors %||% NULL
     child_args <- modifyList(child_fit_args, list(
       data = child_data,
       metadata_input = child_metadata,
@@ -5255,11 +5447,16 @@ run_sequential_hierarchical_bayes <- function(data,
       entity_col = entity_col,
       spend_map = child_spend_map,
       business_priors = inherited_business_priors,
-      calibration_input = inherited_calibration
+      calibration_input = inherited_calibration,
+      sequential_transfer_input = sequential_transfer_input
     ))
     child_fit <- do.call(fit_hier_mmm, child_args)
     child_fit$sequential_prior_ledger <- handoff$prior_ledger
     child_fit$sequential_reference_calibration_input <- handoff$reference_calibration_input
+    child_fit$sequential_transfer_input <- sequential_transfer_input
+    child_fit$sequential_transfer_posterior_audit <- econ_seq_hierarchical_transfer_posterior_audit(
+      child_fit, sequential_transfer_input
+    )
     child_fit$sequential_branch_decisions <- handoff$branch_decisions
     child_fit$sequential_root_summary <- root_fit$root_summary
     child_fit$sequential_rollup_layer <- rollup_layer
@@ -5299,6 +5496,8 @@ run_sequential_hierarchical_bayes <- function(data,
     data.table::fwrite(handoff$business_priors, file.path(output_dir, paste0(pfx, "child_business_priors.csv")))
     data.table::fwrite(handoff$prior_ledger, file.path(output_dir, paste0(pfx, "prior_ledger.csv")))
     data.table::fwrite(handoff$reference_calibration_input, file.path(output_dir, paste0(pfx, "reference_calibration_input.csv")))
+    data.table::fwrite(sequential_transfer_input$effectiveness, file.path(output_dir, paste0(pfx, "hierarchical_effectiveness_transfer.csv")))
+    data.table::fwrite(sequential_transfer_input$adstock, file.path(output_dir, paste0(pfx, "hierarchical_adstock_transfer.csv")))
     data.table::fwrite(handoff$branch_decisions, file.path(output_dir, paste0(pfx, "branch_decisions.csv")))
     data.table::fwrite(handoff$branch_action_reconciliation, file.path(output_dir, paste0(pfx, "branch_action_reconciliation.csv")))
     data.table::fwrite(reconciliation, file.path(output_dir, paste0(pfx, "reconciliation_audit.csv")))
@@ -5324,6 +5523,7 @@ run_sequential_hierarchical_bayes <- function(data,
     depth_gate = child_identification$overall,
     child_business_priors = handoff$business_priors,
     child_reference_calibration_input = handoff$reference_calibration_input,
+    child_sequential_transfer_input = sequential_transfer_input,
     branch_decisions = handoff$branch_decisions,
     branch_decisions_pre_enforcement = handoff$branch_decisions_pre_enforcement,
     branch_action_reconciliation = handoff$branch_action_reconciliation,
@@ -5337,13 +5537,16 @@ run_sequential_hierarchical_bayes <- function(data,
     reconciliation_audit = reconciliation,
     baseline_spec = baseline_contract,
     curve_transfer_mode = curve_transfer_mode,
+    sequential_effectiveness_application = sequential_effectiveness_application,
+    sequential_adstock_application = sequential_adstock_application,
     saturation_handoff = saturation_handoff,
     child_fit = child_fit,
+    sequential_transfer_posterior_audit = if (!is.null(child_fit)) child_fit$sequential_transfer_posterior_audit else econ_seq_hierarchical_transfer_posterior_audit(list(), sequential_transfer_input),
     limitations = data.table::data.table(
       limitation = c("same_kpi_data_reuse", "phase_1_child_prior_dependence"),
       treatment = c(
-        "Inherited root uncertainty is explicitly inflated before child use; this is not treated as independent evidence.",
-        "The root stage transfers a common effectiveness center to the selected child layer. Use continue_sequential_hierarchical_bayes() after an inspected fitted numeric stage to transfer that parent stage's posterior draws deeper."
+        "Inherited parent uncertainty is tempered before one spend-weighted aggregate-effectiveness constraint; sibling dispersion is estimated through tau rather than identification-score precision multipliers.",
+        "The root stage transfers an uncertain aggregate effectiveness and, when supported, an uncertain adstock center. Child effects and retention rates remain estimable before deeper continuation."
       )
     )
   )
@@ -5375,7 +5578,9 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
                                                    strong_child_prior_relaxation = 1.20,
                                                    curve_transfer_mode = c("effectiveness_adstock_saturation", "effectiveness_adstock", "effectiveness_only"),
                                                    saturation_handoff = c("generic_child_prior", "collective_parent_shape_reconciliation", "independent_parent_prior"),
-                                                   sequential_effectiveness_application = c("reference_calibration", "coefficient_approximation"),
+                                                   sequential_effectiveness_application = c("hierarchical_tau", "reference_calibration", "coefficient_approximation"),
+                                                   sequential_adstock_application = c("hierarchical_tau", "independent_prior"),
+                                                   sequential_tau_overrides = NULL,
                                                    parent_draw_count = 200L,
                                                    parent_draw_seed = 123L,
                                                    allow_baseline_override = FALSE,
@@ -5386,8 +5591,12 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
   rollup_short_path_action <- match.arg(rollup_short_path_action)
   curve_type_default <- match.arg(curve_type_default)
   sequential_effectiveness_application <- match.arg(sequential_effectiveness_application)
+  sequential_adstock_application <- match.arg(sequential_adstock_application)
   curve_transfer_mode <- match.arg(curve_transfer_mode)
   saturation_handoff <- match.arg(saturation_handoff)
+  if (identical(sequential_adstock_application, "hierarchical_tau") && identical(saturation_handoff, "independent_parent_prior")) {
+    stop("hierarchical_tau adstock cannot be combined with independent_parent_prior saturation; use generic_child_prior or collective_parent_shape_reconciliation.", call. = FALSE)
+  }
   if (!is.list(parent_stage) || is.null(parent_stage$child_fit) || is.null(parent_stage$rollup_layer)) {
     stop("parent_stage must be a prior sequential stage with fit_child = TRUE and a positive numeric rollup_depth.", call. = FALSE)
   }
@@ -5536,17 +5745,29 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
   handoff$branch_decisions <- enforcement$action_audit
   handoff$branch_action_reconciliation <- enforcement$reconciliation
   child_layer <- econ_seq_update_layer_mapping_after_enforcement(child_layer, enforcement)
+  sequential_transfer_input <- econ_seq_hierarchical_transfer_input(
+    enforcement$prior_table,
+    tau_overrides = sequential_tau_overrides,
+    include_effectiveness = identical(sequential_effectiveness_application, "hierarchical_tau"),
+    include_adstock = identical(sequential_adstock_application, "hierarchical_tau") &&
+      !identical(curve_transfer_mode, "effectiveness_only")
+  )
   child_base_prior_specification <- econ_seq_base_prior_specification(
     child_layer$metadata,
     variables = child_layer$spend_map$variable,
     baseline_spec = baseline_contract
   )
-  child_layer$metadata <- econ_seq_apply_rrate_priors(
-    child_layer$metadata,
-    handoff$business_priors,
-    curve_transfer_mode = curve_transfer_mode,
-    saturation_handoff = saturation_handoff
-  )
+  if (identical(sequential_adstock_application, "independent_prior")) {
+    child_layer$metadata <- econ_seq_apply_rrate_priors(
+      child_layer$metadata,
+      handoff$business_priors,
+      curve_transfer_mode = curve_transfer_mode,
+      saturation_handoff = saturation_handoff
+    )
+  } else {
+    child_layer$metadata[, sequential_rrate_prior_source := "generic_child_prior_plus_hierarchical_parent_tau"]
+    child_layer$metadata[, sequential_saturation_prior_source := "generic_child_saturation_no_individual_parent_anchor"]
+  }
   # The former response-level experimental handoff double-counted level
   # evidence already supplied through effectiveness calibration and had an
   # unsupported call contract. It is intentionally no longer selectable.
@@ -5575,9 +5796,9 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
     inherited_calibration <- if (identical(sequential_effectiveness_application, "reference_calibration")) {
       econ_seq_merge_calibration_inputs(child_fit_args$calibration_input %||% NULL, handoff$reference_calibration_input)
     } else child_fit_args$calibration_input %||% NULL
-    inherited_business_priors <- if (identical(sequential_effectiveness_application, "reference_calibration")) {
-      child_fit_args$business_priors %||% NULL
-    } else handoff$business_priors
+    inherited_business_priors <- if (identical(sequential_effectiveness_application, "coefficient_approximation")) {
+      handoff$business_priors
+    } else child_fit_args$business_priors %||% NULL
     child_args <- modifyList(child_fit_args, list(
       data = child_layer$data,
       metadata_input = child_layer$metadata,
@@ -5588,6 +5809,7 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
       spend_map = child_layer$spend_map,
       business_priors = inherited_business_priors,
       calibration_input = inherited_calibration,
+      sequential_transfer_input = sequential_transfer_input,
       collective_saturation_reconciliation_input = collective_saturation_reconciliation_input,
       collective_saturation_shape_reconciliation_input = collective_saturation_shape_reconciliation_input
     ))
@@ -5595,6 +5817,10 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
     child_fit$sequential_prior_ledger <- handoff$prior_ledger
     child_fit$sequential_parent_effectiveness <- handoff$parent_effectiveness
     child_fit$sequential_reference_calibration_input <- handoff$reference_calibration_input
+    child_fit$sequential_transfer_input <- sequential_transfer_input
+    child_fit$sequential_transfer_posterior_audit <- econ_seq_hierarchical_transfer_posterior_audit(
+      child_fit, sequential_transfer_input
+    )
     child_fit$sequential_branch_decisions <- handoff$branch_decisions
     child_fit$sequential_rollup_layer <- child_layer
     child_fit$sequential_baseline_spec <- baseline_contract
@@ -5619,6 +5845,8 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
     data.table::fwrite(handoff$business_priors, file.path(output_dir, paste0(pfx, "child_business_priors.csv")))
     data.table::fwrite(handoff$prior_ledger, file.path(output_dir, paste0(pfx, "prior_ledger.csv")))
     data.table::fwrite(handoff$reference_calibration_input, file.path(output_dir, paste0(pfx, "reference_calibration_input.csv")))
+    data.table::fwrite(sequential_transfer_input$effectiveness, file.path(output_dir, paste0(pfx, "hierarchical_effectiveness_transfer.csv")))
+    data.table::fwrite(sequential_transfer_input$adstock, file.path(output_dir, paste0(pfx, "hierarchical_adstock_transfer.csv")))
     data.table::fwrite(handoff$branch_decisions, file.path(output_dir, paste0(pfx, "branch_decisions.csv")))
     data.table::fwrite(handoff$parent_effectiveness, file.path(output_dir, paste0(pfx, "parent_effectiveness.csv")))
     data.table::fwrite(handoff$parent_roi_aggregation_audit, file.path(output_dir, paste0(pfx, "parent_roi_aggregation_audit.csv")))
@@ -5654,6 +5882,7 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
     depth_gate = child_identification$overall,
     child_business_priors = handoff$business_priors,
     child_reference_calibration_input = handoff$reference_calibration_input,
+    child_sequential_transfer_input = sequential_transfer_input,
     branch_decisions = handoff$branch_decisions,
     child_metadata = child_layer$metadata,
     child_base_prior_specification = child_base_prior_specification,
@@ -5668,11 +5897,14 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
     collective_saturation_shape_reconciliation_audit = if (!is.null(child_fit)) child_fit$collective_saturation_shape_reconciliation_audit else list(scenarios = data.table::data.table(), children = data.table::data.table()),
     baseline_spec = baseline_contract,
     curve_transfer_mode = curve_transfer_mode,
+    sequential_effectiveness_application = sequential_effectiveness_application,
+    sequential_adstock_application = sequential_adstock_application,
     saturation_handoff = saturation_handoff,
     child_fit = child_fit,
+    sequential_transfer_posterior_audit = if (!is.null(child_fit)) child_fit$sequential_transfer_posterior_audit else econ_seq_hierarchical_transfer_posterior_audit(list(), sequential_transfer_input),
     limitations = data.table::data.table(
       limitation = "same_kpi_data_reuse",
-      treatment = "Parent posterior uncertainty is widened before child transfer. This remains staged empirical Bayes rather than one joint posterior over every media depth."
+      treatment = "Parent posterior uncertainty is widened before one aggregate-effectiveness constraint. This remains staged empirical Bayes rather than one joint posterior over every media depth."
     )
   )
 }

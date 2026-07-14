@@ -363,6 +363,146 @@ build_experiment_calibration_hier_mmm <- function(calibration_input,
   )
 }
 
+build_sequential_transfer_hier_mmm <- function(transfer_input,
+                                               data,
+                                               variable_lookup) {
+  n <- nrow(data)
+  empty <- function() list(
+    effectiveness = list(
+      audit = data.table(), parent_audit = data.table(), child_n = 0L, parent_n = 0L,
+      variable_idx = integer(), parent_idx = integer(), weight = matrix(0, n, 0L),
+      reference_spend = numeric(), child_noise_sd = numeric(), child_share = matrix(0, 0L, 0L),
+      parent_mu = numeric(), parent_sd = numeric(), tau_prior_mean = 0,
+      tau_prior_sd = 1, aggregate_sd = numeric()
+    ),
+    adstock = list(
+      audit = data.table(), parent_audit = data.table(), child_n = 0L, parent_n = 0L,
+      curve_idx = integer(), parent_idx = integer(), parent_mu_logit = numeric(),
+      parent_sd_logit = numeric(), tau_prior_mean_logit = 0,
+      tau_prior_sd_logit = 1, child_noise_sd_logit = numeric()
+    )
+  )
+  out <- empty()
+  if (is.null(transfer_input)) return(out)
+  if (!is.list(transfer_input)) stop("sequential_transfer_input must be a list with effectiveness and/or adstock tables.")
+
+  read_component <- function(name) {
+    x <- transfer_input[[name]]
+    if (is.null(x)) return(data.table())
+    data.table::as.data.table(data.table::copy(read_input_table(x)))
+  }
+  validate_parent_constants <- function(x, parent_cols, label) {
+    for (cc in parent_cols) {
+      bad <- x[, .(value_n = data.table::uniqueN(round(as.numeric(get(cc)), 12))), by = parent_id][value_n > 1L]
+      if (nrow(bad)) stop(label, " has inconsistent ", cc, " values within parent_id: ", paste(bad$parent_id, collapse = ", "))
+    }
+  }
+
+  eff <- read_component("effectiveness")
+  if (nrow(eff)) {
+    required <- c(
+      "variable", "parent_id", "parent_mean", "parent_sd", "reference_spend",
+      "tau_prior_mean", "tau_prior_sd", "aggregate_sd", "child_noise_sd"
+    )
+    missing <- setdiff(required, names(eff))
+    if (length(missing)) stop("sequential_transfer_input$effectiveness is missing: ", paste(missing, collapse = ", "))
+    eff[, `:=`(variable = as.character(variable), parent_id = as.character(parent_id))]
+    if (anyDuplicated(eff$variable)) stop("Sequential effectiveness transfer has duplicate child variables.")
+    unknown <- setdiff(eff$variable, variable_lookup$variable)
+    if (length(unknown)) stop("Sequential effectiveness transfer references unknown variable(s): ", paste(unknown, collapse = ", "))
+    numeric_cols <- setdiff(required, c("variable", "parent_id"))
+    for (cc in numeric_cols) eff[, (cc) := suppressWarnings(as.numeric(get(cc)))]
+    if (any(!is.finite(eff$reference_spend) | eff$reference_spend <= 0)) stop("Sequential effectiveness reference_spend must be positive.")
+    positive_cols <- c("parent_sd", "tau_prior_sd", "aggregate_sd", "child_noise_sd")
+    if (any(vapply(positive_cols, function(cc) any(!is.finite(eff[[cc]]) | eff[[cc]] <= 0), logical(1)))) {
+      stop("Sequential effectiveness parent_sd, tau_prior_sd, aggregate_sd, and child_noise_sd must be positive.")
+    }
+    if (any(!is.finite(eff$parent_mean)) || any(!is.finite(eff$tau_prior_mean) | eff$tau_prior_mean < 0)) {
+      stop("Sequential effectiveness parent_mean must be finite and tau_prior_mean must be finite and nonnegative.")
+    }
+    validate_parent_constants(
+      eff, c("parent_mean", "parent_sd", "aggregate_sd"),
+      "Sequential effectiveness transfer"
+    )
+    if (data.table::uniqueN(round(eff$tau_prior_mean, 12)) > 1L ||
+        data.table::uniqueN(round(eff$tau_prior_sd, 12)) > 1L) {
+      stop("Sequential effectiveness tau_prior_mean and tau_prior_sd must be shared across the layer.")
+    }
+    parents <- unique(eff[, .(parent_id, parent_mean, parent_sd, aggregate_sd)], by = "parent_id")
+    parents[, parent_idx := .I]
+    eff[parents, on = "parent_id", parent_idx := i.parent_idx]
+    eff[variable_lookup[, .(variable, variable_idx)], on = "variable", variable_idx := i.variable_idx]
+    weight <- matrix(0, nrow = n, ncol = nrow(eff))
+    train_mask <- if ("is_holdout__" %in% names(data)) !as.logical(data$is_holdout__) else rep(TRUE, n)
+    scale <- as.numeric(data$rescale_factor__ %||% rep(1, n))
+    for (ss in seq_len(nrow(eff))) weight[train_mask, ss] <- scale[train_mask]
+    share <- matrix(0, nrow = nrow(parents), ncol = nrow(eff))
+    for (pp in seq_len(nrow(parents))) {
+      idx <- which(eff$parent_idx == pp)
+      share[pp, idx] <- eff$reference_spend[idx] / sum(eff$reference_spend[idx])
+    }
+    out$effectiveness <- list(
+      audit = eff[], parent_audit = parents[], child_n = nrow(eff), parent_n = nrow(parents),
+      variable_idx = as.integer(eff$variable_idx), parent_idx = as.integer(eff$parent_idx),
+      weight = weight, reference_spend = eff$reference_spend,
+      child_noise_sd = eff$child_noise_sd, child_share = share,
+      parent_mu = parents$parent_mean, parent_sd = parents$parent_sd,
+      tau_prior_mean = eff$tau_prior_mean[1], tau_prior_sd = eff$tau_prior_sd[1],
+      aggregate_sd = parents$aggregate_sd
+    )
+  }
+
+  ad <- read_component("adstock")
+  if (nrow(ad)) {
+    required <- c(
+      "variable", "parent_id", "parent_mean", "parent_sd", "tau_prior_mean",
+      "tau_prior_sd", "child_noise_sd"
+    )
+    missing <- setdiff(required, names(ad))
+    if (length(missing)) stop("sequential_transfer_input$adstock is missing: ", paste(missing, collapse = ", "))
+    ad[, `:=`(variable = as.character(variable), parent_id = as.character(parent_id))]
+    if (anyDuplicated(ad$variable)) stop("Sequential adstock transfer has duplicate child variables.")
+    curve_lookup <- variable_lookup[has_curve == 1L, .(variable, curve_param_idx)]
+    unknown <- setdiff(ad$variable, curve_lookup$variable)
+    if (length(unknown)) stop("Sequential adstock transfer requires sampled/fixed curve variables: ", paste(unknown, collapse = ", "))
+    numeric_cols <- setdiff(required, c("variable", "parent_id"))
+    for (cc in numeric_cols) ad[, (cc) := suppressWarnings(as.numeric(get(cc)))]
+    if (any(!is.finite(ad$parent_mean) | ad$parent_mean <= 0 | ad$parent_mean >= 1)) stop("Sequential adstock parent_mean must lie strictly between 0 and 1.")
+    positive_cols <- c("parent_sd", "tau_prior_sd", "child_noise_sd")
+    if (any(vapply(positive_cols, function(cc) any(!is.finite(ad[[cc]]) | ad[[cc]] <= 0), logical(1)))) {
+      stop("Sequential adstock parent_sd, tau_prior_sd, and child_noise_sd must be positive.")
+    }
+    if (any(!is.finite(ad$tau_prior_mean) | ad$tau_prior_mean < 0)) {
+      stop("Sequential adstock tau_prior_mean must be finite and nonnegative.")
+    }
+    validate_parent_constants(ad, c("parent_mean", "parent_sd"), "Sequential adstock transfer")
+    ad[curve_lookup, on = "variable", curve_param_idx := i.curve_param_idx]
+    ad[, derivative__ := 1 / pmax(parent_mean * (1 - parent_mean), 1e-6)]
+    ad[, `:=`(
+      parent_mu_logit = stats::qlogis(parent_mean),
+      parent_sd_logit = pmax(parent_sd * derivative__, 0.05),
+      tau_prior_mean_logit = pmax(tau_prior_mean * derivative__, 0),
+      tau_prior_sd_logit = pmax(tau_prior_sd * derivative__, 0.05),
+      child_noise_sd_logit = pmax(child_noise_sd * derivative__, 0.01)
+    )]
+    parents <- unique(ad[, .(
+      parent_id, parent_mu_logit, parent_sd_logit
+    )], by = "parent_id")
+    parents[, parent_idx := .I]
+    ad[parents, on = "parent_id", parent_idx := i.parent_idx]
+    out$adstock <- list(
+      audit = ad[, setdiff(names(ad), "derivative__"), with = FALSE],
+      parent_audit = parents[], child_n = nrow(ad), parent_n = nrow(parents),
+      curve_idx = as.integer(ad$curve_param_idx), parent_idx = as.integer(ad$parent_idx),
+      parent_mu_logit = parents$parent_mu_logit, parent_sd_logit = parents$parent_sd_logit,
+      tau_prior_mean_logit = stats::median(ad$tau_prior_mean_logit),
+      tau_prior_sd_logit = stats::median(ad$tau_prior_sd_logit),
+      child_noise_sd_logit = ad$child_noise_sd_logit
+    )
+  }
+  out
+}
+
 # Internal contract for a sequential parent-to-children curve reconciliation.
 # Unlike experiment calibration, one scenario can include several modeled media
 # variables. We only allow explicit training-row selections so a parent fit
@@ -567,6 +707,7 @@ prepare_stan_data_hier_mmm <- function(data,
                                        curve_type_default = c("hill", "weibull"),
                                        coef_override_input = NULL,
                                        calibration_input = NULL,
+                                       sequential_transfer_input = NULL,
                                        collective_saturation_reconciliation_input = NULL,
                                        collective_saturation_shape_reconciliation_input = NULL,
                                        context_effects = NULL,
@@ -1404,6 +1545,14 @@ prepare_stan_data_hier_mmm <- function(data,
     group_col = group_col,
     time_col = time_col
   )
+  sequential_transfer <- build_sequential_transfer_hier_mmm(
+    transfer_input = sequential_transfer_input,
+    data = dt,
+    variable_lookup = variable_lookup
+  )
+  if (sequential_transfer$adstock$child_n > 0L && identical(sample_curve_parameters, "never")) {
+    stop("Hierarchical sequential adstock transfer requires sample_curve_parameters = 'always'.")
+  }
   collective_reconciliation <- build_collective_saturation_reconciliation_hier_mmm(
     reconciliation_input = collective_saturation_reconciliation_input,
     data = dt,
@@ -1458,6 +1607,30 @@ prepare_stan_data_hier_mmm <- function(data,
     calibration_weight = experiment_calibration$weight,
     calibration_observed_lift = experiment_calibration$observed_lift,
     calibration_observed_sd = experiment_calibration$observed_sd,
+    S_seq_effect = sequential_transfer$effectiveness$child_n,
+    P_seq_effect = sequential_transfer$effectiveness$parent_n,
+    H_seq_effect = as.integer(sequential_transfer$effectiveness$parent_n > 0L),
+    seq_effect_variable_idx = sequential_transfer$effectiveness$variable_idx,
+    seq_effect_parent_idx = sequential_transfer$effectiveness$parent_idx,
+    seq_effect_weight = sequential_transfer$effectiveness$weight,
+    seq_effect_reference_spend = sequential_transfer$effectiveness$reference_spend,
+    seq_effect_child_noise_sd = sequential_transfer$effectiveness$child_noise_sd,
+    seq_effect_child_share = sequential_transfer$effectiveness$child_share,
+    seq_effect_parent_mu = sequential_transfer$effectiveness$parent_mu,
+    seq_effect_parent_sd = sequential_transfer$effectiveness$parent_sd,
+    seq_effect_tau_prior_mean = sequential_transfer$effectiveness$tau_prior_mean,
+    seq_effect_tau_prior_sd = sequential_transfer$effectiveness$tau_prior_sd,
+    seq_effect_aggregate_sd = sequential_transfer$effectiveness$aggregate_sd,
+    S_seq_adstock = sequential_transfer$adstock$child_n,
+    P_seq_adstock = sequential_transfer$adstock$parent_n,
+    H_seq_adstock = as.integer(sequential_transfer$adstock$parent_n > 0L),
+    seq_adstock_curve_idx = sequential_transfer$adstock$curve_idx,
+    seq_adstock_parent_idx = sequential_transfer$adstock$parent_idx,
+    seq_adstock_parent_mu_logit = sequential_transfer$adstock$parent_mu_logit,
+    seq_adstock_parent_sd_logit = sequential_transfer$adstock$parent_sd_logit,
+    seq_adstock_tau_prior_mean_logit = sequential_transfer$adstock$tau_prior_mean_logit,
+    seq_adstock_tau_prior_sd_logit = sequential_transfer$adstock$tau_prior_sd_logit,
+    seq_adstock_child_noise_sd_logit = sequential_transfer$adstock$child_noise_sd_logit,
     C_collective_reconciliation = nrow(collective_reconciliation$audit),
     collective_reconciliation_weight = collective_reconciliation$weight,
     collective_parent_response = collective_reconciliation$observed,
@@ -1635,6 +1808,16 @@ prepare_stan_data_hier_mmm <- function(data,
   if (length(stan_data$calibration_variable_idx) != stan_data$C_calibration) stop("Internal error: calibration_variable_idx length does not match C_calibration.")
   if (nrow(stan_data$calibration_weight) != stan_data$N || ncol(stan_data$calibration_weight) != stan_data$C_calibration) stop("Internal error: calibration_weight dimensions do not match N/C_calibration.")
   if (length(stan_data$calibration_observed_lift) != stan_data$C_calibration || length(stan_data$calibration_observed_sd) != stan_data$C_calibration) stop("Internal error: calibration evidence lengths do not match C_calibration.")
+  if (length(stan_data$seq_effect_variable_idx) != stan_data$S_seq_effect ||
+      length(stan_data$seq_effect_parent_idx) != stan_data$S_seq_effect ||
+      nrow(stan_data$seq_effect_weight) != stan_data$N || ncol(stan_data$seq_effect_weight) != stan_data$S_seq_effect ||
+      nrow(stan_data$seq_effect_child_share) != stan_data$P_seq_effect || ncol(stan_data$seq_effect_child_share) != stan_data$S_seq_effect) {
+    stop("Internal error: sequential effectiveness transfer dimensions are inconsistent.")
+  }
+  if (length(stan_data$seq_adstock_curve_idx) != stan_data$S_seq_adstock ||
+      length(stan_data$seq_adstock_parent_idx) != stan_data$S_seq_adstock) {
+    stop("Internal error: sequential adstock transfer dimensions are inconsistent.")
+  }
   if (length(dim(stan_data$collective_reconciliation_weight)) != 3L ||
       any(dim(stan_data$collective_reconciliation_weight) != c(stan_data$C_collective_reconciliation, stan_data$N, stan_data$J))) stop("Internal error: collective reconciliation weights do not match C/N/J.")
   if (length(stan_data$collective_parent_response) != stan_data$C_collective_reconciliation || length(stan_data$collective_parent_response_sd) != stan_data$C_collective_reconciliation) stop("Internal error: collective reconciliation evidence lengths do not match C_collective_reconciliation.")
@@ -1700,6 +1883,10 @@ prepare_stan_data_hier_mmm <- function(data,
     variable_lookup = variable_lookup,
     context_effects = context_effect_audit,
     experiment_calibration = experiment_calibration$audit,
+    sequential_effectiveness_transfer = sequential_transfer$effectiveness$audit,
+    sequential_effectiveness_parent_transfer = sequential_transfer$effectiveness$parent_audit,
+    sequential_adstock_transfer = sequential_transfer$adstock$audit,
+    sequential_adstock_parent_transfer = sequential_transfer$adstock$parent_audit,
     collective_saturation_reconciliation = collective_reconciliation$audit,
     collective_saturation_shape_reconciliation = collective_shape_reconciliation$audit,
     group_lookup = group_lookup,
