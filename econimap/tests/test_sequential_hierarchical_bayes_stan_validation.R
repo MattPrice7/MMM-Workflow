@@ -452,17 +452,20 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     iter_sampling = 300L,
     adapt_delta = 0.95,
     max_treedepth = 12L,
-    metric = "dense_e",
+    # Match the production-facing geometry defaults. Dense adaptation plus a
+    # random start is useful as a stress test, but is not a fair first read on
+    # the model's ordinary sampler behavior.
+    metric = "diag_e",
     seed = 20260711L,
     refresh = 0L,
     verbose = FALSE,
     output_dir = NULL,
-    init_strategy = "random",
-    use_pathfinder_init = FALSE,
+    init_strategy = "pathfinder",
+    use_pathfinder_init = TRUE,
     sample_curve_parameters = sample_curve_mode,
     sample_coef_hierarchy = "auto",
-    coef_parameterization = "noncentered",
-    center_predictors_for_sampling = TRUE,
+    coef_parameterization = "auto",
+    center_predictors_for_sampling = FALSE,
     likelihood = "student_t",
     intercept_type = "flat",
     ucm_spec = list(level = FALSE, season = FALSE, cycle = FALSE),
@@ -474,10 +477,21 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     ,holdout_last_n = 13L
   )
   minimal_smoke <- Sys.getenv("ECONIMAP_SEQUENTIAL_VALIDATION_MINIMAL_SMOKE", "0") == "1"
+  focused_one_chain <- Sys.getenv("ECONIMAP_SEQUENTIAL_VALIDATION_FOCUSED_ONE_CHAIN", "0") == "1"
   if (minimal_smoke) {
     fit_args <- modifyList(fit_args, list(
       chains = 1L, parallel_chains = 1L, iter_warmup = 60L, iter_sampling = 30L,
       likelihood = "normal", response_curve_draw_count = 20L
+    ))
+  }
+  if (focused_one_chain) {
+    # A one-chain geometry/recovery probe. It is intentionally not treated as
+    # convergence certification, but it gives NUTS enough adaptation to make
+    # treedepth and divergence reads meaningful before a multi-chain suite.
+    fit_args <- modifyList(fit_args, list(
+      chains = 1L, parallel_chains = 1L,
+      iter_warmup = 300L, iter_sampling = 100L,
+      likelihood = "normal", response_curve_draw_count = 40L
     ))
   }
   if (length(source_root)) fit_args$stan_file <- file.path(source_root[1], "inst", "stan", "hier_mmm.stan")
@@ -503,12 +517,14 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     regimes <- requested_regimes
   }
   if (minimal_smoke) regimes <- "clean_separated"
+  if (focused_one_chain) regimes <- "clean_separated"
   validation_seeds <- suppressWarnings(as.integer(trimws(strsplit(
     Sys.getenv("ECONIMAP_SEQUENTIAL_VALIDATION_SEEDS", "1,2,3"), ",", fixed = TRUE
   )[[1]])))
   validation_seeds <- unique(validation_seeds[is.finite(validation_seeds)])
   if (!length(validation_seeds)) stop("ECONIMAP_SEQUENTIAL_VALIDATION_SEEDS must contain at least one integer.", call. = FALSE)
   if (minimal_smoke) validation_seeds <- validation_seeds[1]
+  if (focused_one_chain) validation_seeds <- validation_seeds[1]
   validation_jobs <- data.table::CJ(regime = regimes, validation_seed = validation_seeds, unique = TRUE)
   for (i in seq_len(nrow(validation_jobs))) {
     regime <- validation_jobs$regime[i]

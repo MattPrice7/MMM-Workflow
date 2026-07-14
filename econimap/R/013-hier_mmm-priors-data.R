@@ -1334,7 +1334,7 @@ prepare_stan_data_hier_mmm <- function(data,
       # Stan's usual centered/non-centered tradeoff: centered can mix better
       # when each group coefficient is well informed and the group variation
       # prior is not tiny; non-centered is safer for sparse/weak group data.
-      train_by_group <- as.numeric(dt[!is_holdout__, .N, by = group_idx][order(group_idx), N])
+      train_by_group <- as.numeric(dt[is_holdout__ == FALSE, .N, by = group_idx][order(group_idx), N])
       min_group_train <- if (length(train_by_group)) min(train_by_group, na.rm = TRUE) else 0
       strong_group_signal <- variable_lookup$geo_variation_week_share[idx] >= max(coef_hierarchy_auto_min_geo_variation_share, 0.35) &
         variable_lookup$coef_hierarchy_scale[idx] >= max(coef_hierarchy_auto_min_scale, 0.50) &

@@ -805,5 +805,21 @@ tau_base_prep <- prepare_stan_data_hier_mmm(
 stopifnot(identical(tau_prep$metadata$rrate, tau_base_prep$metadata$rrate))
 stopifnot(tau_base_prep$stan_data$H_seq_effect == 0L)
 stopifnot(tau_base_prep$stan_data$H_seq_adstock == 0L)
+# Auto coefficient parameterization must work with a holdout mask; this path
+# uses per-group training counts to choose centered/non-centered hierarchy.
+auto_parameterization_prep <- prepare_stan_data_hier_mmm(
+  data = synthetic,
+  metadata_input = metadata,
+  dep_var_col = "kpi",
+  group_col = "geo",
+  time_col = "period",
+  entity_col = "entity",
+  holdout_last_n = 4L,
+  sample_curve_parameters = "always",
+  sample_coef_hierarchy = "auto",
+  coef_parameterization = "auto",
+  stop_on_zero_variance = FALSE
+)
+stopifnot(auto_parameterization_prep$stan_data$N_train > 0L)
 
 cat("Sequential hierarchical Bayes hardening tests passed.\n")
