@@ -910,10 +910,24 @@ prepare_stan_data_hier_mmm <- function(data,
     z <- c(md$reach_col[rf_rows], md$frequency_col[rf_rows], md$population_col[rf_rows])
     unique(z[!is.na(z) & nzchar(z)])
   } else character()
-  keep_cols <- unique(c(group_col, time_col, entity_col, dep_var_col, md$variable, rf_source_cols, extra_control_cols, context_keep_cols, dep_scale_col, holdout_col))
+  pressure_rows <- which(md$role %in% c("media", "organic_media") & md$exposure_scaling == "per_denominator")
+  pressure_source_cols <- if (length(pressure_rows)) {
+    z <- md$exposure_denominator_col[pressure_rows]
+    unique(z[!is.na(z) & nzchar(z)])
+  } else character()
+  missing_pressure_cols <- setdiff(pressure_source_cols, names(dt))
+  if (length(missing_pressure_cols)) {
+    users <- md[pressure_rows][!(exposure_denominator_col %in% names(dt)), variable]
+    stop("Declared exposure denominator column(s) are missing from data: ",
+         paste(missing_pressure_cols, collapse = ", "),
+         ". Affected variables: ", paste(users, collapse = ", "), ".")
+  }
+  keep_cols <- unique(c(group_col, time_col, entity_col, dep_var_col, md$variable, rf_source_cols,
+                        pressure_source_cols, extra_control_cols, context_keep_cols, dep_scale_col, holdout_col))
   ignored_data_cols <- setdiff(names(dt), keep_cols)
   dt <- dt[, ..keep_cols]
   md[, `:=`(rf_reach_internal_col = NA_character_, rf_frequency_internal_col = NA_character_, rf_population_internal_col = NA_character_)]
+  md[, `:=`(exposure_denominator_internal_col = NA_character_, raw_support_internal_col = NA_character_)]
   md[, `:=`(
     reference_internal_col = NA_character_,
     reference_value_raw = NA_real_,
@@ -947,6 +961,29 @@ prepare_stan_data_hier_mmm <- function(data,
         rf_reach_internal_col = reach_internal,
         rf_frequency_internal_col = frequency_internal,
         rf_population_internal_col = population_internal
+      )]
+    }
+  }
+  if (length(pressure_rows)) {
+    for (ii in pressure_rows) {
+      vv <- md$variable[ii]
+      denom_col <- md$exposure_denominator_col[ii]
+      raw_internal <- paste0("raw_support__", ii)
+      denom_internal <- paste0("exposure_denominator_raw__", ii)
+      raw_support <- suppressWarnings(as.numeric(dt[[vv]]))
+      denominator <- suppressWarnings(as.numeric(dt[[denom_col]]))
+      if (any(!is.finite(raw_support) | raw_support < 0)) {
+        stop("Media support must be finite and non-negative before pressure scaling for variable: ", vv)
+      }
+      if (any(!is.finite(denominator) | denominator <= 0)) {
+        stop("Exposure denominator '", denom_col, "' must be finite and positive for variable: ", vv)
+      }
+      dt[, (raw_internal) := raw_support]
+      dt[, (denom_internal) := denominator]
+      dt[, (vv) := raw_support / denominator]
+      md[ii, `:=`(
+        raw_support_internal_col = raw_internal,
+        exposure_denominator_internal_col = denom_internal
       )]
     }
   }
@@ -1159,6 +1196,8 @@ prepare_stan_data_hier_mmm <- function(data,
     reference_value_raw, reference_value_model_scale, reference_value_source,
     x_scale_center, x_scale_sd, x_scaling,
     reach_col, frequency_col, population_col, rf_spend_col,
+    exposure_denominator_col, exposure_scaling,
+    exposure_denominator_internal_col, raw_support_internal_col,
     rf_reach_internal_col, rf_frequency_internal_col, rf_population_internal_col
   )]
   variable_lookup[, variable_idx := .I]
@@ -1871,6 +1910,8 @@ prepare_stan_data_hier_mmm <- function(data,
       observed_cvalue_mu, observed_cvalue_reliability, observed_cvalue_source,
       anchor_saturation, anchor_saturation_sd, anchor_saturation_precision, anchor_source, cvalue_from_anchor,
       reach_col, frequency_col, population_col, rf_spend_col, rf_reach_train_scale,
+      exposure_denominator_col, exposure_scaling,
+      exposure_denominator_internal_col, raw_support_internal_col,
       dvalue_raw_mu, dvalue_raw_sd,
       rrate_lower, rrate_upper, cvalue_lower, cvalue_upper, dvalue_lower, dvalue_upper,
       possible_halo_somewhere,
@@ -1881,6 +1922,11 @@ prepare_stan_data_hier_mmm <- function(data,
       coef_hierarchy_mode, sample_coef_hierarchy_flag, hierarchy_blocker_reason
     )],
     variable_lookup = variable_lookup,
+    pressure_scaling_audit = variable_lookup[, .(
+      variable, role, exposure_scaling, exposure_denominator_col,
+      raw_support_internal_col, exposure_denominator_internal_col,
+      pressure_scaling_applied = exposure_scaling == "per_denominator"
+    )],
     context_effects = context_effect_audit,
     experiment_calibration = experiment_calibration$audit,
     sequential_effectiveness_transfer = sequential_transfer$effectiveness$audit,

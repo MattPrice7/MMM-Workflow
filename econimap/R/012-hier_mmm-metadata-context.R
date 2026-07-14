@@ -724,6 +724,41 @@ clean_metadata <- function(meta_input,
     dt[, (target_nm) := trimws(as.character(get(target_nm)))]
     dt[is.na(get(target_nm)) | !nzchar(get(target_nm)), (target_nm) := NA_character_]
   }
+  # Ordinary media can declare a denominator for actual delivery pressure.
+  # population_col remains accepted as a convenient shorthand; the generic
+  # column also supports households, target audience, outlets, or customers.
+  if (!"exposure_denominator_col" %in% names(dt)) {
+    hit <- c("exposure_denominator_column", "pressure_denominator_col", "pressure_denominator",
+             "target_population_col", "target_audience_col", "households_col", "audience_size_col")
+    hit <- hit[hit %in% names(dt)]
+    dt[, exposure_denominator_col := if (length(hit)) as.character(get(hit[1])) else NA_character_]
+  }
+  dt[, exposure_denominator_col := trimws(as.character(exposure_denominator_col))]
+  dt[is.na(exposure_denominator_col) | !nzchar(exposure_denominator_col), exposure_denominator_col := NA_character_]
+  ordinary_media__ <- dt$role %in% c("media", "organic_media")
+  dt[ordinary_media__ & is.na(exposure_denominator_col) & !is.na(population_col),
+     exposure_denominator_col := population_col]
+  if (!"exposure_scaling" %in% names(dt)) {
+    hit <- c("pressure_scaling", "support_scaling", "media_scaling")
+    hit <- hit[hit %in% names(dt)]
+    dt[, exposure_scaling := if (length(hit)) as.character(get(hit[1])) else "auto"]
+  }
+  scaling_raw__ <- tolower(trimws(as.character(dt$exposure_scaling)))
+  scaling_raw__[is.na(scaling_raw__) | !nzchar(scaling_raw__)] <- "auto"
+  scaling_map__ <- c(
+    auto = "auto", per_denominator = "per_denominator", per_capita = "per_denominator",
+    per_population = "per_denominator", per_household = "per_denominator",
+    per_audience = "per_denominator", none = "none", raw = "none", as_supplied = "none"
+  )
+  bad_scaling__ <- !(scaling_raw__ %in% names(scaling_map__))
+  if (any(bad_scaling__)) {
+    stop("Unknown exposure_scaling value(s): ", paste(unique(scaling_raw__[bad_scaling__]), collapse = ", "),
+         ". Use auto, per_denominator, or none.")
+  }
+  dt[, exposure_scaling := unname(scaling_map__[scaling_raw__])]
+  dt[ordinary_media__ & exposure_scaling == "auto",
+     exposure_scaling := fifelse(!is.na(exposure_denominator_col), "per_denominator", "none")]
+  dt[!ordinary_media__, exposure_scaling := "none"]
   rf_role__ <- dt$role %in% c("reach_frequency", "organic_reach_frequency")
   dt[rf_role__ & is.na(reach_col), reach_col := variable]
   if (dt[rf_role__, any(is.na(frequency_col))]) {
@@ -914,6 +949,7 @@ clean_metadata <- function(meta_input,
     "variable", "effect_type", "source_entity", "role", "has_curve",
     "non_media_baseline_values", "control_reference_values", "reference_value_spec",
     "reach_col", "frequency_col", "population_col", "rf_spend_col",
+    "exposure_denominator_col", "exposure_scaling",
     "curve_type", "rrate", "rrate_precision", "cvalue", "cvalue_precision", "dvalue", "dvalue_precision",
     "coef", "coef_precision", "coef_hierarchy_scale", "coef_hierarchy_scope", "hierarchy_key",
     "model_id_parts", "hierarchy_part_indices", "hierarchy_note",
