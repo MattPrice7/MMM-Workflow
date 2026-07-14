@@ -2209,6 +2209,35 @@ build_sequential_rollup_layer <- function(data,
   raw_metadata <- clean_metadata(metadata_input, curve_type_default = curve_type_default)
   raw_metadata[, `:=`(variable = as.character(variable), role = standardize_role(role))]
   source_variables <- sm$variable
+  source_pressure <- raw_metadata[variable %in% source_variables, .(
+    variable,
+    source_exposure_scaling = as.character(exposure_scaling),
+    source_exposure_denominator_col = as.character(exposure_denominator_col)
+  )]
+  mapping <- merge(mapping, source_pressure, by = "variable", all.x = TRUE, sort = FALSE)
+  pressure_by_node <- mapping[, {
+    # A generated spend node can retain a physical pressure interpretation only
+    # when every child declares the same exposure denominator.  Mixed or absent
+    # denominators deliberately fall back to the conservative relative-support path.
+    same_pressure_basis <- isTRUE(.N > 0L &&
+      all(!is.na(source_exposure_scaling) & source_exposure_scaling == "per_denominator") &&
+      data.table::uniqueN(source_exposure_denominator_col[!is.na(source_exposure_denominator_col) & nzchar(source_exposure_denominator_col)]) == 1L &&
+      !is.na(source_exposure_denominator_col[1]) && nzchar(source_exposure_denominator_col[1]))
+    list(
+      exposure_scaling = if (same_pressure_basis) "per_denominator" else "none",
+      exposure_denominator_col = if (same_pressure_basis) source_exposure_denominator_col[1] else NA_character_,
+      pressure_handoff_note = if (same_pressure_basis) {
+        "All source media share one declared pressure denominator; aggregate spend is modeled per denominator."
+      } else {
+        "Aggregate spend is not pressure-scaled because source media lack a common declared denominator."
+      }
+    )
+  }, by = generated_variable]
+  node_map[pressure_by_node, `:=`(
+    exposure_scaling = i.exposure_scaling,
+    exposure_denominator_col = i.exposure_denominator_col,
+    pressure_handoff_note = i.pressure_handoff_note
+  ), on = "generated_variable"]
   retained_metadata <- raw_metadata[!(role %in% c("media", "reach_frequency") & variable %in% source_variables)]
   aggregate_metadata <- node_map[, .(
     variable = generated_variable,
@@ -2243,6 +2272,9 @@ build_sequential_rollup_layer <- function(data,
     support_mechanically_allocated = support_mechanically_allocated,
     support_hierarchical_variation_eligible = support_hierarchical_variation_eligible,
     hierarchical_variation_eligible = hierarchical_variation_eligible,
+    exposure_scaling = exposure_scaling,
+    exposure_denominator_col = exposure_denominator_col,
+    pressure_handoff_note = pressure_handoff_note,
     coef_hierarchy_scope = data.table::fifelse(hierarchical_variation_eligible, "auto", "none"),
     coef_hierarchy_scale = data.table::fifelse(hierarchical_variation_eligible, 1, 0)
   )]

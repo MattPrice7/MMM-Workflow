@@ -64,4 +64,47 @@ bad <- try(prepare_stan_data_hier_mmm(
 stopifnot(inherits(bad, "try-error"))
 stopifnot(grepl("Exposure denominator 'population'", as.character(bad), fixed = TRUE))
 
+# Sequential rollups aggregate spend, so they must retain the declared
+# denominator only when every source variable shares that physical basis.
+rollup_data <- copy(panel)[, `:=`(
+  meta_spend = support * 0.4,
+  tiktok_spend = support * 0.6
+)]
+rollup_metadata <- data.table(
+  variable = c("meta", "tiktok"), role = "media",
+  spend_col = c("meta_spend", "tiktok_spend"), population_col = "population",
+  rollup_path = c("social > meta", "social > tiktok"), curve_type = "hill",
+  rrate = .2, rrate_precision = 4, anchor_saturation = .5,
+  anchor_saturation_precision = 4, cvalue_from_anchor = TRUE,
+  dvalue = 1, dvalue_precision = 25, coef = .05, coef_precision = 4,
+  coef_bound = "pos"
+)
+rollup <- build_sequential_rollup_layer(
+  data = rollup_data, metadata_input = rollup_metadata, rollup_depth = 1L
+)
+rollup_media <- as.data.table(rollup$metadata)[role == "media"]
+stopifnot(rollup_media$exposure_scaling == "per_denominator")
+stopifnot(rollup_media$exposure_denominator_col == "population")
+rollup_prep <- prepare_stan_data_hier_mmm(
+  data = rollup$data, metadata_input = rollup$metadata, dep_var_col = "kpi",
+  group_col = "geo", time_col = "period", entity_col = "entity", mean_index = FALSE,
+  sample_curve_parameters = "never", sample_coef_hierarchy = "never"
+)
+rollup_col <- rollup_media$variable[1]
+stopifnot(isTRUE(all.equal(
+  as.numeric(rollup_prep$data[[rollup_col]]),
+  as.numeric((rollup_data$meta_spend + rollup_data$tiktok_spend) / rollup_data$population)
+)))
+
+# A mixed denominator contract cannot support a physical aggregate-pressure
+# claim, so the generated parent intentionally falls back to relative support.
+mixed_metadata <- copy(rollup_metadata)
+mixed_metadata[variable == "tiktok", population_col := NA_character_]
+mixed_rollup <- build_sequential_rollup_layer(
+  data = rollup_data, metadata_input = mixed_metadata, rollup_depth = 1L
+)
+mixed_media <- as.data.table(mixed_rollup$metadata)[role == "media"]
+stopifnot(mixed_media$exposure_scaling == "none")
+stopifnot(is.na(mixed_media$exposure_denominator_col))
+
 cat("Hierarchical MMM exposure-pressure scaling tests passed.\n")
