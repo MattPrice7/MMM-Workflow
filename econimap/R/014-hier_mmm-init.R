@@ -233,7 +233,7 @@ build_ucm_warm_start_init <- function(prep,
   base_init <- list(
     rrate_raw = as.numeric(sd$rrate_raw_mu[sd$curve_sampled_pos]),
     cvalue_raw = as.numeric(sd$cvalue_raw_mu[sd$curve_sampled_pos]),
-    dvalue_raw = as.numeric(sd$dvalue_raw_mu[sd$curve_sampled_pos]),
+    dvalue_raw = as.numeric(sd$dvalue_raw_mu[sd$dvalue_sampled_pos]),
 
     mu_log_pos = as.numeric(sd$coef_mu_pos_log),
     tau_pos = pmax(as.numeric(sd$tau_scale_pos[sd$pos_hier_pos]) * 0.25, 0.01),
@@ -376,4 +376,3 @@ build_ucm_warm_start_init <- function(prep,
 
   replicate(as.integer(chains), make_chain(), simplify = FALSE)
 }
-

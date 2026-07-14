@@ -1388,6 +1388,9 @@ prepare_stan_data_hier_mmm <- function(data,
     as.integer(which(flags == 1L))
   }
   curve_sampled_pos <- variable_lookup[has_curve == 1L, which(rep(as.integer(sample_curve_parameters == "always"), .N) == 1L)]
+  # `estimate_dvalue = FALSE` is a genuine fixed-shape contract.  Retaining a
+  # tightly-prior-sampled shape parameter creates needless nonlinear geometry.
+  dvalue_sampled_pos <- if (isTRUE(estimate_dvalue)) curve_sampled_pos else integer()
 
   curve_idx <- variable_lookup[has_curve == 1L, variable_idx]
   linear_idx <- variable_lookup[has_curve == 0L, variable_idx]
@@ -1732,6 +1735,8 @@ prepare_stan_data_hier_mmm <- function(data,
     sample_curve_parameter = variable_lookup[has_curve == 1L, rep(as.integer(sample_curve_parameters == "always"), .N)],
     J_curve_sampled = length(curve_sampled_pos),
     curve_sampled_pos = as.integer(curve_sampled_pos),
+    J_dvalue_sampled = length(dvalue_sampled_pos),
+    dvalue_sampled_pos = as.integer(dvalue_sampled_pos),
     observed_cvalue_raw_mu = variable_lookup[has_curve == 1L, fifelse(is.finite(observed_cvalue_raw_mu), observed_cvalue_raw_mu, 0)],
     observed_cvalue_raw_sd = variable_lookup[has_curve == 1L, pmax(fifelse(is.finite(observed_cvalue_raw_sd), observed_cvalue_raw_sd, 1), 1e-6)],
 
@@ -1874,6 +1879,9 @@ prepare_stan_data_hier_mmm <- function(data,
   if (length(stan_data$sample_curve_parameter) != stan_data$J_curve) stop("Internal error: sample_curve_parameter length does not match J_curve.")
   if (length(stan_data$curve_sampled_pos) != stan_data$J_curve_sampled) stop("Internal error: curve_sampled_pos length does not match J_curve_sampled.")
   if (stan_data$J_curve_sampled && any(stan_data$curve_sampled_pos < 1L | stan_data$curve_sampled_pos > stan_data$J_curve)) stop("Internal error: invalid curve_sampled_pos values.")
+  if (length(stan_data$dvalue_sampled_pos) != stan_data$J_dvalue_sampled) stop("Internal error: dvalue_sampled_pos length does not match J_dvalue_sampled.")
+  if (stan_data$J_dvalue_sampled && any(stan_data$dvalue_sampled_pos < 1L | stan_data$dvalue_sampled_pos > stan_data$J_curve)) stop("Internal error: invalid dvalue_sampled_pos values.")
+  if (!isTRUE(estimate_dvalue) && stan_data$J_dvalue_sampled != 0L) stop("Internal error: fixed dvalue must not be sampled.")
   if (length(stan_data$use_observed_cvalue_prior) != stan_data$J_curve) stop("Internal error: use_observed_cvalue_prior length does not match J_curve.")
   if (length(stan_data$coef_centered_pos) != stan_data$J_pos) stop("Internal error: coef_centered_pos length does not match J_pos.")
   if (length(stan_data$coef_centered_neg) != stan_data$J_neg) stop("Internal error: coef_centered_neg length does not match J_neg.")

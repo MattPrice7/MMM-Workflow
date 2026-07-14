@@ -188,6 +188,8 @@ data {
   array[J_curve] int<lower=0, upper=1> sample_curve_parameter;
   int<lower=0> J_curve_sampled;
   array[J_curve_sampled] int<lower=1, upper=J_curve> curve_sampled_pos;
+  int<lower=0> J_dvalue_sampled;
+  array[J_dvalue_sampled] int<lower=1, upper=J_curve> dvalue_sampled_pos;
   array[J_curve] int<lower=0, upper=1> use_observed_cvalue_prior;
   vector[J_curve] observed_cvalue_raw_mu;
   vector<lower=0>[J_curve] observed_cvalue_raw_sd;
@@ -287,7 +289,7 @@ data {
 parameters {
   vector[J_curve_sampled] rrate_raw;
   vector[J_curve_sampled] cvalue_raw;
-  vector[J_curve_sampled] dvalue_raw;
+  vector[J_dvalue_sampled] dvalue_raw;
 
   vector[J_pos] mu_log_pos;
   vector<lower=0>[J_pos_hier] tau_pos_key;
@@ -387,6 +389,11 @@ transformed parameters {
       int k = curve_sampled_pos[h];
       rrate[k]  = rrate_lower[k]  + (rrate_upper[k]  - rrate_lower[k])  * inv_logit(rrate_raw[h]);
       cvalue[k] = cvalue_lower[k] + (cvalue_upper[k] - cvalue_lower[k]) * inv_logit(cvalue_raw[h]);
+    }
+  }
+  if (J_dvalue_sampled > 0) {
+    for (h in 1:J_dvalue_sampled) {
+      int k = dvalue_sampled_pos[h];
       dvalue[k] = dvalue_lower[k] + (dvalue_upper[k] - dvalue_lower[k]) * inv_logit(dvalue_raw[h]);
     }
   }
@@ -1003,10 +1010,12 @@ model {
       cvalue_raw[h] ~ normal(cvalue_raw_mu[k], cvalue_raw_sd[k]);
       if (use_observed_cvalue_prior[k] == 1)
         cvalue_raw[h] ~ normal(observed_cvalue_raw_mu[k], observed_cvalue_raw_sd[k]);
-      if (estimate_dvalue == 1)
-        dvalue_raw[h] ~ normal(dvalue_raw_mu[k], dvalue_raw_sd[k]);
-      else
-        dvalue_raw[h] ~ normal(dvalue_raw_mu[k], 0.05);
+    }
+  }
+  if (J_dvalue_sampled > 0) {
+    for (h in 1:J_dvalue_sampled) {
+      int k = dvalue_sampled_pos[h];
+      dvalue_raw[h] ~ normal(dvalue_raw_mu[k], dvalue_raw_sd[k]);
     }
   }
 
