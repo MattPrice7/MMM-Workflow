@@ -4,6 +4,7 @@
 evidence, response-curve planning, optimization, and reporting. Stable core
 implementations live in package-native modules under `R/`; synchronized
 standalone scripts remain under `inst/scripts` for script-first workflows.
+Those core scripts are generated artifacts, not parallel implementations.
 
 This package directory is the canonical source of truth. See
 [`SOURCE_OF_TRUTH.md`](SOURCE_OF_TRUTH.md); implementation designs live in
@@ -25,8 +26,11 @@ This package directory is the canonical source of truth. See
   full MMM is not available.
 - `run_sequential_hierarchical_bayes()`: national total-paid-media root by
   default, separate spend/support scope, train-only root evidence, continuous
-  identification-driven effectiveness/curve handoff, and an optional joint
-  Stan child fit using reference-spend calibration evidence. Weak identification
+  identification-driven effectiveness/adstock handoff, and an optional joint
+  Stan child fit using reference-spend calibration plus collective shape-only
+  reconciliation evidence. The Stan term is a covariance-aware,
+  cross-multiplied response residual rather than a fragile contribution ratio.
+  Weak identification
   increases auditable prior regularization; it does not stop valid branches.
 
 ## Usage
@@ -53,6 +57,17 @@ econimap_script_dir()
 Development remains conservative: public function names stay backward-compatible,
 core behavior is tested in package-native modules, and standalone scripts are
 mechanically synchronized from those modules.
+
+Regenerate or verify the standalone analyst surfaces with:
+
+```r
+Rscript tools/generate_standalone_scripts.R
+Rscript tools/generate_standalone_scripts.R --check
+```
+
+`sequential_hierarchical_bayes.R` includes its fitted-MMM dependencies and can
+be sourced on its own. Its canonical implementation remains the package module
+`R/060-sequential-hierarchical-bayes.R`.
 
 Linear non-media treatments can use `non_media_baseline_values` (`min` by
 default, or `max`, `mean`, `median`, `zero`, or a numeric value). Controls use

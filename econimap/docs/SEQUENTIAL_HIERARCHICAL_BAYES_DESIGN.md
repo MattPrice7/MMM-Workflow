@@ -202,14 +202,19 @@ falls back to the original total-media root when a fitted parent is available.
 The default root aggregates KPI and total paid spend to national time before
 fitting. A `hierarchical_panel` root is explicit and only allowed when total
 media has genuine within-period group variation and the root identification
-screen passes. The root compares a linear total-spend feature with a small grid
-of concave adstock/Hill features. Hill shape is fixed at one at this portfolio
-level; the linear result remains the fallback unless the curve improves AICc by
-the configured guardrail. This estimates a parsimonious portfolio response,
-not channel curves. Moving-block residual bootstrap draws preserve the original
-media timeline, Fourier calendar phase, and adstock history. Each bootstrap
-replicate reselects the transform candidate, so transferred root uncertainty
-includes candidate-transform selection rather than only conditional fit error.
+screen passes. The root compares a linear total-spend limit with a constrained
+Hill/geometric-adstock profile-likelihood fit. Nonlinear parameters are optimized
+from deterministic Sobol multistarts while linear baseline, control, and media
+coefficients are solved conditionally. The old rrate/anchor grid is retained only
+as a diagnostic and can never be selected. The linear result remains the default
+unless the nonlinear curve clears the configured AICc guardrail. Flat profiles,
+repeated boundary solutions, or unstable multistart convergence explicitly
+recommend the Bayesian fallback rather than manufacturing a precise curve.
+Moving-block residual bootstrap draws preserve the original media timeline,
+Fourier calendar phase, and adstock history. Each replicate reselects linear
+versus nonlinear form and re-optimizes rrate, half-saturation, and steepness, so
+transferred uncertainty includes transform-selection and nonlinear-parameter
+uncertainty rather than only conditional fit error.
 
 Spend scope and modeled-support scope are separate contracts. National spend
 drives national root reconciliation and ROI economics; actual geo support drives
@@ -267,12 +272,29 @@ explicit share model with large allocation uncertainty.
   The current implementation is shared-parent regularization of independently
   estimated child parameters, not a latent sibling hierarchy. Analysts should
   override or disable transfer where cadence or media mechanics are incompatible.
-- Transfer saturation on a scale-free representation such as saturation at a
-  normalized reference support. Econimap maps that parent-informed saturation prior to
-  each child's own active support distribution before building its `cvalue`.
-  Never copy a raw `cvalue` between differently scaled children. Child-specific
-  curves remain estimable; weak branches receive stronger parent regularization
-  rather than a separate freely moving curve.
+- Do not treat a parent saturation curve as an independent target for each
+  child. The production default is `saturation_handoff = "generic_child_prior"`,
+  which leaves child saturation generic and individually estimable. In the
+  opt-in `saturation_handoff = "collective_parent_shape_reconciliation"` mode,
+  child saturation priors still remain generic or weak peer-informed. A soft joint
+  Stan likelihood compares the **ratio** of aggregate child response at a
+  perturbed support level to the same observed sibling mix at reference support.
+  Parent ratios are evaluated from common posterior draws and enter as one
+  covariance-aware multivariate likelihood. Effectiveness-level calibration is
+  intentionally separate and remains responsible for response level. The shape
+  term preserves the observed mix and context while scaling support at several
+  levels; it identifies aggregate curvature without claiming weak siblings share
+  a saturation curve.
+- Collective shape reconciliation is not production-ready. A focused one-chain,
+  624-row continuation required about 2,222 seconds for 60 warmup plus 30
+  sampling iterations and hit maximum treedepth on every sampled transition.
+  Keep it opt-in until gradient cost and posterior geometry improve and a
+  convergence-valid recovery comparison passes.
+- The former raw-contribution reconciliation mode was removed. It reused parent
+  response-level evidence already handled by effectiveness calibration and did
+  not isolate saturation shape. `independent_parent_prior` remains available
+  only as an explicit compatibility choice. Never copy a raw `cvalue` between
+  differently scaled children.
 - Share or strongly regularize curve shape only within a comparable parent
   branch. Default to a fixed or strongly regularized shape at deep grains unless the data demonstrates
   independent curve information.

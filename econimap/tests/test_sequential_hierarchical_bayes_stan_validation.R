@@ -542,7 +542,7 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
       prior_transfer_settings = "effectiveness_adstock_saturation",
       run_oracle = run_oracle
     )
-    validation_holdout_contract <- list(holdout_last_n = 13L)
+    validation_holdout_contract <- list(holdout_col = NULL, holdout_value = TRUE, holdout_last_n = 13L)
     fair_benchmark_contract <- assert_fair_leaf_benchmark(
       sim$data, sim$generic_fit_metadata, fit_args_i, validation_config$baseline_spec, validation_holdout_contract
     )
@@ -689,10 +689,15 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     direct_base_prior_specification <- econ_seq_base_prior_specification(
       sim$generic_fit_metadata, variables = media_vars, baseline_spec = validation_config$baseline_spec
     )
+    validation_effective_baseline <- econ_seq_baseline_contract(
+      root_trend_spec = "none", root_fourier_harmonics = 0L,
+      root_season_period = 52L, control_cols = "macro",
+      baseline_spec = validation_config$baseline_spec
+    )
     root_leaf_base_prior_audit <- econ_seq_assert_base_prior_equivalence(
       direct_base_prior_specification, root_leaf$child_base_prior_specification,
       context = "direct generic leaves versus root-to-leaf pre-transfer specification",
-      reference_context = list(baseline_spec = validation_config$baseline_spec, controls = "macro",
+      reference_context = list(baseline_spec = validation_effective_baseline, controls = "macro",
                                holdout_contract = validation_holdout_contract, fit_args = fit_args_i),
       candidate_context = list(baseline_spec = root_leaf$baseline_spec, controls = "macro",
                                holdout_contract = root_leaf$holdout_spec, fit_args = fit_args_i)
@@ -700,7 +705,7 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     depth1_leaf_base_prior_audit <- econ_seq_assert_base_prior_equivalence(
       direct_base_prior_specification, depth1_leaf$child_base_prior_specification,
       context = "direct generic leaves versus depth-1-to-leaf pre-transfer specification",
-      reference_context = list(baseline_spec = validation_config$baseline_spec, controls = "macro",
+      reference_context = list(baseline_spec = validation_effective_baseline, controls = "macro",
                                holdout_contract = validation_holdout_contract, fit_args = fit_args_i),
       candidate_context = list(baseline_spec = depth1_leaf$baseline_spec, controls = "macro",
                                holdout_contract = depth1_leaf$holdout_spec, fit_args = fit_args_i)
@@ -823,6 +828,17 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
   )])
   cat("\nSequential depth-gating diagnostics:\n")
   print(gates)
+
+  if (Sys.getenv("ECONIMAP_SEQUENTIAL_VALIDATION_REQUIRE_SAMPLER_VALID", "0") == "1" &&
+      any(!overall$sampler_valid)) {
+    failed <- overall[!sampler_valid, paste(regime, validation_seed, model, sep = "/")]
+    stop(
+      "Focused release validation failed sampler validity for: ",
+      paste(failed, collapse = ", "),
+      ". Review divergences, treedepth, R-hat, ESS, and BFMI before release.",
+      call. = FALSE
+    )
+  }
 
   if ("clean_separated" %in% regimes && any(overall$model == "direct_leaf") &&
       all(c("sequential_root_to_leaf", "sequential_depth1_to_leaf") %in% overall$model)) {

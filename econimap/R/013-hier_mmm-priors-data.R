@@ -363,6 +363,182 @@ build_experiment_calibration_hier_mmm <- function(calibration_input,
   )
 }
 
+# Internal contract for a sequential parent-to-children curve reconciliation.
+# Unlike experiment calibration, one scenario can include several modeled media
+# variables. We only allow explicit training-row selections so a parent fit
+# cannot leak holdout support or media mix into the child likelihood.
+build_collective_saturation_reconciliation_hier_mmm <- function(reconciliation_input,
+                                                                 data,
+                                                                 variable_lookup,
+                                                                 group_col,
+                                                                 time_col) {
+  n <- nrow(data)
+  j_n <- nrow(variable_lookup)
+  empty <- function() list(
+    audit = data.table(),
+    weight = array(0, dim = c(0L, n, j_n)),
+    observed = numeric(),
+    observed_sd = numeric()
+  )
+  if (is.null(reconciliation_input)) return(empty())
+  if (!is.list(reconciliation_input) || is.null(reconciliation_input$scenarios) || is.null(reconciliation_input$members)) {
+    stop("collective_saturation_reconciliation_input must be a list with scenarios and members tables.", call. = FALSE)
+  }
+  scenarios <- as.data.table(copy(reconciliation_input$scenarios))
+  members <- as.data.table(copy(reconciliation_input$members))
+  required_scenarios <- c("reconciliation_id", "parent_response", "parent_response_sd")
+  required_members <- c("reconciliation_id", "variable")
+  miss <- setdiff(required_scenarios, names(scenarios))
+  if (length(miss)) stop("collective reconciliation scenarios missing: ", paste(miss, collapse = ", "), call. = FALSE)
+  miss <- setdiff(required_members, names(members))
+  if (length(miss)) stop("collective reconciliation members missing: ", paste(miss, collapse = ", "), call. = FALSE)
+  if (!nrow(scenarios)) return(empty())
+  if (anyDuplicated(scenarios$reconciliation_id)) stop("collective reconciliation_id values must be unique.", call. = FALSE)
+  scenarios[, reconciliation_id := as.character(reconciliation_id)]
+  members[, `:=`(reconciliation_id = as.character(reconciliation_id), variable = as.character(variable))]
+  unknown <- setdiff(unique(members$variable), variable_lookup$variable)
+  if (length(unknown)) stop("collective reconciliation references unknown modeled variable(s): ", paste(unknown, collapse = ", "), call. = FALSE)
+  if (!"time_value" %in% names(members)) stop("collective reconciliation members must include time_value.", call. = FALSE)
+  if (!(time_col %in% names(data))) stop("collective reconciliation time_col is missing from model data: ", time_col, call. = FALSE)
+  # Match on a stable character key to support Date, numeric, and period IDs.
+  time_key <- as.character(data[[time_col]])
+  members[, time_key__ := as.character(time_value)]
+  scenario_ids <- scenarios$reconciliation_id
+  weight <- array(0, dim = c(length(scenario_ids), n, j_n))
+  audit_rows <- vector("list", length(scenario_ids))
+  for (cc in seq_along(scenario_ids)) {
+    sid <- scenario_ids[cc]
+    sc <- scenarios[reconciliation_id == sid][1]
+    if (!is.finite(as.numeric(sc$parent_response)) || !is.finite(as.numeric(sc$parent_response_sd)) || as.numeric(sc$parent_response_sd) <= 0) {
+      stop("collective reconciliation scenario '", sid, "' needs finite parent_response and positive parent_response_sd.", call. = FALSE)
+    }
+    mm <- members[reconciliation_id == sid]
+    if (!nrow(mm)) stop("collective reconciliation scenario '", sid, "' has no child members.", call. = FALSE)
+    selected_n <- 0L
+    for (rr in seq_len(nrow(mm))) {
+      j <- variable_lookup$variable_idx[match(mm$variable[rr], variable_lookup$variable)]
+      idx <- which(time_key == mm$time_key__[rr])
+      if (!length(idx)) stop("collective reconciliation scenario '", sid, "' selects no model rows for time_value.", call. = FALSE)
+      if (any(data$is_holdout__[idx])) stop("collective reconciliation scenario '", sid, "' selects holdout rows; use training-period scenarios only.", call. = FALSE)
+      # The fit contribution is on model scale. This maps it back to the raw
+      # KPI scale used by the parent posterior response target.
+      weight[cc, idx, j] <- as.numeric(data$rescale_factor__[idx])
+      selected_n <- selected_n + length(idx)
+    }
+    audit_rows[[cc]] <- data.table(
+      reconciliation_id = sid,
+      parent_node = as.character(sc$parent_node %||% NA_character_),
+      scenario_label = as.character(sc$scenario_label %||% sid),
+      parent_response = as.numeric(sc$parent_response),
+      parent_response_sd = as.numeric(sc$parent_response_sd),
+      parent_posterior_sd_component = as.numeric(sc$parent_posterior_sd_component %||% NA_real_),
+      data_reuse_sd_component = as.numeric(sc$data_reuse_sd_component %||% NA_real_),
+      heterogeneity_sd_component = as.numeric(sc$heterogeneity_sd_component %||% NA_real_),
+      mix_instability_sd_component = as.numeric(sc$mix_instability_sd_component %||% NA_real_),
+      approximation_sd_component = as.numeric(sc$approximation_sd_component %||% NA_real_),
+      selected_member_n = nrow(mm),
+      selected_row_variable_n = selected_n,
+      reconciliation_likelihood = "normal_soft_collective_child_response"
+    )
+  }
+  list(
+    audit = rbindlist(audit_rows, fill = TRUE),
+    weight = weight,
+    observed = as.numeric(scenarios$parent_response),
+    observed_sd = as.numeric(scenarios$parent_response_sd)
+  )
+}
+
+# Shape-only sequential saturation contract. Each target compares a perturbed
+# sibling mix with the same mix at its reference level. The target remains a
+# shape ratio, while its covariance is transformed into response units for a
+# stable cross-multiplied residual in Stan. Shared parent draws are retained.
+build_collective_saturation_shape_reconciliation_hier_mmm <- function(reconciliation_input,
+                                                                       data,
+                                                                       variable_lookup,
+                                                                       group_col,
+                                                                       time_col) {
+  n <- nrow(data); j_n <- nrow(variable_lookup)
+  empty <- function() list(
+    audit = data.table(),
+    multiplier = array(1, dim = c(0L, n, j_n)),
+    weight = array(0, dim = c(0L, n, j_n)),
+    parent_shape = numeric(),
+    parent_reference_response = numeric(),
+    parent_shape_cov = matrix(0, 0, 0)
+  )
+  if (is.null(reconciliation_input)) return(empty())
+  if (!is.list(reconciliation_input) || is.null(reconciliation_input$scenarios) || is.null(reconciliation_input$members) || is.null(reconciliation_input$parent_shape_cov)) {
+    stop("collective_saturation_shape_reconciliation_input must contain scenarios, members, and parent_shape_cov.", call. = FALSE)
+  }
+  scenarios <- as.data.table(copy(reconciliation_input$scenarios))
+  members <- as.data.table(copy(reconciliation_input$members))
+  required_scenarios <- c("reconciliation_id", "parent_shape", "parent_reference_response")
+  required_members <- c("reconciliation_id", "variable", "time_value", "multiplier")
+  miss <- setdiff(required_scenarios, names(scenarios)); if (length(miss)) stop("collective shape scenarios missing: ", paste(miss, collapse = ", "), call. = FALSE)
+  miss <- setdiff(required_members, names(members)); if (length(miss)) stop("collective shape members missing: ", paste(miss, collapse = ", "), call. = FALSE)
+  if (!nrow(scenarios)) return(empty())
+  if (anyDuplicated(scenarios$reconciliation_id)) stop("collective shape reconciliation_id values must be unique.", call. = FALSE)
+  if (any(!is.finite(as.numeric(scenarios$parent_reference_response)) | as.numeric(scenarios$parent_reference_response) <= 1e-6)) {
+    stop("collective shape scenarios must have finite, non-negligible parent_reference_response values.", call. = FALSE)
+  }
+  scenarios[, reconciliation_id := as.character(reconciliation_id)]
+  members[, `:=`(reconciliation_id = as.character(reconciliation_id), variable = as.character(variable), time_key__ = as.character(time_value))]
+  if (any(!is.finite(as.numeric(members$multiplier)) | as.numeric(members$multiplier) < 0)) stop("collective shape multipliers must be finite and non-negative.", call. = FALSE)
+  unknown <- setdiff(unique(members$variable), variable_lookup$variable)
+  if (length(unknown)) stop("collective shape reconciliation references unknown modeled variable(s): ", paste(unknown, collapse = ", "), call. = FALSE)
+  cov <- as.matrix(reconciliation_input$parent_shape_cov)
+  if (!identical(dim(cov), c(nrow(scenarios), nrow(scenarios)))) stop("parent_shape_cov must be a square matrix aligned to scenarios.", call. = FALSE)
+  if (any(!is.finite(cov))) stop("parent_shape_cov must be finite.", call. = FALSE)
+  cov <- (cov + t(cov)) / 2
+  if (any(diag(cov) <= 0)) stop("parent_shape_cov must have positive diagonal entries.", call. = FALSE)
+  # A small ridge handles finite-draw covariance rank deficiency without
+  # pretending shape targets from one parent posterior are independent.
+  eigen_min <- min(eigen(cov, symmetric = TRUE, only.values = TRUE)$values)
+  if (!is.finite(eigen_min)) stop("parent_shape_cov is invalid.", call. = FALSE)
+  if (eigen_min <= 0) cov <- cov + diag(abs(eigen_min) + 1e-8, nrow(cov))
+  multiplier <- array(1, dim = c(nrow(scenarios), n, j_n))
+  weight <- array(0, dim = c(nrow(scenarios), n, j_n))
+  time_key <- as.character(data[[time_col]])
+  time_levels <- unique(time_key)
+  audit <- vector("list", nrow(scenarios))
+  for (cc in seq_len(nrow(scenarios))) {
+    sid <- scenarios$reconciliation_id[cc]
+    mm <- members[reconciliation_id == sid]
+    if (!nrow(mm)) stop("collective shape scenario '", sid, "' has no members.", call. = FALSE)
+    selected <- 0L
+    for (rr in seq_len(nrow(mm))) {
+      j <- variable_lookup$variable_idx[match(mm$variable[rr], variable_lookup$variable)]
+      idx <- which(time_key == mm$time_key__[rr])
+      if (!length(idx)) stop("collective shape scenario '", sid, "' selects no model rows.", call. = FALSE)
+      if (any(data$is_holdout__[idx])) stop("collective shape scenario '", sid, "' selects holdout rows; use training rows only.", call. = FALSE)
+      # Scale the complete pre-scenario support history. This preserves the
+      # current-to-carryover balance and makes the shape term about saturation,
+      # not an accidental perturbation of the adstock state.
+      target_period <- match(mm$time_key__[rr], time_levels)
+      history_idx <- which(match(time_key, time_levels) <= target_period)
+      multiplier[cc, history_idx, j] <- as.numeric(mm$multiplier[rr])
+      weight[cc, idx, j] <- as.numeric(data$rescale_factor__[idx])
+      selected <- selected + length(idx)
+    }
+    audit[[cc]] <- data.table(
+      reconciliation_id = sid,
+      parent_node = as.character(scenarios$parent_node[cc] %||% NA_character_),
+      mix_id = as.character(scenarios$mix_id[cc] %||% NA_character_),
+      support_multiplier = as.numeric(scenarios$support_multiplier[cc] %||% NA_real_),
+      parent_shape = as.numeric(scenarios$parent_shape[cc]),
+      parent_shape_sd = sqrt(cov[cc, cc]),
+      selected_member_n = nrow(mm),
+      selected_row_variable_n = selected,
+      reconciliation_likelihood = "multivariate_normal_soft_cross_multiplied_shape_residual"
+    )
+  }
+  list(audit = rbindlist(audit, fill = TRUE), multiplier = multiplier, weight = weight,
+       parent_shape = as.numeric(scenarios$parent_shape),
+       parent_reference_response = as.numeric(scenarios$parent_reference_response),
+       parent_shape_cov = cov)
+}
+
 prepare_stan_data_hier_mmm <- function(data,
                                        metadata_input,
                                        dep_var_col,
@@ -391,6 +567,8 @@ prepare_stan_data_hier_mmm <- function(data,
                                        curve_type_default = c("hill", "weibull"),
                                        coef_override_input = NULL,
                                        calibration_input = NULL,
+                                       collective_saturation_reconciliation_input = NULL,
+                                       collective_saturation_shape_reconciliation_input = NULL,
                                        context_effects = NULL,
                                        context_log_multiplier_bound = 2,
                                        allow_time_context = FALSE,
@@ -1226,6 +1404,20 @@ prepare_stan_data_hier_mmm <- function(data,
     group_col = group_col,
     time_col = time_col
   )
+  collective_reconciliation <- build_collective_saturation_reconciliation_hier_mmm(
+    reconciliation_input = collective_saturation_reconciliation_input,
+    data = dt,
+    variable_lookup = variable_lookup,
+    group_col = group_col,
+    time_col = time_col
+  )
+  collective_shape_reconciliation <- build_collective_saturation_shape_reconciliation_hier_mmm(
+    reconciliation_input = collective_saturation_shape_reconciliation_input,
+    data = dt,
+    variable_lookup = variable_lookup,
+    group_col = group_col,
+    time_col = time_col
+  )
 
   stan_data <- list(
     prior_only = as.integer(isTRUE(prior_only)),
@@ -1266,6 +1458,16 @@ prepare_stan_data_hier_mmm <- function(data,
     calibration_weight = experiment_calibration$weight,
     calibration_observed_lift = experiment_calibration$observed_lift,
     calibration_observed_sd = experiment_calibration$observed_sd,
+    C_collective_reconciliation = nrow(collective_reconciliation$audit),
+    collective_reconciliation_weight = collective_reconciliation$weight,
+    collective_parent_response = collective_reconciliation$observed,
+    collective_parent_response_sd = collective_reconciliation$observed_sd,
+    C_collective_shape = nrow(collective_shape_reconciliation$audit),
+    collective_shape_multiplier = collective_shape_reconciliation$multiplier,
+    collective_shape_weight = collective_shape_reconciliation$weight,
+    collective_parent_shape = collective_shape_reconciliation$parent_shape,
+    collective_parent_reference_response = collective_shape_reconciliation$parent_reference_response,
+    collective_parent_shape_cov = collective_shape_reconciliation$parent_shape_cov,
     K_context = ncol(X_context),
     X_context = X_context,
     context_variable_idx = if (nrow(context_effect_audit)) as.integer(context_effect_audit$variable_idx) else integer(),
@@ -1433,6 +1635,12 @@ prepare_stan_data_hier_mmm <- function(data,
   if (length(stan_data$calibration_variable_idx) != stan_data$C_calibration) stop("Internal error: calibration_variable_idx length does not match C_calibration.")
   if (nrow(stan_data$calibration_weight) != stan_data$N || ncol(stan_data$calibration_weight) != stan_data$C_calibration) stop("Internal error: calibration_weight dimensions do not match N/C_calibration.")
   if (length(stan_data$calibration_observed_lift) != stan_data$C_calibration || length(stan_data$calibration_observed_sd) != stan_data$C_calibration) stop("Internal error: calibration evidence lengths do not match C_calibration.")
+  if (length(dim(stan_data$collective_reconciliation_weight)) != 3L ||
+      any(dim(stan_data$collective_reconciliation_weight) != c(stan_data$C_collective_reconciliation, stan_data$N, stan_data$J))) stop("Internal error: collective reconciliation weights do not match C/N/J.")
+  if (length(stan_data$collective_parent_response) != stan_data$C_collective_reconciliation || length(stan_data$collective_parent_response_sd) != stan_data$C_collective_reconciliation) stop("Internal error: collective reconciliation evidence lengths do not match C_collective_reconciliation.")
+  if (length(dim(stan_data$collective_shape_multiplier)) != 3L || any(dim(stan_data$collective_shape_multiplier) != c(stan_data$C_collective_shape, stan_data$N, stan_data$J))) stop("Internal error: collective shape multipliers do not match C/N/J.")
+  if (length(dim(stan_data$collective_shape_weight)) != 3L || any(dim(stan_data$collective_shape_weight) != c(stan_data$C_collective_shape, stan_data$N, stan_data$J))) stop("Internal error: collective shape weights do not match C/N/J.")
+  if (length(stan_data$collective_parent_shape) != stan_data$C_collective_shape || length(stan_data$collective_parent_reference_response) != stan_data$C_collective_shape || !identical(dim(stan_data$collective_parent_shape_cov), c(stan_data$C_collective_shape, stan_data$C_collective_shape))) stop("Internal error: collective shape target dimensions do not match C_collective_shape.")
   if (nrow(stan_data$X_context) != stan_data$N || ncol(stan_data$X_context) != stan_data$K_context) stop("Internal error: X_context dimensions do not match N/K_context.")
   if (length(stan_data$context_variable_idx) != stan_data$K_context) stop("Internal error: context_variable_idx length does not match K_context.")
   if (length(stan_data$context_coef_mu) != stan_data$K_context || length(stan_data$context_coef_sd) != stan_data$K_context) stop("Internal error: context coefficient prior lengths do not match K_context.")
@@ -1492,6 +1700,8 @@ prepare_stan_data_hier_mmm <- function(data,
     variable_lookup = variable_lookup,
     context_effects = context_effect_audit,
     experiment_calibration = experiment_calibration$audit,
+    collective_saturation_reconciliation = collective_reconciliation$audit,
+    collective_saturation_shape_reconciliation = collective_shape_reconciliation$audit,
     group_lookup = group_lookup,
     coef_hierarchy_key_lookup = coef_hierarchy_key$key_lookup,
     coef_hierarchy_key_note = coef_hierarchy_key$note,

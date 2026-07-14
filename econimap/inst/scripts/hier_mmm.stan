@@ -98,6 +98,19 @@ data {
   matrix[N, C_calibration] calibration_weight;
   vector[C_calibration] calibration_observed_lift;
   vector<lower=0>[C_calibration] calibration_observed_sd;
+  // Sequential saturation handoff: one likelihood term can reconcile the
+  // combined contribution of multiple child variables to a parent response
+  // target at an observed training-period media mix.
+  int<lower=0> C_collective_reconciliation;
+  array[C_collective_reconciliation] matrix[N, J] collective_reconciliation_weight;
+  vector[C_collective_reconciliation] collective_parent_response;
+  vector<lower=0>[C_collective_reconciliation] collective_parent_response_sd;
+  int<lower=0> C_collective_shape;
+  array[C_collective_shape] matrix[N, J] collective_shape_multiplier;
+  array[C_collective_shape] matrix[N, J] collective_shape_weight;
+  vector[C_collective_shape] collective_parent_shape;
+  vector<lower=0>[C_collective_shape] collective_parent_reference_response;
+  matrix[C_collective_shape, C_collective_shape] collective_parent_shape_cov;
   int<lower=0> K_context;
   matrix[N, K_context] X_context;
   array[K_context] int<lower=1, upper=J> context_variable_idx;
@@ -324,6 +337,10 @@ transformed parameters {
   vector[N] level_state;
   vector[N] mu;
   vector[C_calibration] calibration_pred;
+  vector[C_collective_reconciliation] collective_reconciliation_pred;
+  vector[C_collective_shape] collective_shape_reference_pred;
+  vector[C_collective_shape] collective_shape_scenario_pred;
+  vector[C_collective_shape] collective_shape_residual;
 
   if (J_curve > 0) {
     for (k in 1:J_curve) {
@@ -540,6 +557,10 @@ transformed parameters {
 
   mu = rep_vector(0, N);
   calibration_pred = rep_vector(0, C_calibration);
+  collective_reconciliation_pred = rep_vector(0, C_collective_reconciliation);
+  collective_shape_reference_pred = rep_vector(0, C_collective_shape);
+  collective_shape_scenario_pred = rep_vector(0, C_collective_shape);
+  collective_shape_residual = rep_vector(0, C_collective_shape);
   if (K_extra > 0) mu += Z_extra * gamma;
 
   if (intercept_mode == 1) {
@@ -569,6 +590,12 @@ transformed parameters {
             for (c in 1:C_calibration)
               if (calibration_variable_idx[c] == linear_idx[k])
                 calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
+          if (C_collective_reconciliation > 0)
+            for (c in 1:C_collective_reconciliation)
+              collective_reconciliation_pred[c] += collective_reconciliation_weight[c][n, linear_idx[k]] * raw_contribution;
+          if (C_collective_shape > 0)
+            for (c in 1:C_collective_shape)
+              collective_shape_reference_pred[c] += collective_shape_weight[c][n, linear_idx[k]] * raw_contribution;
         } else {
           real context_mult = context_multiplier_hier_mmm(n, linear_idx[k], K_context, X_context, context_variable_idx, context_coef, context_log_multiplier_bound);
           real raw_contribution = beta[group_id[n], linear_idx[k]] * context_mult * X[n, linear_idx[k]];
@@ -577,6 +604,12 @@ transformed parameters {
             for (c in 1:C_calibration)
               if (calibration_variable_idx[c] == linear_idx[k])
                 calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
+          if (C_collective_reconciliation > 0)
+            for (c in 1:C_collective_reconciliation)
+              collective_reconciliation_pred[c] += collective_reconciliation_weight[c][n, linear_idx[k]] * raw_contribution;
+          if (C_collective_shape > 0)
+            for (c in 1:C_collective_shape)
+              collective_shape_reference_pred[c] += collective_shape_weight[c][n, linear_idx[k]] * raw_contribution;
         }
       }
       mu[n] += lin;
@@ -597,6 +630,12 @@ transformed parameters {
               for (c in 1:C_calibration)
                 if (calibration_variable_idx[c] == j)
                   calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
+            if (C_collective_reconciliation > 0)
+              for (c in 1:C_collective_reconciliation)
+                collective_reconciliation_pred[c] += collective_reconciliation_weight[c][n, j] * raw_contribution;
+            if (C_collective_shape > 0)
+              for (c in 1:C_collective_shape)
+                collective_shape_reference_pred[c] += collective_shape_weight[c][n, j] * raw_contribution;
           }
         } else if (is_rf_curve[k] == 1) {
           real rr = rrate[k];
@@ -656,6 +695,12 @@ transformed parameters {
                   for (c in 1:C_calibration)
                     if (calibration_variable_idx[c] == j)
                       calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
+                if (C_collective_reconciliation > 0)
+                  for (c in 1:C_collective_reconciliation)
+                    collective_reconciliation_pred[c] += collective_reconciliation_weight[c][n, j] * raw_contribution;
+                if (C_collective_shape > 0)
+                  for (c in 1:C_collective_shape)
+                    collective_shape_reference_pred[c] += collective_shape_weight[c][n, j] * raw_contribution;
               }
             }
           }
@@ -756,11 +801,135 @@ transformed parameters {
                 for (c in 1:C_calibration)
                   if (calibration_variable_idx[c] == j)
                     calibration_pred[c] += calibration_weight[n, c] * raw_contribution;
+              if (C_collective_reconciliation > 0)
+                for (c in 1:C_collective_reconciliation)
+                  collective_reconciliation_pred[c] += collective_reconciliation_weight[c][n, j] * raw_contribution;
+              if (C_collective_shape > 0)
+                for (c in 1:C_collective_shape)
+                  collective_shape_reference_pred[c] += collective_shape_weight[c][n, j] * raw_contribution;
             }
           }
         }
         }
       }
+    }
+  }
+  // Re-evaluate only the selected training-period mix after perturbing its
+  // support. Baseline normalization remains the fitted, unperturbed training
+  // normalization, so this is a response-shape comparison rather than a
+  // second contribution-level calibration.
+  if (C_collective_shape > 0) {
+    for (c in 1:C_collective_shape) {
+      if (J_linear > 0) {
+        for (n in 1:N) {
+          for (k in 1:J_linear) {
+            int j = linear_idx[k];
+            if (collective_shape_weight[c][n, j] != 0) {
+              real context_mult = context_multiplier_hier_mmm(n, j, K_context, X_context, context_variable_idx, context_coef, context_log_multiplier_bound);
+              collective_shape_scenario_pred[c] += collective_shape_weight[c][n, j] * beta[group_id[n], j] * context_mult * X[n, j] * collective_shape_multiplier[c][n, j];
+            }
+          }
+        }
+      }
+      if (J_curve > 0) {
+        for (g in 1:G) {
+          for (k in 1:J_curve) {
+            int j = curve_idx[k];
+            if (sample_curve_parameter[k] == 0 || is_rf_curve[k] == 1) {
+              // A fixed/RF curve has no sampled saturation parameter to pool.
+              // Preserve its fitted shape contribution as a level-scaled term.
+              for (n in start_idx[g]:end_idx[g]) {
+                if (collective_shape_weight[c][n, j] != 0) {
+                  real context_mult = context_multiplier_hier_mmm(n, j, K_context, X_context, context_variable_idx, context_coef, context_log_multiplier_bound);
+                  collective_shape_scenario_pred[c] += collective_shape_weight[c][n, j] * beta[g, j] * context_mult * X_curve_fixed[n, k] * collective_shape_multiplier[c][n, j];
+                }
+              }
+            } else {
+              real rr = rrate[k];
+              real cv = cvalue[k];
+              real dv = dvalue[k];
+              real carry_scale = 1;
+              real trans_mean = 1;
+              if (normalize_curve_x == 1) {
+                real carry_for_scale = 0;
+                real carry_sum_all = 0;
+                int carry_count_all = 0;
+                real carry_sum_active = 0;
+                int carry_count_active = 0;
+                for (n in start_idx[g]:end_idx[g]) {
+                  real x = fmax(X[n, j], 0);
+                  carry_for_scale = x + rr * carry_for_scale;
+                  if (is_train[n] == 1) {
+                    carry_sum_all += carry_for_scale;
+                    carry_count_all += 1;
+                    if (curve_normalization_active == 1 && x > 0) {
+                      carry_sum_active += carry_for_scale;
+                      carry_count_active += 1;
+                    }
+                  }
+                }
+                if (curve_normalization_active == 1 && carry_count_active > 0)
+                  carry_scale = fmax(carry_sum_active / carry_count_active, 1e-8);
+                else
+                  carry_scale = fmax(carry_sum_all / carry_count_all, 1e-8);
+              }
+              {
+                real carry_base = 0;
+                real trans_sum_all = 0;
+                int trans_count_all = 0;
+                real trans_sum_active = 0;
+                int trans_count_active = 0;
+                for (n in start_idx[g]:end_idx[g]) {
+                  real x = fmax(X[n, j], 0);
+                  real carry_for_curve;
+                  real z;
+                  real trans;
+                  carry_base = x + rr * carry_base;
+                  carry_for_curve = normalize_curve_x == 1 ? carry_base / carry_scale : carry_base;
+                  z = pow(fmax(carry_for_curve * cv, 1e-12), dv);
+                  trans = curve_type[k] == 2 ? z / (1 + z) : 1 - exp(-z);
+                  if (is_train[n] == 1) {
+                    trans_sum_all += trans;
+                    trans_count_all += 1;
+                    if (curve_normalization_active == 1 && x > 0) {
+                      trans_sum_active += trans;
+                      trans_count_active += 1;
+                    }
+                  }
+                }
+                if (curve_normalization_active == 1 && trans_count_active > 0)
+                  trans_mean = fmax(trans_sum_active / trans_count_active, 1e-8);
+                else
+                  trans_mean = fmax(trans_sum_all / trans_count_all, 1e-8);
+              }
+              {
+                real carry = 0;
+                for (n in start_idx[g]:end_idx[g]) {
+                  real x = fmax(X[n, j] * collective_shape_multiplier[c][n, j], 0);
+                  real carry_for_curve;
+                  real z;
+                  real trans;
+                  real trans_model;
+                  carry = x + rr * carry;
+                  carry_for_curve = normalize_curve_x == 1 ? carry / carry_scale : carry;
+                  z = pow(fmax(carry_for_curve * cv, 1e-12), dv);
+                  trans = curve_type[k] == 2 ? z / (1 + z) : 1 - exp(-z);
+                  trans_model = normalize_curve_x == 1 ? trans / trans_mean : trans;
+                  if (collective_shape_weight[c][n, j] != 0) {
+                    real context_mult = context_multiplier_hier_mmm(n, j, K_context, X_context, context_variable_idx, context_coef, context_log_multiplier_bound);
+                    collective_shape_scenario_pred[c] += collective_shape_weight[c][n, j] * beta[g, j] * context_mult * trans_model;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      // Cross-multiplied response-unit residual. This avoids unstable ratios
+      // when a contribution denominator is small; R excludes weak-reference
+      // parent scenarios before they reach this likelihood.
+      collective_shape_residual[c] = collective_shape_scenario_pred[c]
+        - collective_parent_shape[c] * collective_shape_reference_pred[c];
     }
   }
 }
@@ -960,6 +1129,10 @@ model {
   if (prior_only == 0) {
     if (C_calibration > 0)
       calibration_observed_lift ~ normal(calibration_pred, calibration_observed_sd);
+    if (C_collective_reconciliation > 0)
+      collective_parent_response ~ normal(collective_reconciliation_pred, collective_parent_response_sd);
+    if (C_collective_shape > 0)
+      rep_vector(0, C_collective_shape) ~ multi_normal(collective_shape_residual, collective_parent_shape_cov);
 
     if (likelihood_family == 2) {
       for (i in 1:N_train) {

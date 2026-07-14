@@ -61,8 +61,13 @@ This file is the working backlog for the script bundle. It separates production-
    - Do not add latent week-to-week effectiveness drift as a default; it can become a baseline/media attribution escape hatch if not strongly regularized.
 
 7. Project/package structure
-   - Current bundle is a script library with shippable tests.
-   - Future formal package structure should include `DESCRIPTION`, `NAMESPACE`, `R/`, `inst/stan/`, `tests/testthat/`, example data, and optional `renv.lock`.
+   - `econimap/` is the canonical package with `DESCRIPTION`, `NAMESPACE`,
+     package-native `R/` modules, `inst/stan/`, generated analyst scripts, and
+     shippable tests.
+   - Core standalone scripts are generated from package modules; they are not
+     independent implementations.
+   - Future work: hosted CI, fuller `testthat` migration, example datasets, and
+     an optional reproducibility lockfile.
    - Preserve backward-compatible public function names during any refactor.
 
 ## Tests To Keep Shipping

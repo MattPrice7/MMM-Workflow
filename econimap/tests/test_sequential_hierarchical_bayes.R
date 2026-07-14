@@ -72,12 +72,43 @@ root <- fit_parsimonious_total_media_root(
 stopifnot(abs(root$root_summary$root_effectiveness[1] - truth_effectiveness) < 0.12)
 stopifnot(root$root_summary$root_bootstrap_successful[1] >= 20L)
 stopifnot(root$root_summary$root_scope[1] == "national")
+stopifnot(all(c(
+  "root_nonlinear_selection_rate", "root_rrate_q05", "root_rrate_q50", "root_rrate_q95",
+  "root_half_saturation_q05", "root_half_saturation_q50", "root_half_saturation_q95",
+  "root_steepness_q05", "root_steepness_q50", "root_steepness_q95"
+) %in% names(root$root_summary)))
 stopifnot(nrow(root$root_panel) == length(periods))
 stopifnot(all(root$bootstrap_draws$bootstrap_method == "moving_block_residual_original_media_timeline"))
 stopifnot(all(root$bootstrap_draws$original_media_timeline_preserved))
 stopifnot(all(root$bootstrap_draws$curve_selection_repeated))
 stopifnot(all(root$root_panel$root_adstock_order__ == root$root_panel$root_time_index__))
 stopifnot(nrow(root$national_spend) == length(periods) * nrow(spend_map))
+
+# The nonlinear root uses Sobol points only as multistart optimizer seeds. The
+# retained grid is diagnostic and cannot win the primary model selection.
+sobol <- econ_seq_sobol_points(24L, 3L)
+stopifnot(nrow(unique(as.data.table(sobol))) == 24L, all(sobol > 0 & sobol < 1))
+nonlinear_fixture <- data.table(
+  root_time__ = periods,
+  root_time_index__ = seq_along(periods),
+  root_adstock_order__ = seq_along(periods),
+  root_group__ = "national",
+  root_total_paid_spend__ = pmax(5, 80 + 55 * sin(seq_along(periods) / 5) + rnorm(length(periods), 0, 10))
+)
+truth_spec <- econ_seq_root_curve_spec("adstock_hill", rrate = .35, half_saturation = 90, steepness = 1.7)
+truth_feature <- econ_seq_root_media_feature(nonlinear_fixture, truth_spec)$feature
+nonlinear_fixture[, root_y__ := 600 + 130 * truth_feature + rnorm(.N, 0, 2)]
+nonlinear_selection <- econ_seq_select_root_curve(
+  nonlinear_fixture, character(), "none", 0L, 52, NULL,
+  root_nonlinear_starts = 16L, root_optimizer_maxit = 200L
+)
+stopifnot(nonlinear_selection$selected$candidate_role[1] %in% c("primary_linear_limit", "primary_multistart_mle"))
+stopifnot(!any(nonlinear_selection$candidates[candidate_role == "coarse_grid_diagnostic", root_curve_selected]))
+stopifnot(nrow(nonlinear_selection$optimizer_runs) == 16L)
+stopifnot(any(nonlinear_selection$optimizer_runs$convergence == 0L))
+stopifnot(nonlinear_selection$selected$root_curve_type[1] == "adstock_hill")
+stopifnot(is.finite(nonlinear_selection$selected$root_half_saturation[1]))
+stopifnot(is.finite(nonlinear_selection$selected$root_steepness[1]))
 
 # A linear root emits broad generic curve defaults and labels them as generic;
 # it never mislabels the 50% anchor as parent nonlinear evidence.
@@ -573,7 +604,6 @@ stopifnot(continued$rollup_layer$branch_action_reconciliation$max_abs_row_spend_
 # Content-addressed checkpoints change for every required input class.
 tmp_code <- tempfile(fileext = ".R")
 writeLines("x <- 1", tmp_code)
-on.exit(unlink(tmp_code), add = TRUE)
 hash_case <- function(data = synthetic[1:5],
                       metadata_input = metadata,
                       rollup = metadata[, .(variable, rollup_path)],
@@ -608,6 +638,7 @@ stopifnot(base_hash != hash_case(holdout = list(holdout_last_n = 8L)))
 stopifnot(base_hash != hash_case(seed = 2))
 writeLines("x <- 2", tmp_code)
 stopifnot(base_hash != hash_case())
+unlink(tmp_code)
 
 # The opt-in validation script statically separates truth from primary fitting
 # metadata and no longer uses a manual validation version string.
@@ -629,5 +660,45 @@ if (file.exists(validation_path)) {
   stopifnot(grepl("continue_sequential_hierarchical_bayes", validation_text, fixed = TRUE))
   stopifnot(grepl("delta_share_mae_vs_direct", validation_text, fixed = TRUE))
 }
+
+# Identification labels use one calibrated contract and smooth variation /
+# support gates. Clean independent channels are data-driven, while near-
+# constant or near-collinear children are not promoted by numerical residual
+# independence alone.
+identification_fixture <- function(regime, seed) {
+  set.seed(seed)
+  n <- 104L
+  group <- rep(paste0("g", 1:4), each = n)
+  time <- rep(seq_len(n), 4L)
+  common <- 100 + 30 * sin(time / 7)
+  if (regime == "clean") {
+    a <- pmax(0, 100 + 35 * sin(time / 5) + rnorm(length(time), 0, 28))
+    b <- pmax(0, 90 + 30 * cos(time / 9) + rnorm(length(time), 0, 26))
+  } else if (regime == "collinear") {
+    a <- pmax(0, common + rnorm(length(time), 0, 1))
+    b <- pmax(0, 1.02 * common + rnorm(length(time), 0, 1))
+  } else {
+    a <- 100 + rnorm(length(time), 0, .2)
+    b <- 80 + rnorm(length(time), 0, .2)
+  }
+  panel <- data.table(
+    group, time, a, b, a_spend = a, b_spend = b,
+    kpi = 500 + .4 * a + .3 * b + rnorm(length(time), 0, 15)
+  )
+  econ_seq_layer_identification_diagnostics(
+    panel,
+    data.table(variable = c("a", "b"), spend_col = c("a_spend", "b_spend")),
+    group_col = "group", time_col = "time", dep_var_col = "kpi",
+    baseline_fourier_harmonics = 2L
+  )$by_variable
+}
+clean_id <- identification_fixture("clean", 701L)
+collinear_id <- identification_fixture("collinear", 702L)
+constant_id <- identification_fixture("constant", 703L)
+stopifnot(all(clean_id$identification_evidence_band == "data_driven"))
+stopifnot(all(collinear_id$identification_evidence_band != "data_driven"))
+stopifnot(all(constant_id$identification_evidence_band == "predominantly_prior_driven"))
+stopifnot(all(clean_id$thresholds_calibrated))
+stopifnot(length(unique(clean_id$identification_calibration_version)) == 1L)
 
 cat("Sequential hierarchical Bayes hardening tests passed.\n")

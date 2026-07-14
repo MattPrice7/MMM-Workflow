@@ -38,6 +38,7 @@ mmm_source_bundle_file("mmm_deck_output_builder.R")
 mmm_source_bundle_file("quasi_experimental_dose_response_analysis.R")
 mmm_source_bundle_file("quasi_geo_test.R")
 mmm_source_bundle_file("hier_mmm.R")
+mmm_source_bundle_file("sequential_hierarchical_bayes.R")
 mmm_source_bundle_file("bau_response_curves.R")
 mmm_source_bundle_file("optimizer_scenario_planner.R")
 

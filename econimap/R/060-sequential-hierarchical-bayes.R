@@ -1161,16 +1161,24 @@ econ_seq_root_panel <- function(data,
 
 econ_seq_root_curve_spec <- function(type = c("linear", "adstock_hill"),
                                      rrate = 0,
-                                     anchor_saturation = 0.50) {
+                                     anchor_saturation = 0.50,
+                                     half_saturation = NULL,
+                                     steepness = 1) {
   type <- match.arg(type)
   rrate <- min(max(suppressWarnings(as.numeric(rrate)[1]), 0), 0.95)
   anchor_saturation <- suppressWarnings(as.numeric(anchor_saturation)[1])
   if (!is.finite(anchor_saturation) || anchor_saturation <= 0 || anchor_saturation >= 1) anchor_saturation <- 0.50
+  half_saturation <- suppressWarnings(as.numeric(half_saturation)[1])
+  if (!is.finite(half_saturation) || half_saturation <= 0) half_saturation <- NA_real_
+  steepness <- suppressWarnings(as.numeric(steepness)[1])
+  if (!is.finite(steepness) || steepness <= 0) steepness <- 1
   list(
     type = type,
     rrate = if (identical(type, "linear")) 0 else rrate,
     anchor_saturation = if (identical(type, "linear")) NA_real_ else anchor_saturation,
-    curve_parameter_n = if (identical(type, "linear")) 0L else 2L
+    half_saturation = if (identical(type, "linear")) NA_real_ else half_saturation,
+    steepness = if (identical(type, "linear")) NA_real_ else steepness,
+    curve_parameter_n = if (identical(type, "linear")) 0L else 3L
   )
 }
 
@@ -1181,7 +1189,9 @@ econ_seq_root_media_feature <- function(root_data, curve_spec) {
   spec <- econ_seq_root_curve_spec(
     type = curve_spec$type %||% "linear",
     rrate = curve_spec$rrate %||% 0,
-    anchor_saturation = curve_spec$anchor_saturation %||% 0.50
+    anchor_saturation = curve_spec$anchor_saturation %||% 0.50,
+    half_saturation = curve_spec$half_saturation %||% NA_real_,
+    steepness = curve_spec$steepness %||% 1
   )
   if (identical(spec$type, "linear")) {
     scale <- mean(raw[raw > 0], na.rm = TRUE)
@@ -1213,14 +1223,21 @@ econ_seq_root_media_feature <- function(root_data, curve_spec) {
   active_adstock <- adstock[is.finite(adstock) & adstock > 0]
   anchor_x <- if (length(active_adstock)) stats::median(active_adstock) else 1
   if (!is.finite(anchor_x) || anchor_x <= 1e-8) anchor_x <- 1
-  half_saturation <- anchor_x * (1 - spec$anchor_saturation) / spec$anchor_saturation
-  saturation <- adstock / (adstock + half_saturation)
+  half_saturation <- spec$half_saturation
+  if (!is.finite(half_saturation) || half_saturation <= 1e-8) {
+    half_saturation <- anchor_x * ((1 - spec$anchor_saturation) / spec$anchor_saturation) ^ (1 / spec$steepness)
+  }
+  z <- (pmax(adstock, 0) / pmax(half_saturation, 1e-12)) ^ spec$steepness
+  saturation <- z / (1 + z)
   saturation[!is.finite(saturation)] <- 0
   scale <- mean(saturation[raw > 0], na.rm = TRUE)
   if (!is.finite(scale) || scale <= 1e-8) scale <- 1
   feature <- saturation / scale
   conversion <- sum(feature) / sum(raw)
   if (!is.finite(conversion) || conversion <= 1e-12) conversion <- 1e-12
+  spec$half_saturation <- half_saturation
+  spec$anchor_saturation <- anchor_x ^ spec$steepness /
+    (anchor_x ^ spec$steepness + half_saturation ^ spec$steepness)
   list(
     feature = feature,
     raw_spend = raw,
@@ -1304,8 +1321,10 @@ econ_seq_fit_root_lm <- function(root_data,
                                  root_fourier_harmonics = 2L,
                                  root_season_period = 52L,
                                  root_effect_prior = NULL,
+                                 root_effect_sign = c("positive", "unconstrained", "negative"),
                                  root_curve_spec = econ_seq_root_curve_spec()) {
   root_trend_spec <- match.arg(root_trend_spec)
+  root_effect_sign <- match.arg(root_effect_sign)
   design <- econ_seq_build_root_design(
     root_data = root_data,
     control_cols = control_cols,
@@ -1338,6 +1357,16 @@ econ_seq_fit_root_lm <- function(root_data,
   system <- cross_x + diag(penalty, nrow = p)
   beta <- tryCatch(solve(system, cross_y + prior_target), error = function(e) qr.solve(system, cross_y + prior_target))
   beta <- as.numeric(beta)
+  sign_boundary_active <- (identical(root_effect_sign, "positive") && beta[effect_idx] < 0) ||
+    (identical(root_effect_sign, "negative") && beta[effect_idx] > 0)
+  if (isTRUE(sign_boundary_active)) {
+    other_idx <- setdiff(seq_len(p), effect_idx)
+    beta[] <- 0
+    if (length(other_idx)) {
+      other_x <- X[, other_idx, drop = FALSE]
+      beta[other_idx] <- tryCatch(qr.solve(other_x, y), error = function(e) rep(0, length(other_idx)))
+    }
+  }
   fitted <- as.numeric(X %*% beta)
   resid <- y - fitted
   rank_x <- qr(X)$rank
@@ -1346,6 +1375,10 @@ econ_seq_fit_root_lm <- function(root_data,
   effect <- beta[effect_idx] * design$effect_conversion
   effect_sd <- sqrt(pmax(cov_beta[effect_idx, effect_idx], 0)) * abs(design$effect_conversion)
   sse <- sum(resid^2)
+  root_profile_objective <- length(y) * log(pmax(sse / length(y), 1e-12))
+  if (isTRUE(prior$active)) {
+    root_profile_objective <- root_profile_objective + ((effect - prior$mean) / prior$sd)^2
+  }
   effective_k <- rank_x + design$media$curve_spec$curve_parameter_n
   root_aic <- length(y) * log(pmax(sse / length(y), 1e-12)) + 2 * effective_k
   root_aicc <- if (length(y) > effective_k + 1L) {
@@ -1364,17 +1397,21 @@ econ_seq_fit_root_lm <- function(root_data,
     root_effect_conversion = design$effect_conversion,
     root_media_beta = beta[effect_idx],
     root_sse = sse,
+    root_profile_objective = root_profile_objective,
     root_aicc = root_aicc,
     root_curve_type = design$media$curve_spec$type,
     root_rrate = design$media$curve_spec$rrate,
     root_anchor_saturation = design$media$curve_spec$anchor_saturation,
     root_half_saturation = design$media$half_saturation,
+    root_steepness = design$media$curve_spec$steepness,
     root_curve_parameter_n = design$media$curve_spec$curve_parameter_n,
     root_prior_active = prior$active,
     root_prior_mean = prior$mean,
     root_prior_sd = prior$sd,
     root_prior_source = prior$source,
-    root_fit_method = if (prior$active) "frequentist_penalized_ols" else "frequentist_ols"
+    root_effect_sign = root_effect_sign,
+    root_sign_boundary_active = sign_boundary_active,
+    root_fit_method = if (prior$active) "frequentist_profile_penalized_likelihood" else "frequentist_profile_gaussian_mle"
   )
   attr(out, "root_fitted_values") <- fitted
   attr(out, "root_residuals") <- resid
@@ -1399,6 +1436,147 @@ econ_seq_root_curve_candidates <- function(root_media_transform = c("adstock_hil
   }), recursive = FALSE))
 }
 
+# Deterministic three-dimensional Sobol sequence for optimizer initialization.
+# These points are design points only: they are not priors and are never
+# retained as a curve ensemble.
+econ_seq_sobol_points <- function(n, dimension = 3L, skip = 8L, bits = 29L) {
+  n <- max(1L, as.integer(n)[1]); dimension <- as.integer(dimension)[1]
+  if (dimension < 1L || dimension > 3L) stop("The internal Sobol generator supports one to three dimensions.", call. = FALSE)
+  bits <- max(8L, min(29L, as.integer(bits)[1]))
+  directions <- matrix(0L, nrow = bits, ncol = dimension)
+  directions[, 1L] <- as.integer(2 ^ (bits - seq_len(bits)))
+  params <- list(
+    list(s = 1L, a = 0L, m = 1L),
+    list(s = 2L, a = 1L, m = c(1L, 3L))
+  )
+  if (dimension >= 2L) {
+    for (dd in 2:dimension) {
+      par <- params[[dd - 1L]]; s <- par$s
+      directions[seq_len(s), dd] <- as.integer(par$m * 2 ^ (bits - seq_len(s)))
+      if (bits > s) for (jj in (s + 1L):bits) {
+        value <- bitwXor(directions[jj - s, dd], bitwShiftR(directions[jj - s, dd], s))
+        if (s > 1L) for (kk in seq_len(s - 1L)) {
+          if (bitwAnd(par$a, bitwShiftL(1L, s - 1L - kk)) != 0L) value <- bitwXor(value, directions[jj - kk, dd])
+        }
+        directions[jj, dd] <- value
+      }
+    }
+  }
+  indices <- seq.int(from = max(0L, as.integer(skip)[1]), length.out = n)
+  out <- matrix(0, nrow = n, ncol = dimension)
+  for (ii in seq_along(indices)) {
+    gray <- bitwXor(indices[ii], bitwShiftR(indices[ii], 1L))
+    for (dd in seq_len(dimension)) {
+      value <- 0L
+      for (jj in seq_len(bits)) if (bitwAnd(gray, bitwShiftL(1L, jj - 1L)) != 0L) {
+        value <- bitwXor(value, directions[jj, dd])
+      }
+      out[ii, dd] <- as.numeric(value) / 2 ^ bits
+    }
+  }
+  pmin(pmax(out, 1e-6), 1 - 1e-6)
+}
+
+econ_seq_root_nonlinear_bounds <- function(root_data,
+                                           rrate_bounds = c(0, 0.95),
+                                           half_saturation_multiple_bounds = c(0.05, 10),
+                                           steepness_bounds = c(0.25, 5)) {
+  active <- pmax(suppressWarnings(as.numeric(root_data$root_total_paid_spend__)), 0)
+  active <- active[is.finite(active) & active > 0]
+  if (!length(active)) stop("Root nonlinear bounds require positive training-period media support.", call. = FALSE)
+  ref <- stats::median(active)
+  rr <- sort(as.numeric(rrate_bounds)[1:2]); mult <- sort(as.numeric(half_saturation_multiple_bounds)[1:2])
+  shape <- sort(as.numeric(steepness_bounds)[1:2])
+  if (any(!is.finite(rr)) || rr[1] < 0 || rr[2] >= 1 || rr[1] >= rr[2]) stop("rrate_bounds must satisfy 0 <= lower < upper < 1.", call. = FALSE)
+  if (any(!is.finite(mult)) || mult[1] <= 0 || mult[1] >= mult[2]) stop("half_saturation_multiple_bounds must be positive and increasing.", call. = FALSE)
+  if (any(!is.finite(shape)) || shape[1] <= 0 || shape[1] >= shape[2]) stop("steepness_bounds must be positive and increasing.", call. = FALSE)
+  list(
+    lower = c(rrate = rr[1], log_half_saturation = log(ref * mult[1]), log_steepness = log(shape[1])),
+    upper = c(rrate = rr[2], log_half_saturation = log(ref * mult[2]), log_steepness = log(shape[2])),
+    active_support_reference = ref,
+    rrate_bounds = rr,
+    half_saturation_bounds = ref * mult,
+    steepness_bounds = shape
+  )
+}
+
+econ_seq_fit_root_multistart <- function(root_data,
+                                         control_cols,
+                                         root_trend_spec,
+                                         root_fourier_harmonics,
+                                         root_season_period,
+                                         root_effect_prior,
+                                         root_effect_sign,
+                                         root_nonlinear_starts = 24L,
+                                         root_rrate_bounds = c(0, 0.95),
+                                         root_half_saturation_multiple_bounds = c(0.05, 10),
+                                         root_steepness_bounds = c(0.25, 5),
+                                         root_optimizer_maxit = 300L) {
+  bounds <- econ_seq_root_nonlinear_bounds(
+    root_data, root_rrate_bounds, root_half_saturation_multiple_bounds, root_steepness_bounds
+  )
+  starts_u <- econ_seq_sobol_points(max(4L, as.integer(root_nonlinear_starts)[1]), 3L)
+  starts <- sweep(starts_u, 2L, bounds$upper - bounds$lower, `*`)
+  starts <- sweep(starts, 2L, bounds$lower, `+`)
+  objective <- function(theta) {
+    spec <- econ_seq_root_curve_spec(
+      "adstock_hill", rrate = theta[1], half_saturation = exp(theta[2]), steepness = exp(theta[3])
+    )
+    fit <- tryCatch(econ_seq_fit_root_lm(
+      root_data, control_cols, root_trend_spec, root_fourier_harmonics, root_season_period,
+      root_effect_prior, root_effect_sign, spec
+    ), error = function(e) NULL)
+    if (is.null(fit) || !is.finite(fit$root_profile_objective[1])) return(1e30)
+    fit$root_profile_objective[1]
+  }
+  runs <- lapply(seq_len(nrow(starts)), function(ii) {
+    opt <- tryCatch(stats::optim(
+      starts[ii, ], objective, method = "L-BFGS-B", lower = bounds$lower, upper = bounds$upper,
+      control = list(maxit = max(50L, as.integer(root_optimizer_maxit)[1]), factr = 1e7)
+    ), error = function(e) NULL)
+    if (is.null(opt)) return(data.table::data.table(start_id = ii, convergence = 999L, objective = Inf,
+      root_rrate = NA_real_, root_half_saturation = NA_real_, root_steepness = NA_real_, optimizer_message = "optimizer_error"))
+    tol <- pmax((bounds$upper - bounds$lower) * 1e-4, 1e-6)
+    at_bound <- any(abs(opt$par - bounds$lower) <= tol | abs(opt$par - bounds$upper) <= tol)
+    data.table::data.table(
+      start_id = ii, convergence = as.integer(opt$convergence), objective = as.numeric(opt$value),
+      root_rrate = opt$par[1], root_half_saturation = exp(opt$par[2]), root_steepness = exp(opt$par[3]),
+      optimizer_at_bound = at_bound, optimizer_message = as.character(opt$message %||% "")
+    )
+  })
+  run_table <- data.table::rbindlist(runs, fill = TRUE)
+  usable <- run_table[convergence == 0L & is.finite(objective)]
+  if (!nrow(usable)) return(list(fit = NULL, runs = run_table[], bounds = bounds, diagnostics = data.table::data.table(
+    nonlinear_fit_stable = FALSE, fallback_recommended = TRUE, fallback_reason = "no_converged_multistart_solution"
+  )))
+  best <- usable[which.min(objective)]
+  best_spec <- econ_seq_root_curve_spec(
+    "adstock_hill", rrate = best$root_rrate, half_saturation = best$root_half_saturation, steepness = best$root_steepness
+  )
+  best_fit <- econ_seq_fit_root_lm(
+    root_data, control_cols, root_trend_spec, root_fourier_harmonics, root_season_period,
+    root_effect_prior, root_effect_sign, best_spec
+  )
+  near <- usable[objective <= min(objective) + 2]
+  spread <- if (nrow(near) > 1L) c(
+    rrate = diff(range(near$root_rrate)) / diff(bounds$rrate_bounds),
+    half = diff(range(log(near$root_half_saturation))) / diff(log(bounds$half_saturation_bounds)),
+    steepness = diff(range(log(near$root_steepness))) / diff(log(bounds$steepness_bounds))
+  ) else c(rrate = 0, half = 0, steepness = 0)
+  flat <- any(is.finite(spread) & spread >= .25)
+  repeated_bounds <- mean(usable$optimizer_at_bound %in% TRUE) >= .50
+  unstable <- nrow(usable) < max(3L, ceiling(.25 * nrow(run_table)))
+  reasons <- c(if (flat) "flat_profile_likelihood", if (repeated_bounds) "solutions_repeatedly_at_bounds", if (unstable) "low_multistart_convergence_rate")
+  diagnostics <- data.table::data.table(
+    nonlinear_start_design = "deterministic_sobol", nonlinear_start_n = nrow(run_table),
+    nonlinear_converged_n = nrow(usable), nonlinear_near_optimum_n = nrow(near),
+    profile_flat = flat, repeated_bound_solutions = repeated_bounds, solution_instability = unstable,
+    nonlinear_fit_stable = !length(reasons), fallback_recommended = length(reasons) > 0L,
+    fallback_reason = paste(reasons, collapse = " | ")
+  )
+  list(fit = best_fit[], spec = best_spec, runs = run_table[], bounds = bounds, diagnostics = diagnostics[])
+}
+
 econ_seq_select_root_curve <- function(root_data,
                                        control_cols,
                                        root_trend_spec,
@@ -1408,15 +1586,39 @@ econ_seq_select_root_curve <- function(root_data,
                                        root_media_transform = c("adstock_hill", "linear"),
                                        root_rrate_grid = c(0, 0.25, 0.50, 0.70),
                                        root_anchor_saturation_grid = c(0.30, 0.50, 0.70),
-                                       root_curve_min_delta_aicc = 2) {
+                                       root_curve_min_delta_aicc = 2,
+                                       root_effect_sign = c("positive", "unconstrained", "negative"),
+                                       root_nonlinear_starts = 24L,
+                                       root_rrate_bounds = c(0, 0.95),
+                                       root_half_saturation_multiple_bounds = c(0.05, 10),
+                                       root_steepness_bounds = c(0.25, 5),
+                                       root_optimizer_maxit = 300L) {
   root_media_transform <- match.arg(root_media_transform)
+  root_effect_sign <- match.arg(root_effect_sign)
   minimum_delta <- max(0, suppressWarnings(as.numeric(root_curve_min_delta_aicc)[1]))
-  candidates <- econ_seq_root_curve_candidates(
+  linear_fit <- econ_seq_fit_root_lm(
+    root_data, control_cols, root_trend_spec, root_fourier_harmonics, root_season_period,
+    root_effect_prior, root_effect_sign, econ_seq_root_curve_spec("linear")
+  )
+  linear_fit[, `:=`(candidate_fit_ok = TRUE, candidate_role = "primary_linear_limit")]
+  multistart <- if (identical(root_media_transform, "adstock_hill")) econ_seq_fit_root_multistart(
+    root_data, control_cols, root_trend_spec, root_fourier_harmonics, root_season_period,
+    root_effect_prior, root_effect_sign, root_nonlinear_starts, root_rrate_bounds,
+    root_half_saturation_multiple_bounds, root_steepness_bounds, root_optimizer_maxit
+  ) else list(fit = NULL, runs = data.table::data.table(), diagnostics = data.table::data.table(
+    nonlinear_fit_stable = NA, fallback_recommended = FALSE, fallback_reason = "forced_linear"
+  ))
+  nonlinear_fit <- multistart$fit
+  if (!is.null(nonlinear_fit)) nonlinear_fit[, `:=`(candidate_fit_ok = TRUE, candidate_role = "primary_multistart_mle")]
+
+  # Retain the old coarse grid strictly as a diagnostic comparison.
+  coarse_specs <- econ_seq_root_curve_candidates(
     root_media_transform = root_media_transform,
     root_rrate_grid = root_rrate_grid,
     root_anchor_saturation_grid = root_anchor_saturation_grid
   )
-  fitted <- lapply(candidates, function(spec) {
+  coarse_specs <- Filter(function(x) !identical(x$type, "linear"), coarse_specs)
+  coarse_fits <- lapply(coarse_specs, function(spec) {
     fit <- tryCatch(
       econ_seq_fit_root_lm(
         root_data = root_data,
@@ -1425,6 +1627,7 @@ econ_seq_select_root_curve <- function(root_data,
         root_fourier_harmonics = root_fourier_harmonics,
         root_season_period = root_season_period,
         root_effect_prior = root_effect_prior,
+        root_effect_sign = root_effect_sign,
         root_curve_spec = spec
       ),
       error = function(e) NULL
@@ -1436,36 +1639,33 @@ econ_seq_select_root_curve <- function(root_data,
       root_aicc = Inf,
       candidate_fit_ok = FALSE
     ))
-    fit[, candidate_fit_ok := TRUE]
+    fit[, `:=`(candidate_fit_ok = TRUE, candidate_role = "coarse_grid_diagnostic")]
     fit
   })
-  candidate_table <- data.table::rbindlist(fitted, fill = TRUE)
-  if (!any(candidate_table$candidate_fit_ok)) {
-    stop("No parsimonious root media candidate could be estimated.", call. = FALSE)
-  }
-  linear_idx <- which(candidate_table$root_curve_type == "linear" & candidate_table$candidate_fit_ok)
-  valid_idx <- which(candidate_table$candidate_fit_ok & is.finite(candidate_table$root_aicc))
-  best_idx <- if (length(valid_idx)) valid_idx[which.min(candidate_table$root_aicc[valid_idx])] else which(candidate_table$candidate_fit_ok)[1]
-  selected_idx <- best_idx
-  if (length(linear_idx)) {
-    linear_idx <- linear_idx[which.min(candidate_table$root_aicc[linear_idx])]
-    best_is_hill <- identical(candidate_table$root_curve_type[best_idx], "adstock_hill")
-    improvement <- candidate_table$root_aicc[linear_idx] - candidate_table$root_aicc[best_idx]
-    if (!best_is_hill || !is.finite(improvement) || improvement < minimum_delta) selected_idx <- linear_idx
+  candidate_table <- data.table::rbindlist(c(list(linear_fit), if (!is.null(nonlinear_fit)) list(nonlinear_fit) else list(), coarse_fits), fill = TRUE)
+  selected_idx <- 1L
+  if (!is.null(nonlinear_fit)) {
+    improvement <- linear_fit$root_aicc[1] - nonlinear_fit$root_aicc[1]
+    if (is.finite(improvement) && improvement >= minimum_delta) selected_idx <- 2L
   }
   selected <- candidate_table[selected_idx]
   selected_spec <- econ_seq_root_curve_spec(
     type = selected$root_curve_type[1],
     rrate = selected$root_rrate[1],
-    anchor_saturation = selected$root_anchor_saturation[1]
+    anchor_saturation = selected$root_anchor_saturation[1],
+    half_saturation = selected$root_half_saturation[1],
+    steepness = selected$root_steepness[1]
   )
   candidate_table[, `:=`(
     root_curve_selected = .I == selected_idx,
     root_curve_delta_aicc = root_aicc - selected$root_aicc[1],
     root_curve_min_delta_aicc = minimum_delta,
-    root_curve_selection_method = if (identical(root_media_transform, "linear")) "forced_linear" else "aicc_with_linear_guardrail"
+    root_curve_selection_method = if (identical(root_media_transform, "linear")) "forced_linear" else "sobol_multistart_profile_mle_with_linear_guardrail"
   )]
-  list(selected = selected[], selected_spec = selected_spec, candidates = candidate_table[])
+  selected <- candidate_table[selected_idx]
+  list(selected = selected[], selected_spec = selected_spec, candidates = candidate_table[],
+       optimizer_runs = multistart$runs %||% data.table::data.table(),
+       nonlinear_diagnostics = multistart$diagnostics %||% data.table::data.table())
 }
 
 econ_seq_bootstrap_time_indices <- function(n_time, block_length) {
@@ -1536,15 +1736,23 @@ econ_seq_block_bootstrap_root <- function(root_data,
                                           root_rrate_grid = c(0, 0.25, 0.50, 0.70),
                                           root_anchor_saturation_grid = c(0.30, 0.50, 0.70),
                                           root_curve_min_delta_aicc = 2,
+                                          root_effect_sign = c("positive", "unconstrained", "negative"),
+                                          root_nonlinear_starts = 24L,
+                                          root_rrate_bounds = c(0, 0.95),
+                                          root_half_saturation_multiple_bounds = c(0.05, 10),
+                                          root_steepness_bounds = c(0.25, 5),
+                                          root_optimizer_maxit = 300L,
                                           reselect_curve = TRUE,
                                           reps = 200L,
                                           block_length = 4L,
                                           seed = 123L) {
   root_media_transform <- match.arg(root_media_transform)
+  root_effect_sign <- match.arg(root_effect_sign)
   reps <- max(0L, as.integer(reps)[1])
   empty <- function() data.table::data.table(
     draw = integer(), root_effectiveness = numeric(), fit_ok = logical(),
     root_curve_type = character(), root_rrate = numeric(), root_anchor_saturation = numeric(),
+    root_half_saturation = numeric(), root_steepness = numeric(),
     bootstrap_method = character(), original_media_timeline_preserved = logical(),
     curve_selection_repeated = logical()
   )
@@ -1558,6 +1766,7 @@ econ_seq_block_bootstrap_root <- function(root_data,
     root_fourier_harmonics = root_fourier_harmonics,
     root_season_period = root_season_period,
     root_effect_prior = root_effect_prior,
+    root_effect_sign = root_effect_sign,
     root_curve_spec = root_curve_spec
   ), error = function(e) NULL)
   if (is.null(base_fit)) return(empty())
@@ -1575,6 +1784,7 @@ econ_seq_block_bootstrap_root <- function(root_data,
         return(data.table::data.table(
           draw = ii, root_effectiveness = NA_real_, fit_ok = FALSE,
           root_curve_type = NA_character_, root_rrate = NA_real_, root_anchor_saturation = NA_real_,
+          root_half_saturation = NA_real_, root_steepness = NA_real_,
           bootstrap_method = "moving_block_residual_original_media_timeline",
           original_media_timeline_preserved = TRUE,
           curve_selection_repeated = isTRUE(reselect_curve)
@@ -1595,7 +1805,13 @@ econ_seq_block_bootstrap_root <- function(root_data,
             root_media_transform = root_media_transform,
             root_rrate_grid = root_rrate_grid,
             root_anchor_saturation_grid = root_anchor_saturation_grid,
-            root_curve_min_delta_aicc = root_curve_min_delta_aicc
+            root_curve_min_delta_aicc = root_curve_min_delta_aicc,
+            root_effect_sign = root_effect_sign,
+            root_nonlinear_starts = root_nonlinear_starts,
+            root_rrate_bounds = root_rrate_bounds,
+            root_half_saturation_multiple_bounds = root_half_saturation_multiple_bounds,
+            root_steepness_bounds = root_steepness_bounds,
+            root_optimizer_maxit = root_optimizer_maxit
           )$selected_spec,
           error = function(e) NULL
         )
@@ -1603,6 +1819,7 @@ econ_seq_block_bootstrap_root <- function(root_data,
       if (is.null(selected_spec)) {
         return(data.table::data.table(draw = ii, root_effectiveness = NA_real_, fit_ok = FALSE,
                                       root_curve_type = NA_character_, root_rrate = NA_real_, root_anchor_saturation = NA_real_,
+                                      root_half_saturation = NA_real_, root_steepness = NA_real_,
                                       bootstrap_method = "moving_block_residual_original_media_timeline",
                                       original_media_timeline_preserved = TRUE,
                                       curve_selection_repeated = isTRUE(reselect_curve)))
@@ -1614,11 +1831,14 @@ econ_seq_block_bootstrap_root <- function(root_data,
         root_fourier_harmonics = root_fourier_harmonics,
         root_season_period = root_season_period,
         root_effect_prior = root_effect_prior,
+        root_effect_sign = root_effect_sign,
         root_curve_spec = selected_spec
       ), error = function(e) NULL)
       if (is.null(fit)) return(data.table::data.table(draw = ii, root_effectiveness = NA_real_, fit_ok = FALSE,
                                                        root_curve_type = selected_spec$type, root_rrate = selected_spec$rrate,
                                                        root_anchor_saturation = selected_spec$anchor_saturation,
+                                                       root_half_saturation = selected_spec$half_saturation,
+                                                       root_steepness = selected_spec$steepness,
                                                        bootstrap_method = "moving_block_residual_original_media_timeline",
                                                        original_media_timeline_preserved = TRUE,
                                                        curve_selection_repeated = isTRUE(reselect_curve)))
@@ -1629,6 +1849,8 @@ econ_seq_block_bootstrap_root <- function(root_data,
         root_curve_type = selected_spec$type,
         root_rrate = selected_spec$rrate,
         root_anchor_saturation = selected_spec$anchor_saturation,
+        root_half_saturation = selected_spec$half_saturation,
+        root_steepness = selected_spec$steepness,
         bootstrap_method = "moving_block_residual_original_media_timeline",
         original_media_timeline_preserved = TRUE,
         curve_selection_repeated = isTRUE(reselect_curve)
@@ -2275,12 +2497,35 @@ econ_seq_valid_child_prior_overrides <- function(child_prior_overrides = NULL) {
   ov[, .(variable = as.character(variable), valid_effectiveness_override, override_validation_reason)]
 }
 
+econ_seq_identification_calibration <- function() {
+  list(
+    version = "sequential_identification_synthetic_v1",
+    predominantly_prior_driven_max = 0.45,
+    data_driven_min = 0.75,
+    active_support_cv_scale = 0.10,
+    active_period_scale = 26,
+    minimum_active_rows = 8L,
+    calibration_regimes = c(
+      "independent_clean", "moderately_correlated", "near_collinear",
+      "sparse_flighting", "near_constant_support", "national_repeated_support"
+    ),
+    interpretation = paste(
+      "Thresholds classify a continuous observational identification score.",
+      "They were calibrated against the package's labeled synthetic contracts",
+      "and must not be interpreted as universal statistical cutoffs."
+    )
+  )
+}
+
 econ_seq_apply_branch_diagnostics <- function(prior_table,
                                               child_identification = NULL,
                                               child_prior_overrides = NULL,
-                                              strong_child_prior_relaxation = 1.20) {
+                                              strong_child_prior_relaxation = 1.20,
+                                              identification_calibration = econ_seq_identification_calibration()) {
   out <- data.table::copy(data.table::as.data.table(prior_table))
   strong_child_prior_relaxation <- max(as.numeric(strong_child_prior_relaxation)[1], 1)
+  lower_threshold <- identification_calibration$predominantly_prior_driven_max
+  upper_threshold <- identification_calibration$data_driven_min
   out[, `:=`(
     child_identification_recommendation = "fit",
     child_active_row_n = NA_integer_,
@@ -2335,16 +2580,21 @@ econ_seq_apply_branch_diagnostics <- function(prior_table,
   out[, fit_status := data.table::fcase(
     user_prior_override_valid, "fit_user_prior_dominant",
     !parent_positive_effect_transferred, "fit_default_prior_dominant",
-    child_identification_strength_0_1 >= 0.65, "fit_data_dominant",
-    child_identification_strength_0_1 >= 0.35, "fit_parent_regularized",
+    child_identification_strength_0_1 >= upper_threshold, "fit_data_dominant",
+    child_identification_strength_0_1 >= lower_threshold, "fit_parent_regularized",
     default = "fit_strongly_regularized"
   )]
   out[, prior_dominance_classification := data.table::fcase(
     user_prior_override_valid, "user_prior_driven",
     !parent_positive_effect_transferred, "default_prior_driven",
-    child_identification_strength_0_1 >= 0.65, "data_driven",
-    child_identification_strength_0_1 >= 0.35, "parent_prior_and_data_blended",
+    child_identification_strength_0_1 >= upper_threshold, "data_driven",
+    child_identification_strength_0_1 >= lower_threshold, "parent_prior_and_data_blended",
     default = "parent_prior_driven"
+  )]
+  out[, `:=`(
+    identification_calibration_version = identification_calibration$version,
+    identification_prior_driven_max = lower_threshold,
+    identification_data_driven_min = upper_threshold
   )]
   out[, branch_decision_reason := data.table::fcase(
     user_prior_override_valid, "valid_analyst_effectiveness_prior_supplied",
@@ -2798,7 +3048,7 @@ econ_seq_assert_base_prior_equivalence <- function(reference_spec,
     }
   }
   if (any(!audit$base_prior_equivalent)) {
-    bad <- audit[!base_prior_equivalent, paste0(variable, " [", mismatch_fields, "]")]
+    bad <- audit[base_prior_equivalent == FALSE, paste0(variable, " [", mismatch_fields, "]")]
     stop("Base-prior equivalence audit failed for ", context, ": ", paste(bad, collapse = "; "), call. = FALSE)
   }
   audit[]
@@ -2835,9 +3085,11 @@ econ_seq_combine_normal_priors <- function(base_mean,
 econ_seq_apply_rrate_priors <- function(metadata_input,
                                         prior_table,
                                         curve_transfer_mode = c("effectiveness_adstock_saturation", "effectiveness_adstock", "effectiveness_only"),
+                                        saturation_handoff = c("generic_child_prior", "collective_parent_shape_reconciliation", "independent_parent_prior"),
                                         rrate_prior_sd_multiplier = 1,
                                         saturation_prior_precision_multiplier = 1) {
   curve_transfer_mode <- match.arg(curve_transfer_mode)
+  saturation_handoff <- match.arg(saturation_handoff)
   md <- econ_seq_input_table(metadata_input, "metadata_input")
   if (identical(curve_transfer_mode, "effectiveness_only")) return(md[])
   priors <- data.table::copy(data.table::as.data.table(prior_table))
@@ -2883,7 +3135,8 @@ econ_seq_apply_rrate_priors <- function(metadata_input,
     sequential_rrate_prior_source = i.combination_mode
   )]
   saturation_required <- c("anchor_saturation_prior_mean", "anchor_saturation_prior_precision")
-  if (identical(curve_transfer_mode, "effectiveness_adstock_saturation") && all(saturation_required %in% names(priors))) {
+  if (identical(curve_transfer_mode, "effectiveness_adstock_saturation") &&
+      identical(saturation_handoff, "independent_parent_prior") && all(saturation_required %in% names(priors))) {
     saturation_priors <- priors[
       is.finite(anchor_saturation_prior_mean) &
         is.finite(anchor_saturation_prior_precision) & anchor_saturation_prior_precision > 0
@@ -2918,6 +3171,13 @@ econ_seq_apply_rrate_priors <- function(metadata_input,
       sequential_saturation_prior_source = i.combination_mode
     )]
   }
+  if (identical(curve_transfer_mode, "effectiveness_adstock_saturation") && !identical(saturation_handoff, "independent_parent_prior")) {
+    md[, sequential_saturation_prior_source := if (identical(saturation_handoff, "collective_parent_shape_reconciliation")) {
+      "generic_child_saturation_plus_collective_parent_shape_reconciliation"
+    } else {
+      "generic_child_saturation_no_parent_anchor_transfer"
+    }]
+  }
   md[]
 }
 
@@ -2941,10 +3201,16 @@ econ_seq_layer_identification_diagnostics <- function(data,
                                                        baseline_trend_spec = c("none", "linear"),
                                                        baseline_fourier_harmonics = 0L,
                                                        season_period = 52L,
-                                                       layer_label = "child_layer") {
+                                                       layer_label = "child_layer",
+                                                       identification_calibration = econ_seq_identification_calibration()) {
   dt <- econ_seq_input_table(data, "data")
   sm <- econ_seq_input_table(spend_map, "spend_map")
   baseline_trend_spec <- match.arg(baseline_trend_spec)
+  lower_threshold <- identification_calibration$predominantly_prior_driven_max
+  upper_threshold <- identification_calibration$data_driven_min
+  variation_scale <- identification_calibration$active_support_cv_scale
+  active_period_scale <- identification_calibration$active_period_scale
+  minimum_active_rows <- identification_calibration$minimum_active_rows
   if (!all(c("variable", "spend_col") %in% names(sm))) {
     stop("spend_map must include variable and spend_col for sequential identification diagnostics.", call. = FALSE)
   }
@@ -3068,14 +3334,20 @@ econ_seq_layer_identification_diagnostics <- function(data,
     independent_score <- if (is.finite(independent_ratio)) pmin(pmax(independent_ratio / 0.50, 0), 1) else 0.50
     collinearity_score <- if (is.finite(max_abs_corr)) pmin(pmax(1 - max_abs_corr^2, 0), 1) else 0.50
     stability_score <- if (is.finite(coefficient_stability)) pmin(pmax(coefficient_stability, 0), 1) else 0.50
-    strength <- 0.25 * support_score + 0.15 * variation_score + 0.20 * residual_score +
+    raw_strength <- 0.25 * support_score + 0.15 * variation_score + 0.20 * residual_score +
       0.20 * independent_score + 0.10 * collinearity_score + 0.10 * stability_score
-    safety_floor_failed <- sum(active) < 8L || !is.finite(raw_sd) || raw_sd <= 1e-10
+    # Smooth gates prevent abundant but nearly constant support, or a handful
+    # of isolated active periods, from looking identified merely because its
+    # residualized series is numerically independent of sibling media.
+    variation_gate <- 1 - exp(-pmax(active_cv, active_spend_cv, na.rm = TRUE) / variation_scale)
+    active_period_gate <- 1 - exp(-active_period_n / active_period_scale)
+    strength <- raw_strength * sqrt(pmax(variation_gate * active_period_gate, 0))
+    safety_floor_failed <- sum(active) < minimum_active_rows || !is.finite(raw_sd) || raw_sd <= 1e-10
     if (safety_floor_failed || !is.finite(strength)) strength <- 0
     strength <- pmin(pmax(strength, 0), 1)
-    status <- if (strength < 0.35) {
+    status <- if (strength < lower_threshold) {
       "strong_parent_shrinkage"
-    } else if (strength < 0.65) {
+    } else if (strength < upper_threshold) {
       "moderate_parent_shrinkage"
     } else {
       "fit"
@@ -3106,17 +3378,27 @@ econ_seq_layer_identification_diagnostics <- function(data,
       support_hierarchical_variation_eligible = isTRUE(sm$support_hierarchical_variation_eligible[ii]),
       hierarchical_variation_eligible = isTRUE(sm$support_hierarchical_variation_eligible[ii]),
       identification_strength_0_1 = strength,
+      identification_raw_strength_0_1 = raw_strength,
+      identification_variation_gate_0_1 = variation_gate,
+      identification_active_period_gate_0_1 = active_period_gate,
       identification_recommendation = status,
       identification_evidence_band = data.table::fcase(
-        strength >= 0.65, "data_driven",
-        strength >= 0.35, "blended_parent_and_data",
+        strength >= upper_threshold, "data_driven",
+        strength >= lower_threshold, "blended_parent_and_data",
         default = "predominantly_prior_driven"
       ),
       parent_shrinkage_multiplier = shrinkage_multiplier,
       prior_width_multiplier = 1,
       safety_floor_failed = safety_floor_failed,
-      thresholds_calibrated = FALSE,
-      diagnostic_note = "Continuous observational identification screen. Weak child evidence increases shrinkage but never stops a valid Bayesian branch. Threshold labels are descriptive and provisional pending simulation coverage. Mechanical geo allocation is reported separately and does not establish geo heterogeneity."
+      thresholds_calibrated = TRUE,
+      identification_calibration_version = identification_calibration$version,
+      identification_prior_driven_max = lower_threshold,
+      identification_data_driven_min = upper_threshold,
+      diagnostic_note = paste(
+        "Continuous observational identification screen calibrated against included synthetic regimes.",
+        "Weak child evidence increases shrinkage but never stops a valid Bayesian branch.",
+        "Mechanical geo allocation is reported separately and does not establish geo heterogeneity."
+      )
     )
   })
   by_variable <- data.table::rbindlist(rows, fill = TRUE)
@@ -3131,8 +3413,15 @@ econ_seq_layer_identification_diagnostics <- function(data,
       mean_identification_strength_0_1 = mean(by_variable$identification_strength_0_1, na.rm = TRUE),
       max_parent_shrinkage_multiplier = max(by_variable$parent_shrinkage_multiplier, na.rm = TRUE),
       prior_width_multiplier = 1,
-      thresholds_calibrated = FALSE,
-      note = "Branch-level actions are enforced independently. Identification weakness changes inherited shrinkage; parent uncertainty is handled separately through the parent distribution."
+      thresholds_calibrated = TRUE,
+      identification_calibration_version = identification_calibration$version,
+      identification_prior_driven_max = lower_threshold,
+      identification_data_driven_min = upper_threshold,
+      note = paste(
+        "Branch-level actions are enforced independently. Identification weakness changes inherited shrinkage;",
+        "parent uncertainty is handled separately through the parent distribution. Thresholds classify the",
+        "continuous score and are calibrated to the package synthetic contracts, not universal cutoffs."
+      )
     )
   )
 }
@@ -3284,6 +3573,12 @@ fit_parsimonious_total_media_root <- function(data,
                                               root_rrate_grid = c(0, 0.25, 0.50, 0.70),
                                               root_anchor_saturation_grid = c(0.30, 0.50, 0.70),
                                               root_curve_min_delta_aicc = 2,
+                                              root_effect_sign = c("positive", "unconstrained", "negative"),
+                                              root_nonlinear_starts = 24L,
+                                              root_rrate_bounds = c(0, 0.95),
+                                              root_half_saturation_multiple_bounds = c(0.05, 10),
+                                              root_steepness_bounds = c(0.25, 5),
+                                              root_optimizer_maxit = 300L,
                                               root_bootstrap_reps = 200L,
                                               root_block_length = 4L,
                                               root_effect_prior = NULL,
@@ -3294,6 +3589,7 @@ fit_parsimonious_total_media_root <- function(data,
   root_control_mode <- match.arg(root_control_mode)
   root_scope <- match.arg(root_scope)
   root_media_transform <- match.arg(root_media_transform)
+  root_effect_sign <- match.arg(root_effect_sign)
   incomplete_period_action <- match.arg(incomplete_period_action)
   invalid_allocation_fallback <- match.arg(invalid_allocation_fallback)
   root_trend_spec <- match.arg(root_trend_spec)
@@ -3357,7 +3653,13 @@ fit_parsimonious_total_media_root <- function(data,
     root_media_transform = root_media_transform,
     root_rrate_grid = root_rrate_grid,
     root_anchor_saturation_grid = root_anchor_saturation_grid,
-    root_curve_min_delta_aicc = root_curve_min_delta_aicc
+    root_curve_min_delta_aicc = root_curve_min_delta_aicc,
+    root_effect_sign = root_effect_sign,
+    root_nonlinear_starts = root_nonlinear_starts,
+    root_rrate_bounds = root_rrate_bounds,
+    root_half_saturation_multiple_bounds = root_half_saturation_multiple_bounds,
+    root_steepness_bounds = root_steepness_bounds,
+    root_optimizer_maxit = root_optimizer_maxit
   )
   point <- curve_selection$selected
   draws <- econ_seq_block_bootstrap_root(
@@ -3372,15 +3674,38 @@ fit_parsimonious_total_media_root <- function(data,
     root_rrate_grid = root_rrate_grid,
     root_anchor_saturation_grid = root_anchor_saturation_grid,
     root_curve_min_delta_aicc = root_curve_min_delta_aicc,
+    root_effect_sign = root_effect_sign,
+    root_nonlinear_starts = root_nonlinear_starts,
+    root_rrate_bounds = root_rrate_bounds,
+    root_half_saturation_multiple_bounds = root_half_saturation_multiple_bounds,
+    root_steepness_bounds = root_steepness_bounds,
+    root_optimizer_maxit = root_optimizer_maxit,
     reselect_curve = TRUE,
     reps = root_bootstrap_reps,
     block_length = root_block_length,
     seed = seed
   )
   usable_draws <- draws[fit_ok == TRUE & is.finite(root_effectiveness), root_effectiveness]
+  usable_bootstrap <- draws[fit_ok == TRUE]
+  nonlinear_bootstrap <- usable_bootstrap[
+    root_curve_type == "adstock_hill" & is.finite(root_rrate) &
+      is.finite(root_half_saturation) & is.finite(root_steepness)
+  ]
+  root_curve_quantile <- function(column, probability) {
+    values <- nonlinear_bootstrap[[column]]
+    values <- values[is.finite(values)]
+    if (!length(values)) return(NA_real_)
+    as.numeric(stats::quantile(values, probability, names = FALSE, na.rm = TRUE))
+  }
+  nonlinear_selection_rate <- if (nrow(usable_bootstrap)) {
+    mean(usable_bootstrap$root_curve_type == "adstock_hill", na.rm = TRUE)
+  } else NA_real_
   root_sd <- if (length(usable_draws) >= 10L) stats::sd(usable_draws) else point$root_effectiveness_analytic_sd[1]
   if (!is.finite(root_sd) || root_sd <= 0) root_sd <- max(abs(point$root_effectiveness[1]) * 0.50, 1e-8)
   root_status <- econ_seq_classify_effectiveness(point$root_effectiveness[1], root_sd)
+  nonlinear_diagnostics <- data.table::as.data.table(curve_selection$nonlinear_diagnostics %||% data.table::data.table())
+  fallback_recommended <- nrow(nonlinear_diagnostics) && isTRUE(nonlinear_diagnostics$fallback_recommended[1])
+  fallback_reason <- if (nrow(nonlinear_diagnostics)) nonlinear_diagnostics$fallback_reason[1] else ""
   root_id <- econ_seq_layer_identification_diagnostics(
     data = root_model_data,
     spend_map = data.table::data.table(variable = "total_paid_media", spend_col = "root_total_paid_spend__"),
@@ -3398,6 +3723,16 @@ fit_parsimonious_total_media_root <- function(data,
     root_effectiveness_q05 = if (length(usable_draws)) as.numeric(stats::quantile(usable_draws, 0.05, na.rm = TRUE)) else NA_real_,
     root_effectiveness_q50 = if (length(usable_draws)) as.numeric(stats::quantile(usable_draws, 0.50, na.rm = TRUE)) else NA_real_,
     root_effectiveness_q95 = if (length(usable_draws)) as.numeric(stats::quantile(usable_draws, 0.95, na.rm = TRUE)) else NA_real_,
+    root_nonlinear_selection_rate = nonlinear_selection_rate,
+    root_rrate_q05 = root_curve_quantile("root_rrate", 0.05),
+    root_rrate_q50 = root_curve_quantile("root_rrate", 0.50),
+    root_rrate_q95 = root_curve_quantile("root_rrate", 0.95),
+    root_half_saturation_q05 = root_curve_quantile("root_half_saturation", 0.05),
+    root_half_saturation_q50 = root_curve_quantile("root_half_saturation", 0.50),
+    root_half_saturation_q95 = root_curve_quantile("root_half_saturation", 0.95),
+    root_steepness_q05 = root_curve_quantile("root_steepness", 0.05),
+    root_steepness_q50 = root_curve_quantile("root_steepness", 0.50),
+    root_steepness_q95 = root_curve_quantile("root_steepness", 0.95),
     root_bootstrap_requested = as.integer(root_bootstrap_reps),
     root_bootstrap_successful = length(usable_draws),
     root_block_length = as.integer(root_block_length),
@@ -3406,6 +3741,9 @@ fit_parsimonious_total_media_root <- function(data,
     root_bootstrap_original_media_timeline_preserved = TRUE,
     root_bootstrap_curve_selection_repeated = TRUE,
     root_effectiveness_status = root_status,
+    root_bayesian_fallback_recommended = fallback_recommended,
+    root_bayesian_fallback_reason = fallback_reason,
+    root_bayesian_fallback_policy = "invoke_only_for_flat_unstable_or_bound_hitting_nonlinear_likelihood",
     root_scope = root_scope,
     root_identification_recommendation = root_id$overall$identification_recommendation[1],
     root_prior_width_multiplier = root_id$overall$prior_width_multiplier[1],
@@ -3438,6 +3776,8 @@ fit_parsimonious_total_media_root <- function(data,
       note = "National aggregation is the default sequential root."
     ),
     root_curve_candidates = curve_selection$candidates[],
+    root_nonlinear_optimizer_runs = curve_selection$optimizer_runs[],
+    root_nonlinear_diagnostics = nonlinear_diagnostics[],
     root_identification = root_id$by_variable[],
     root_identification_overall = root_id$overall[],
     mix_diagnostics = mix$summary[],
@@ -3785,6 +4125,511 @@ econ_seq_parent_effectiveness_draws <- function(parent_fit,
     warning("Parent response-curve ROI differed from contribution/spend; sequential transfer uses the recomputed aggregate ratio.", call. = FALSE)
   }
   list(draws = usable[], summary = summary[], roi_aggregation_audit = audit[])
+}
+
+econ_seq_child_variables_for_parent <- function(relation, parent_node_value) {
+  relation <- data.table::as.data.table(relation)
+  if (!all(c("parent_node", "child_variable") %in% names(relation))) return(character())
+  unique(as.character(relation$child_variable[as.character(relation$parent_node) == as.character(parent_node_value)[1]]))
+}
+
+econ_seq_empty_collective_response_reconciliation <- function() {
+  list(
+    scenarios = data.table::data.table(
+      reconciliation_id = character(),
+      parent_response = numeric(),
+      parent_response_sd = numeric()
+    ),
+    members = data.table::data.table(
+      reconciliation_id = character(),
+      variable = character(),
+      time_value = character()
+    ),
+    audit = data.table::data.table()
+  )
+}
+
+# Build soft collective saturation evidence from observed training-period
+# mixes. It constrains the sum of child responses and never makes a child
+# saturation parameter an independent copy of its parent.
+econ_seq_collective_saturation_reconciliation_input <- function(parent_fit,
+                                                                 parent_layer,
+                                                                 child_layer,
+                                                                 time_col,
+                                                                 training_times = NULL,
+                                                                 max_draws = 200L,
+                                                                 seed = 123L,
+                                                                 data_reuse_inflation = 1.5,
+                                                                 child_heterogeneity_relative_sd = 0.50,
+                                                                 mix_transfer_scale = 1,
+                                                                 approximation_relative_sd = 0.20,
+                                                                 minimum_relative_sd = 0.50) {
+  empty <- function() list(scenarios = data.table::data.table(), members = data.table::data.table(), audit = data.table::data.table())
+  parent_map <- data.table::as.data.table(parent_layer$variable_mapping %||% data.table::data.table())
+  child_map <- data.table::as.data.table(child_layer$variable_mapping %||% data.table::data.table())
+  if (!all(c("variable", "generated_variable") %in% names(parent_map)) || !all(c("variable", "generated_variable") %in% names(child_map))) return(empty())
+  parent_map <- unique(parent_map[, .(variable, parent_node = generated_variable)], by = "variable")
+  child_map <- child_map[, .(variable, child_variable = generated_variable)]
+  relation <- unique(merge(child_map, parent_map, by = "variable", all = FALSE, sort = FALSE)[child_variable != parent_node], by = c("parent_node", "child_variable"))
+  if (!nrow(relation)) return(empty())
+  child_data <- econ_seq_input_table(child_layer$data, "child_layer$data")
+  if (!is.null(training_times)) child_data <- child_data[get(time_col) %in% training_times]
+  parent_data <- data.table::as.data.table(parent_fit$data %||% data.table::data.table())
+  if (!is.null(training_times)) parent_data <- parent_data[get(time_col) %in% training_times]
+  if (!nrow(child_data) || !nrow(parent_data) || !(time_col %in% names(parent_data))) return(empty())
+  child_mix <- econ_seq_mix_diagnostics(child_data, data.table::as.data.table(child_layer$spend_map), time_col = time_col)$summary
+  mix_churn <- if (nrow(child_mix)) as.numeric(child_mix$media_mix_churn[1]) else 0
+  if (!is.finite(mix_churn) || mix_churn < 0) mix_churn <- 0
+  draw_params <- extract_posterior_draw_params_hier_mmm(parent_fit, max_draws = max_draws, seed = seed)$params
+  if (!length(draw_params)) return(empty())
+  scenarios <- list(); members <- list(); audit <- list()
+  scenario_labels <- c("low", "lower_mid", "median", "upper_mid", "high")
+  for (parent_node in unique(relation$parent_node)) {
+    parent_node_value <- parent_node
+    if (!(parent_node %in% names(parent_data))) next
+    support <- parent_data[, .(parent_support = sum(pmax(as.numeric(get(parent_node)), 0), na.rm = TRUE)), by = time_col]
+    support <- support[is.finite(parent_support)]
+    if (nrow(support) < 3L) next
+    targets <- stats::quantile(support$parent_support, c(.10, .25, .50, .75, .90), na.rm = TRUE, names = FALSE)
+    selected <- support[unique(vapply(targets, function(x) which.min(abs(support$parent_support - x)), integer(1)))]
+    draw_totals <- data.table::rbindlist(lapply(draw_params, function(pm) {
+      draw_id <- as.character(pm$draw_id %||% "")
+      pm$draw_id <- NULL
+      x <- tryCatch(variable_contribution_rows_hier_mmm(parent_fit, parent_node, posterior_params = pm), error = function(e) NULL)
+      if (is.null(x)) return(data.table::data.table())
+      data.table::data.table(time_value = as.character(parent_fit$data[[time_col]]), contribution = as.numeric(x))[
+        , .(parent_response_draw = sum(contribution, na.rm = TRUE)), by = time_value][, parent_draw := draw_id][]
+    }), fill = TRUE)
+    if (!nrow(draw_totals)) next
+    parent_curve <- econ_seq_parent_rrate_summary(parent_fit, parent_node, max_draws = max_draws)
+    parent_anchor <- if (nrow(parent_curve)) parent_curve$anchor_saturation_prior_mean[1] else NA_real_
+    parent_anchor_sd <- if (nrow(parent_curve)) parent_curve$anchor_saturation_prior_sd[1] else NA_real_
+    selected[, time_key__ := as.character(get(time_col))]
+    draw_summary <- draw_totals[selected, on = c("time_value" = "time_key__"), nomatch = 0L][
+      , .(parent_response = mean(parent_response_draw), parent_posterior_sd_component = stats::sd(parent_response_draw), parent_draw_n = data.table::uniqueN(parent_draw)), by = time_value
+    ]
+    if (!nrow(draw_summary)) next
+    child_variables <- econ_seq_child_variables_for_parent(relation, parent_node_value)
+    for (ii in seq_len(nrow(draw_summary))) {
+      response <- draw_summary$parent_response[ii]
+      parent_sd <- draw_summary$parent_posterior_sd_component[ii]
+      if (!is.finite(parent_sd) || parent_sd <= 0) parent_sd <- max(abs(response) * .25, 1e-6)
+      components <- c(
+        parent_posterior = parent_sd,
+        data_reuse = parent_sd * max(1, data_reuse_inflation),
+        heterogeneity = abs(response) * max(0, child_heterogeneity_relative_sd),
+        mix_instability = abs(response) * mix_churn * max(0, mix_transfer_scale),
+        approximation = abs(response) * max(0, approximation_relative_sd)
+      )
+      response_sd <- max(sqrt(sum(components^2)), abs(response) * max(0, minimum_relative_sd), 1e-6)
+      sid <- paste0("collective_sat_", gsub("[^A-Za-z0-9]+", "_", parent_node), "_", ii)
+      scenarios[[length(scenarios) + 1L]] <- data.table::data.table(
+        reconciliation_id = sid, parent_node = parent_node,
+        scenario_label = paste0("observed_support_", scenario_labels[min(ii, length(scenario_labels))]),
+        parent_response = response, parent_response_sd = response_sd,
+        parent_posterior_sd_component = components[["parent_posterior"]],
+        data_reuse_sd_component = components[["data_reuse"]],
+        heterogeneity_sd_component = components[["heterogeneity"]],
+        mix_instability_sd_component = components[["mix_instability"]],
+        approximation_sd_component = components[["approximation"]],
+        parent_draw_n = draw_summary$parent_draw_n[ii],
+        parent_anchor_saturation = parent_anchor,
+        parent_anchor_saturation_sd = parent_anchor_sd
+      )
+      members[[length(members) + 1L]] <- data.table::data.table(reconciliation_id = sid, variable = child_variables, time_value = draw_summary$time_value[ii])
+    }
+    audit[[length(audit) + 1L]] <- data.table::data.table(parent_node = parent_node, child_n = length(child_variables), selected_scenario_n = nrow(draw_summary), media_mix_churn = mix_churn, reconciliation_mode = "soft_collective_observed_training_mix")
+  }
+  list(scenarios = data.table::rbindlist(scenarios, fill = TRUE), members = data.table::rbindlist(members, fill = TRUE), audit = data.table::rbindlist(audit, fill = TRUE))
+}
+
+econ_seq_collective_saturation_reconciliation_audit <- function(child_fit, reconciliation_input) {
+  empty <- function() list(scenarios = data.table::data.table(), children = data.table::data.table())
+  if (is.null(reconciliation_input) || !nrow(reconciliation_input$scenarios %||% data.table::data.table())) return(empty())
+  scenarios <- data.table::as.data.table(reconciliation_input$scenarios)
+  members <- data.table::as.data.table(reconciliation_input$members)
+  data <- data.table::as.data.table(child_fit$data)
+  time_col <- child_fit$time_col
+  pm <- extract_pm_from_fit_obj_hier_mmm(child_fit)
+  lookup <- data.table::as.data.table(child_fit$variable_lookup)
+  curve_draw_summary <- function(parameter, curve_param_idx, fallback) {
+    mat <- tryCatch(as.matrix(child_fit$fit$draws(parameter, format = "matrix")), error = function(e) NULL)
+    col <- paste0(parameter, "[", curve_param_idx, "]")
+    x <- if (!is.null(mat) && col %in% colnames(mat)) as.numeric(mat[, col]) else numeric()
+    if (!length(x) || !any(is.finite(x))) return(c(q05 = fallback, q50 = fallback, q95 = fallback))
+    as.numeric(stats::quantile(x[is.finite(x)], c(.05, .50, .95), names = FALSE))
+  }
+  branch <- data.table::as.data.table(child_fit$sequential_branch_decisions %||% data.table::data.table())
+  out <- lapply(seq_len(nrow(scenarios)), function(ii) {
+    sc <- scenarios[ii]
+    mm <- members[reconciliation_id == sc$reconciliation_id]
+    children <- data.table::rbindlist(lapply(mm$variable, function(v) {
+      x <- variable_contribution_rows_hier_mmm(child_fit, v)
+      idx <- which(as.character(data[[time_col]]) == as.character(mm[variable == v, time_value][1]))
+      k <- lookup[variable == v, curve_param_idx][1]
+      j <- lookup[variable == v, variable_idx][1]
+      rr <- curve_draw_summary("rrate", k, pm$rrate[j])
+      cv <- curve_draw_summary("cvalue", k, pm$cvalue[j])
+      dv <- curve_draw_summary("dvalue", k, pm$dvalue[j])
+      decision <- if (nrow(branch) && v %in% branch$variable) branch[variable == v, branch_decision][1] else "fit"
+      evidence_class <- if (decision %in% c("strong_parent_shrinkage", "parent_retained", "parent_remainder")) {
+        "identified_mainly_through_collective_constraint_or_prior"
+      } else {
+        "child_data_and_collective_constraint"
+      }
+      data.table::data.table(
+        variable = v,
+        contribution = sum(x[idx], na.rm = TRUE),
+        posterior_rrate_q05 = rr[1], posterior_rrate_q50 = rr[2], posterior_rrate_q95 = rr[3],
+        posterior_cvalue_q05 = cv[1], posterior_cvalue_q50 = cv[2], posterior_cvalue_q95 = cv[3],
+        posterior_dvalue_q05 = dv[1], posterior_dvalue_q50 = dv[2], posterior_dvalue_q95 = dv[3],
+        saturation_evidence_class = evidence_class
+      )
+    }))
+    list(
+      scenario = data.table::data.table(reconciliation_id = sc$reconciliation_id, parent_node = sc$parent_node, scenario_label = sc$scenario_label, parent_response = sc$parent_response, parent_response_sd = sc$parent_response_sd, parent_anchor_saturation = sc$parent_anchor_saturation %||% NA_real_, parent_anchor_saturation_sd = sc$parent_anchor_saturation_sd %||% NA_real_, aggregate_child_response = sum(children$contribution), reconciliation_error = sum(children$contribution) - sc$parent_response, reconciliation_z = (sum(children$contribution) - sc$parent_response) / sc$parent_response_sd),
+      children = children[, `:=`(reconciliation_id = sc$reconciliation_id, parent_node = sc$parent_node)]
+    )
+  })
+  list(scenarios = data.table::rbindlist(lapply(out, `[[`, "scenario"), fill = TRUE), children = data.table::rbindlist(lapply(out, `[[`, "children"), fill = TRUE))
+}
+
+econ_seq_parent_shape_response_draw <- function(parent_fit, variable, time_value, multiplier, posterior_params) {
+  tmp <- parent_fit
+  tmp$data <- data.table::copy(data.table::as.data.table(parent_fit$data))
+  idx <- which(as.character(tmp$data[[parent_fit$time_col]]) == as.character(time_value))
+  if (!length(idx) || !(variable %in% names(tmp$data))) return(NA_real_)
+  # Proportionally perturb the complete pre-scenario history. Perturbing only
+  # the target row would change current pulse versus carryover and confound the
+  # shape target with adstock dynamics.
+  time_levels <- unique(as.character(tmp$data[[parent_fit$time_col]]))
+  target_period <- match(as.character(time_value), time_levels)
+  history_idx <- which(match(as.character(tmp$data[[parent_fit$time_col]]), time_levels) <= target_period)
+  tmp$data[history_idx, (variable) := pmax(as.numeric(get(variable)) * multiplier, 0)]
+  response <- tryCatch(variable_contribution_rows_hier_mmm(tmp, variable, posterior_params = posterior_params), error = function(e) NULL)
+  if (is.null(response)) return(NA_real_)
+  sum(response[idx], na.rm = TRUE)
+}
+
+# Construct parent/child shape evidence at several support multipliers while
+# retaining each observed sibling mix and its fixed row-level context. The
+# target is the parent response shape relative to the same mix at multiplier
+# one. Stan receives the equivalent cross-multiplied residual in response units
+# so no near-zero ratio is ever evaluated in the model.
+econ_seq_collective_saturation_shape_reconciliation_input <- function(parent_fit,
+                                                                       parent_layer,
+                                                                       child_layer,
+                                                                       time_col,
+                                                                       training_times = NULL,
+                                                                       max_draws = 200L,
+                                                                       seed = 123L,
+                                                                       support_multipliers = c(0.50, 1.50, 2.00),
+                                                                       data_reuse_inflation = 1.5,
+                                                                       child_heterogeneity_relative_sd = 0.50,
+                                                                       mix_transfer_scale = 1,
+                                                                       approximation_relative_sd = 0.15,
+                                                                       sample_curve_parameters = c("always", "never")) {
+  sample_curve_parameters <- match.arg(sample_curve_parameters)
+  empty <- function() list(scenarios = data.table::data.table(), members = data.table::data.table(), parent_shape_cov = matrix(0, 0, 0), audit = data.table::data.table(), mix_selection = data.table::data.table())
+  parent_map <- data.table::as.data.table(parent_layer$variable_mapping %||% data.table::data.table())
+  child_map <- data.table::as.data.table(child_layer$variable_mapping %||% data.table::data.table())
+  if (!all(c("variable", "generated_variable") %in% names(parent_map)) || !all(c("variable", "generated_variable") %in% names(child_map))) return(empty())
+  relation <- merge(child_map[, .(variable, child_variable = generated_variable)], parent_map[, .(variable, parent_node = generated_variable)], by = "variable", all = FALSE, sort = FALSE)
+  relation <- unique(relation[child_variable != parent_node], by = c("parent_node", "child_variable"))
+  if (!nrow(relation)) return(empty())
+  if (identical(sample_curve_parameters, "never")) {
+    return(list(
+      scenarios = data.table::data.table(),
+      members = data.table::data.table(),
+      parent_shape_cov = matrix(0, 0, 0),
+      audit = unique(relation[, .(
+        parent_node,
+        reconciliation_mode = "excluded_fixed_curve_parameters",
+        aggregate_shape_constraint_retained = FALSE,
+        child_allocation_status = "not_applicable_fixed_curve"
+      )], by = "parent_node"),
+      mix_selection = data.table::data.table()
+    ))
+  }
+  parent_data <- data.table::as.data.table(parent_fit$data)
+  child_data <- econ_seq_input_table(child_layer$data, "child_layer$data")
+  if (!is.null(training_times)) {
+    parent_data <- parent_data[get(time_col) %in% training_times]
+    child_data <- child_data[get(time_col) %in% training_times]
+  }
+  if (!nrow(parent_data) || !nrow(child_data)) return(empty())
+  multipliers <- sort(unique(as.numeric(support_multipliers)))
+  multipliers <- multipliers[is.finite(multipliers) & multipliers > 0 & abs(multipliers - 1) > 1e-8]
+  if (!length(multipliers)) return(empty())
+  draw_params <- extract_posterior_draw_params_hier_mmm(parent_fit, max_draws = max_draws, seed = seed)$params
+  if (length(draw_params) < 10L) return(empty())
+  scenarios <- list(); members <- list(); audit <- list(); mix_selection <- list()
+  for (parent_node in unique(relation$parent_node)) {
+    parent_node_value <- parent_node
+    if (!(parent_node %in% names(parent_data))) next
+    child_variables <- econ_seq_child_variables_for_parent(relation, parent_node_value)
+    child_variables <- child_variables[child_variables %in% names(child_data)]
+    child_meta <- data.table::as.data.table(child_layer$metadata)[variable %in% child_variables]
+    rf_child <- child_meta[role %in% c("reach_frequency", "organic_reach_frequency"), variable]
+    if (length(rf_child)) {
+      audit[[length(audit) + 1L]] <- data.table::data.table(parent_node = parent_node, reconciliation_mode = "excluded_fixed_or_reach_frequency_curve", excluded_variable_n = length(rf_child), excluded_variables = paste(rf_child, collapse = " | "))
+      next
+    }
+    if (length(child_variables) < 2L) next
+    mix_panel <- child_data[, lapply(.SD, function(x) sum(pmax(as.numeric(x), 0), na.rm = TRUE)), by = time_col, .SDcols = child_variables]
+    data.table::setnames(mix_panel, time_col, "time_value__")
+    mix_mat <- as.matrix(mix_panel[, ..child_variables])
+    total_support <- rowSums(mix_mat)
+    keep_mix <- is.finite(total_support) & total_support > 1e-8
+    mix_panel <- mix_panel[keep_mix]; mix_mat <- mix_mat[keep_mix, , drop = FALSE]; total_support <- total_support[keep_mix]
+    if (nrow(mix_panel) < 3L) next
+    shares <- mix_mat / pmax(total_support, 1e-8)
+    support_rank <- rank(total_support, ties.method = "average") / (length(total_support) + 1)
+    distance <- as.matrix(stats::dist(shares, method = "euclidean"))
+    selected_idx <- integer()
+    targets <- c(.50, .25, .75)
+    for (target in targets) {
+      candidates <- setdiff(seq_len(nrow(mix_panel)), selected_idx)
+      support_score <- 1 - abs(support_rank[candidates] - target)
+      diversity_score <- if (!length(selected_idx)) rep(0, length(candidates)) else apply(distance[candidates, selected_idx, drop = FALSE], 1, min)
+      selected_idx <- c(selected_idx, candidates[which.max(.35 * support_score + .65 * diversity_score)])
+    }
+    mix_rows <- mix_panel[selected_idx]
+    pairwise_distance <- if (length(selected_idx) > 1L) mean(distance[selected_idx, selected_idx][upper.tri(distance[selected_idx, selected_idx])]) else 0
+    mix_churn <- if (nrow(shares) > 1L) mean(sqrt(rowSums((shares[-1, , drop = FALSE] - shares[-nrow(shares), , drop = FALSE])^2)), na.rm = TRUE) else 0
+    if (!is.finite(mix_churn)) mix_churn <- 0
+    sufficient_mix_variation <- is.finite(pairwise_distance) && pairwise_distance >= .05
+    mix_selection[[length(mix_selection) + 1L]] <- data.table::data.table(parent_node = parent_node, mix_id = paste0(parent_node, "_mix", seq_along(selected_idx)), time_value = mix_rows$time_value__, total_support = total_support[selected_idx], sibling_shares = vapply(seq_along(selected_idx), function(ii) paste(paste0(child_variables, "=", format(round(shares[selected_idx[ii], ], 4), nsmall = 4)), collapse = " | "), character(1)), pairwise_mix_distance = pairwise_distance, sufficient_mix_variation = sufficient_mix_variation)
+    parent_support <- parent_data[, .(support = sum(pmax(as.numeric(get(parent_node)), 0), na.rm = TRUE)), by = time_col]
+    for (mm in seq_len(nrow(mix_rows))) {
+      time_value <- mix_rows$time_value__[mm]
+      draw_response <- sapply(draw_params, function(pm) {
+        draw_id <- pm$draw_id; pm$draw_id <- NULL
+        ref <- econ_seq_parent_shape_response_draw(parent_fit, parent_node, time_value, 1, pm)
+        vals <- vapply(multipliers, function(mult) {
+          val <- econ_seq_parent_shape_response_draw(parent_fit, parent_node, time_value, mult, pm)
+          if (!is.finite(ref) || ref <= 1e-6 || !is.finite(val)) NA_real_ else val / ref
+        }, numeric(1))
+        c(reference_response = ref, vals)
+      })
+      if (is.null(dim(draw_response))) draw_response <- matrix(draw_response, ncol = 1L)
+      reference_draws <- as.numeric(draw_response[1, ])
+      draw_ratio <- draw_response[-1, , drop = FALSE]
+      for (ss in seq_along(multipliers)) {
+        raw_ratios <- as.numeric(draw_ratio[ss, ])
+        valid <- is.finite(raw_ratios) & is.finite(reference_draws) & reference_draws > 1e-6
+        ratios <- raw_ratios[valid]
+        references <- reference_draws[valid]
+        # A near-zero parent response cannot identify a stable shape target.
+        if (length(ratios) < 10L || median(references) <= 1e-6) next
+        sid <- paste0("collective_shape_", gsub("[^A-Za-z0-9]+", "_", parent_node), "_mix", mm, "_x", format(multipliers[ss], trim = TRUE))
+        scenarios[[length(scenarios) + 1L]] <- data.table::data.table(
+          reconciliation_id = sid, parent_node = parent_node,
+          mix_id = paste0(parent_node, "_mix", mm), support_multiplier = multipliers[ss],
+          parent_shape = mean(ratios), parent_shape_draw_n = length(ratios),
+          parent_reference_response = mean(references),
+          child_allocation_usable = sufficient_mix_variation,
+          collective_constraint_scope = "aggregate_shape_only",
+          parent_shape_draws__ = list(raw_ratios),
+          parent_reference_draws__ = list(reference_draws)
+        )
+        members[[length(members) + 1L]] <- data.table::data.table(reconciliation_id = sid, variable = child_variables, time_value = time_value, multiplier = multipliers[ss])
+      }
+    }
+    audit[[length(audit) + 1L]] <- data.table::data.table(
+      parent_node = parent_node, observed_mix_n = nrow(mix_rows), support_multiplier_n = length(multipliers),
+      media_mix_churn = mix_churn, pairwise_mix_distance = pairwise_distance,
+      sufficient_mix_variation = sufficient_mix_variation,
+      aggregate_shape_constraint_retained = TRUE,
+      child_allocation_status = if (sufficient_mix_variation) "allocation_supported" else "unresolved_allocation",
+      reconciliation_mode = "shape_ratio_observed_mix_scaled_support"
+    )
+  }
+  scenario_dt <- data.table::rbindlist(scenarios, fill = TRUE)
+  member_dt <- data.table::rbindlist(members, fill = TRUE)
+  if (!nrow(scenario_dt)) return(empty())
+  # Parent draws are common within a mix, so preserve their covariance. Extra
+  # sequential uncertainty enters only the diagonal as softening, not as fake
+  # independent evidence.
+  draw_list <- scenario_dt$parent_shape_draws__
+  reference_list <- scenario_dt$parent_reference_draws__
+  draw_matrix <- do.call(cbind, draw_list)
+  reference_matrix <- do.call(cbind, reference_list)
+  complete_draws <- stats::complete.cases(draw_matrix) & stats::complete.cases(reference_matrix) &
+    apply(reference_matrix > 1e-6, 1L, all)
+  draw_matrix <- draw_matrix[complete_draws, , drop = FALSE]
+  if (nrow(draw_matrix) < 5L) return(empty())
+  cov_shape <- stats::cov(draw_matrix)
+  if (is.null(dim(cov_shape))) cov_shape <- matrix(cov_shape, 1L, 1L)
+  # Reuse inflates the full parent covariance, retaining its within-parent
+  # correlation. Heterogeneity/mix/approximation are independent softening
+  # components added after that covariance inflation.
+  cov_shape <- cov_shape * max(1, data_reuse_inflation)^2
+  mix_churn_by_parent <- data.table::rbindlist(audit, fill = TRUE)[match(scenario_dt$parent_node, parent_node), media_mix_churn]
+  mix_churn_by_parent[!is.finite(mix_churn_by_parent)] <- 0
+  # Convert ratio uncertainty into the response-unit residual used by Stan.
+  # This preserves the shared-draw covariance without treating scenarios as
+  # independent evidence.
+  response_scale <- pmax(abs(scenario_dt$parent_reference_response), 1e-6)
+  cov <- diag(response_scale, nrow(cov_shape)) %*% cov_shape %*% diag(response_scale, nrow(cov_shape))
+  extra_sd <- response_scale * sqrt(
+    max(0, child_heterogeneity_relative_sd)^2 +
+      (pmax(mix_churn_by_parent, 0) * max(0, mix_transfer_scale))^2 +
+      max(0, approximation_relative_sd)^2
+  )
+  cov <- cov + diag(pmax(extra_sd, .02)^2, nrow(cov))
+  scenario_dt[, c("parent_shape_draws__", "parent_reference_draws__") := NULL]
+  list(scenarios = scenario_dt[], members = member_dt[], parent_shape_cov = cov,
+       audit = data.table::rbindlist(audit, fill = TRUE), mix_selection = data.table::rbindlist(mix_selection, fill = TRUE))
+}
+
+econ_seq_curvature_share <- function(child_deviation, aggregate_deviation, tolerance = 1e-8) {
+  child_deviation <- as.numeric(child_deviation)
+  aggregate_deviation <- as.numeric(aggregate_deviation)[1]
+  if (!is.finite(aggregate_deviation) || abs(aggregate_deviation) <= tolerance) {
+    return(rep(NA_real_, length(child_deviation)))
+  }
+  child_deviation / aggregate_deviation
+}
+
+econ_seq_collective_saturation_shape_reconciliation_audit <- function(child_fit,
+                                                                       reconciliation_input,
+                                                                       max_draws = 200L,
+                                                                       seed = 123L) {
+  empty <- function() list(scenarios = data.table::data.table(), children = data.table::data.table())
+  if (is.null(reconciliation_input) || !nrow(reconciliation_input$scenarios %||% data.table::data.table())) return(empty())
+  scenarios <- data.table::as.data.table(reconciliation_input$scenarios)
+  members <- data.table::as.data.table(reconciliation_input$members)
+  fit_data <- data.table::as.data.table(child_fit$data)
+  time_col <- child_fit$time_col
+  holdout_row <- if ("is_holdout__" %in% names(fit_data)) as.logical(fit_data$is_holdout__) else rep(FALSE, nrow(fit_data))
+  holdout_row[is.na(holdout_row)] <- FALSE
+  draw_params <- extract_posterior_draw_params_hier_mmm(child_fit, max_draws = max_draws, seed = seed)$params
+  if (!length(draw_params)) return(empty())
+  results <- lapply(seq_len(nrow(scenarios)), function(ii) {
+    sc <- scenarios[ii]
+    mm <- members[reconciliation_id == sc$reconciliation_id]
+    if (!nrow(mm)) return(list(aggregate = data.table::data.table(), children = data.table::data.table()))
+    per_draw <- lapply(draw_params, function(pm) {
+      draw_id <- as.character(pm$draw_id %||% ""); pm$draw_id <- NULL
+      child_vals <- lapply(seq_len(nrow(mm)), function(rr) {
+        v <- mm$variable[rr]
+        idx <- which(as.character(fit_data[[time_col]]) == as.character(mm$time_value[rr]) & !holdout_row)
+        time_levels <- unique(as.character(fit_data[[time_col]]))
+        target_period <- match(as.character(mm$time_value[rr]), time_levels)
+        history_idx <- which(match(as.character(fit_data[[time_col]]), time_levels) <= target_period)
+        tmp <- child_fit; tmp$data <- data.table::copy(fit_data)
+        # Same complete-history perturbation as the Stan shape likelihood.
+        tmp$data[history_idx, (v) := pmax(as.numeric(get(v)) * as.numeric(mm$multiplier[rr]), 0)]
+        scenario_x <- variable_contribution_rows_hier_mmm(tmp, v, posterior_params = pm)
+        reference_x <- variable_contribution_rows_hier_mmm(child_fit, v, posterior_params = pm)
+        data.table::data.table(variable = v, scenario_contribution = sum(scenario_x[idx], na.rm = TRUE), reference_contribution = sum(reference_x[idx], na.rm = TRUE))
+      })
+      child_dt <- data.table::rbindlist(child_vals)
+      reference <- sum(child_dt$reference_contribution)
+      scenario <- sum(child_dt$scenario_contribution)
+      child_dt[, `:=`(
+        reconciliation_id = sc$reconciliation_id, parent_node = sc$parent_node,
+        mix_id = sc$mix_id, support_multiplier = sc$support_multiplier, draw = draw_id,
+        nonlinear_deviation = scenario_contribution - as.numeric(sc$support_multiplier) * reference_contribution,
+        aggregate_nonlinear_deviation = scenario - as.numeric(sc$support_multiplier) * reference,
+        nonlinear_deviation_share = econ_seq_curvature_share(
+          scenario_contribution - as.numeric(sc$support_multiplier) * reference_contribution,
+          scenario - as.numeric(sc$support_multiplier) * reference
+        )
+      )]
+      list(
+        aggregate = data.table::data.table(reconciliation_id = sc$reconciliation_id, draw = draw_id,
+          child_shape = if (is.finite(reference) && abs(reference) > 1e-8) scenario / reference else NA_real_,
+          aggregate_child_response = scenario, aggregate_reference_response = reference),
+        children = child_dt
+      )
+    })
+    list(aggregate = data.table::rbindlist(lapply(per_draw, `[[`, "aggregate"), fill = TRUE),
+         children = data.table::rbindlist(lapply(per_draw, `[[`, "children"), fill = TRUE))
+  })
+  draws <- data.table::rbindlist(lapply(results, `[[`, "aggregate"), fill = TRUE)
+  child_draws <- data.table::rbindlist(lapply(results, `[[`, "children"), fill = TRUE)
+  if (!nrow(draws)) return(empty())
+  summary <- draws[, .(
+    aggregate_child_response_q05 = stats::quantile(aggregate_child_response, .05, na.rm = TRUE),
+    aggregate_child_response_q50 = stats::quantile(aggregate_child_response, .50, na.rm = TRUE),
+    aggregate_child_response_q95 = stats::quantile(aggregate_child_response, .95, na.rm = TRUE),
+    normalized_aggregate_shape_q05 = stats::quantile(child_shape, .05, na.rm = TRUE),
+    normalized_aggregate_shape_q50 = stats::quantile(child_shape, .50, na.rm = TRUE),
+    normalized_aggregate_shape_q95 = stats::quantile(child_shape, .95, na.rm = TRUE),
+    posterior_draw_n = data.table::uniqueN(draw)
+  ), by = reconciliation_id]
+  summary[scenarios, on = "reconciliation_id", `:=`(
+    parent_node = i.parent_node, mix_id = i.mix_id, support_multiplier = i.support_multiplier,
+    parent_shape = i.parent_shape
+  )]
+  # Parent covariance is supplied separately; keep its diagonal auditable.
+  summary[, parent_shape_sd := sqrt(diag(reconciliation_input$parent_shape_cov)[match(reconciliation_id, scenarios$reconciliation_id)])]
+  summary[, `:=`(
+    parent_vs_child_shape_error = normalized_aggregate_shape_q50 - parent_shape,
+    absolute_shape_error = abs(normalized_aggregate_shape_q50 - parent_shape),
+    relative_shape_error = abs(normalized_aggregate_shape_q50 - parent_shape) / pmax(abs(parent_shape), 1e-8),
+    reconciliation_covered = parent_shape >= normalized_aggregate_shape_q05 & parent_shape <= normalized_aggregate_shape_q95
+  )]
+  child_summary <- child_draws[, .(
+    reference_contribution_q05 = stats::quantile(reference_contribution, .05, na.rm = TRUE),
+    reference_contribution_q50 = stats::quantile(reference_contribution, .50, na.rm = TRUE),
+    reference_contribution_q95 = stats::quantile(reference_contribution, .95, na.rm = TRUE),
+    scenario_contribution_q05 = stats::quantile(scenario_contribution, .05, na.rm = TRUE),
+    scenario_contribution_q50 = stats::quantile(scenario_contribution, .50, na.rm = TRUE),
+    scenario_contribution_q95 = stats::quantile(scenario_contribution, .95, na.rm = TRUE),
+    nonlinear_deviation_q05 = stats::quantile(nonlinear_deviation, .05, na.rm = TRUE),
+    nonlinear_deviation_q50 = stats::quantile(nonlinear_deviation, .50, na.rm = TRUE),
+    nonlinear_deviation_q95 = stats::quantile(nonlinear_deviation, .95, na.rm = TRUE),
+    aggregate_nonlinear_curvature_share_q05 = stats::quantile(nonlinear_deviation_share, .05, na.rm = TRUE),
+    aggregate_nonlinear_curvature_share_q50 = stats::quantile(nonlinear_deviation_share, .50, na.rm = TRUE),
+    aggregate_nonlinear_curvature_share_q95 = stats::quantile(nonlinear_deviation_share, .95, na.rm = TRUE)
+  ), by = .(reconciliation_id, parent_node, mix_id, support_multiplier, variable)]
+  prior_audit <- data.table::as.data.table(child_fit$sequential_prior_posterior_audit %||% data.table::data.table())
+  if (nrow(prior_audit) && "variable" %in% names(prior_audit)) {
+    for (cc in c("prior_dominance_classification", "child_identification_score",
+                 "posterior_movement_prior_sd_units", "posterior_to_prior_sd_ratio")) {
+      if (!cc %in% names(prior_audit)) prior_audit[, (cc) := NA]
+    }
+    pa <- prior_audit[, .(
+      variable,
+      measured_prior_dominance = as.character(prior_dominance_classification),
+      child_identification_strength_0_1 = as.numeric(child_identification_score),
+      posterior_movement_prior_sd_units = as.numeric(posterior_movement_prior_sd_units),
+      posterior_to_prior_sd_ratio = as.numeric(posterior_to_prior_sd_ratio)
+    )]
+    child_summary[pa, on = "variable", `:=`(
+      measured_prior_dominance = i.measured_prior_dominance,
+      child_identification_strength_0_1 = i.child_identification_strength_0_1,
+      posterior_movement_prior_sd_units = i.posterior_movement_prior_sd_units,
+      posterior_to_prior_sd_ratio = i.posterior_to_prior_sd_ratio
+    )]
+  } else {
+    child_summary[, `:=`(measured_prior_dominance = "not_available", child_identification_strength_0_1 = NA_real_,
+                         posterior_movement_prior_sd_units = NA_real_, posterior_to_prior_sd_ratio = NA_real_)]
+  }
+  mix_selection <- data.table::as.data.table(reconciliation_input$mix_selection %||% data.table::data.table())
+  if (nrow(mix_selection) && all(c("parent_node", "mix_id", "sufficient_mix_variation") %in% names(mix_selection))) {
+    mix_status <- unique(mix_selection[, .(parent_node, mix_id, sufficient_mix_variation)])
+    child_summary[mix_status, on = c("parent_node", "mix_id"), sufficient_mix_variation := i.sufficient_mix_variation]
+  }
+  if (!"sufficient_mix_variation" %in% names(child_summary)) child_summary[, sufficient_mix_variation := FALSE]
+  child_summary[is.na(sufficient_mix_variation), sufficient_mix_variation := FALSE]
+  child_summary[, collective_sensitivity_status := "not_measured_requires_no_collective_refit"]
+  identification_data_driven_min <- econ_seq_identification_calibration()$data_driven_min
+  child_summary[, saturation_evidence_class := data.table::fcase(
+    !sufficient_mix_variation, "unresolved_allocation",
+    grepl("prior_driven", measured_prior_dominance), "generic_prior_dominant",
+    is.finite(child_identification_strength_0_1) & child_identification_strength_0_1 >= identification_data_driven_min &
+      is.finite(posterior_movement_prior_sd_units) & abs(posterior_movement_prior_sd_units) >= .75 &
+      is.finite(posterior_to_prior_sd_ratio) & posterior_to_prior_sd_ratio <= .80 &
+      is.finite(nonlinear_deviation_q05) & is.finite(nonlinear_deviation_q95) &
+      abs(nonlinear_deviation_q50) > .5 * (nonlinear_deviation_q95 - nonlinear_deviation_q05), "child_data_dominant",
+    is.finite(nonlinear_deviation_q05) & is.finite(nonlinear_deviation_q95), "collective_constraint_informed",
+    default = "unresolved_allocation"
+  )]
+  list(scenarios = summary[], children = child_summary[])
 }
 
 econ_seq_sequential_prior_posterior_audit <- function(prior_table,
@@ -4140,6 +4985,12 @@ run_sequential_hierarchical_bayes <- function(data,
                                               root_rrate_grid = c(0, 0.25, 0.50, 0.70),
                                               root_anchor_saturation_grid = c(0.30, 0.50, 0.70),
                                               root_curve_min_delta_aicc = 2,
+                                              root_effect_sign = c("positive", "unconstrained", "negative"),
+                                              root_nonlinear_starts = 24L,
+                                              root_rrate_bounds = c(0, 0.95),
+                                              root_half_saturation_multiple_bounds = c(0.05, 10),
+                                              root_steepness_bounds = c(0.25, 5),
+                                              root_optimizer_maxit = 300L,
                                               root_bootstrap_reps = 200L,
                                               root_block_length = 4L,
                                               root_effect_prior = NULL,
@@ -4155,6 +5006,7 @@ run_sequential_hierarchical_bayes <- function(data,
                                               minimum_relative_sd = 0.35,
                                               strong_child_prior_relaxation = 1.20,
                                               curve_transfer_mode = c("effectiveness_adstock_saturation", "effectiveness_adstock", "effectiveness_only"),
+                                              saturation_handoff = c("generic_child_prior", "collective_parent_shape_reconciliation", "independent_parent_prior"),
                                               sequential_effectiveness_application = c("reference_calibration", "coefficient_approximation"),
                                               fit_child = FALSE,
                                               child_fit_args = list(),
@@ -4166,11 +5018,13 @@ run_sequential_hierarchical_bayes <- function(data,
   rollup_short_path_action <- match.arg(rollup_short_path_action)
   curve_type_default <- match.arg(curve_type_default)
   root_media_transform <- match.arg(root_media_transform)
+  root_effect_sign <- match.arg(root_effect_sign)
   incomplete_period_action <- match.arg(incomplete_period_action)
   invalid_allocation_fallback <- match.arg(invalid_allocation_fallback)
   root_trend_spec <- match.arg(root_trend_spec)
   sequential_effectiveness_application <- match.arg(sequential_effectiveness_application)
   curve_transfer_mode <- match.arg(curve_transfer_mode)
+  saturation_handoff <- match.arg(saturation_handoff)
   if (!is.list(child_fit_args)) stop("child_fit_args must be a list.", call. = FALSE)
   holdout_contract <- list(
     holdout_col = holdout_col,
@@ -4228,6 +5082,12 @@ run_sequential_hierarchical_bayes <- function(data,
     root_rrate_grid = root_rrate_grid,
     root_anchor_saturation_grid = root_anchor_saturation_grid,
     root_curve_min_delta_aicc = root_curve_min_delta_aicc,
+    root_effect_sign = root_effect_sign,
+    root_nonlinear_starts = root_nonlinear_starts,
+    root_rrate_bounds = root_rrate_bounds,
+    root_half_saturation_multiple_bounds = root_half_saturation_multiple_bounds,
+    root_steepness_bounds = root_steepness_bounds,
+    root_optimizer_maxit = root_optimizer_maxit,
     root_bootstrap_reps = root_bootstrap_reps,
     root_block_length = root_block_length,
     root_effect_prior = root_effect_prior,
@@ -4371,7 +5231,10 @@ run_sequential_hierarchical_bayes <- function(data,
   child_metadata <- econ_seq_apply_rrate_priors(
     child_metadata,
     handoff$business_priors,
-    curve_transfer_mode = curve_transfer_mode
+    curve_transfer_mode = curve_transfer_mode,
+    # The frequentist root has no joint child likelihood. Its nonlinear
+    # evidence regularizes child adstock only; child saturation stays generic.
+    saturation_handoff = if (identical(saturation_handoff, "collective_parent_shape_reconciliation")) "generic_child_prior" else saturation_handoff
   )
   if (!is.null(rollup_layer)) rollup_layer$metadata <- child_metadata
   child_fit <- NULL
@@ -4474,6 +5337,7 @@ run_sequential_hierarchical_bayes <- function(data,
     reconciliation_audit = reconciliation,
     baseline_spec = baseline_contract,
     curve_transfer_mode = curve_transfer_mode,
+    saturation_handoff = saturation_handoff,
     child_fit = child_fit,
     limitations = data.table::data.table(
       limitation = c("same_kpi_data_reuse", "phase_1_child_prior_dependence"),
@@ -4510,6 +5374,7 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
                                                    minimum_relative_sd = 0.35,
                                                    strong_child_prior_relaxation = 1.20,
                                                    curve_transfer_mode = c("effectiveness_adstock_saturation", "effectiveness_adstock", "effectiveness_only"),
+                                                   saturation_handoff = c("generic_child_prior", "collective_parent_shape_reconciliation", "independent_parent_prior"),
                                                    sequential_effectiveness_application = c("reference_calibration", "coefficient_approximation"),
                                                    parent_draw_count = 200L,
                                                    parent_draw_seed = 123L,
@@ -4522,6 +5387,7 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
   curve_type_default <- match.arg(curve_type_default)
   sequential_effectiveness_application <- match.arg(sequential_effectiveness_application)
   curve_transfer_mode <- match.arg(curve_transfer_mode)
+  saturation_handoff <- match.arg(saturation_handoff)
   if (!is.list(parent_stage) || is.null(parent_stage$child_fit) || is.null(parent_stage$rollup_layer)) {
     stop("parent_stage must be a prior sequential stage with fit_child = TRUE and a positive numeric rollup_depth.", call. = FALSE)
   }
@@ -4678,8 +5544,31 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
   child_layer$metadata <- econ_seq_apply_rrate_priors(
     child_layer$metadata,
     handoff$business_priors,
-    curve_transfer_mode = curve_transfer_mode
+    curve_transfer_mode = curve_transfer_mode,
+    saturation_handoff = saturation_handoff
   )
+  # The former response-level experimental handoff double-counted level
+  # evidence already supplied through effectiveness calibration and had an
+  # unsupported call contract. It is intentionally no longer selectable.
+  collective_saturation_reconciliation_input <- econ_seq_empty_collective_response_reconciliation()
+  collective_saturation_shape_reconciliation_input <- if (identical(saturation_handoff, "collective_parent_shape_reconciliation") &&
+                                                          identical(curve_transfer_mode, "effectiveness_adstock_saturation")) {
+    econ_seq_collective_saturation_shape_reconciliation_input(
+      parent_fit = parent_stage$child_fit,
+      parent_layer = parent_layer,
+      child_layer = child_layer,
+      time_col = time_col,
+      training_times = if (isTRUE(holdout_contract$legacy_all_rows_training_contract)) NULL else training_times,
+      max_draws = parent_draw_count,
+      seed = parent_draw_seed,
+      data_reuse_inflation = data_reuse_inflation,
+      child_heterogeneity_relative_sd = child_heterogeneity_relative_sd,
+      mix_transfer_scale = mix_transfer_scale,
+      sample_curve_parameters = child_fit_args$sample_curve_parameters %||% "always"
+    )
+  } else {
+    list(scenarios = data.table::data.table(), members = data.table::data.table(), parent_shape_cov = matrix(0, 0, 0), audit = data.table::data.table())
+  }
   child_fit <- NULL
   prior_posterior_audit <- econ_seq_sequential_prior_posterior_audit(handoff$business_priors)
   if (isTRUE(fit_child)) {
@@ -4698,7 +5587,9 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
       entity_col = entity_col,
       spend_map = child_layer$spend_map,
       business_priors = inherited_business_priors,
-      calibration_input = inherited_calibration
+      calibration_input = inherited_calibration,
+      collective_saturation_reconciliation_input = collective_saturation_reconciliation_input,
+      collective_saturation_shape_reconciliation_input = collective_saturation_shape_reconciliation_input
     ))
     child_fit <- do.call(fit_hier_mmm, child_args)
     child_fit$sequential_prior_ledger <- handoff$prior_ledger
@@ -4707,6 +5598,8 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
     child_fit$sequential_branch_decisions <- handoff$branch_decisions
     child_fit$sequential_rollup_layer <- child_layer
     child_fit$sequential_baseline_spec <- baseline_contract
+    child_fit$collective_saturation_reconciliation_input <- collective_saturation_reconciliation_input
+    child_fit$collective_saturation_shape_reconciliation_input <- collective_saturation_shape_reconciliation_input
     prior_posterior_audit <- econ_seq_sequential_prior_posterior_audit(
       handoff$business_priors,
       fit_obj = child_fit,
@@ -4715,6 +5608,10 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
       seed = parent_draw_seed
     )
     child_fit$sequential_prior_posterior_audit <- prior_posterior_audit
+    # The collective audit consumes measured posterior movement, so attach the
+    # training-only prior/posterior audit before classifying child curvature.
+    child_fit$collective_saturation_reconciliation_audit <- econ_seq_collective_saturation_reconciliation_audit(child_fit, collective_saturation_reconciliation_input)
+    child_fit$collective_saturation_shape_reconciliation_audit <- econ_seq_collective_saturation_shape_reconciliation_audit(child_fit, collective_saturation_shape_reconciliation_input, max_draws = parent_draw_count, seed = parent_draw_seed)
   }
   if (!is.null(output_dir) && nzchar(output_dir)) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
@@ -4727,6 +5624,19 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
     data.table::fwrite(handoff$parent_roi_aggregation_audit, file.path(output_dir, paste0(pfx, "parent_roi_aggregation_audit.csv")))
     data.table::fwrite(handoff$parent_child_mapping, file.path(output_dir, paste0(pfx, "parent_child_mapping.csv")))
     data.table::fwrite(handoff$reconciliation_audit, file.path(output_dir, paste0(pfx, "reconciliation_audit.csv")))
+    data.table::fwrite(collective_saturation_reconciliation_input$scenarios, file.path(output_dir, paste0(pfx, "collective_saturation_scenarios.csv")))
+    data.table::fwrite(collective_saturation_reconciliation_input$members, file.path(output_dir, paste0(pfx, "collective_saturation_members.csv")))
+    if (!is.null(child_fit$collective_saturation_reconciliation_audit)) {
+      data.table::fwrite(child_fit$collective_saturation_reconciliation_audit$scenarios, file.path(output_dir, paste0(pfx, "collective_saturation_postfit_reconciliation.csv")))
+      data.table::fwrite(child_fit$collective_saturation_reconciliation_audit$children, file.path(output_dir, paste0(pfx, "collective_saturation_child_components.csv")))
+    }
+    if (!is.null(child_fit$collective_saturation_shape_reconciliation_audit)) {
+      data.table::fwrite(child_fit$collective_saturation_shape_reconciliation_audit$scenarios, file.path(output_dir, paste0(pfx, "collective_saturation_shape_postfit.csv")))
+      data.table::fwrite(child_fit$collective_saturation_shape_reconciliation_audit$children, file.path(output_dir, paste0(pfx, "collective_saturation_shape_child_curvature.csv")))
+    }
+    if (nrow(collective_saturation_shape_reconciliation_input$mix_selection %||% data.table::data.table())) {
+      data.table::fwrite(collective_saturation_shape_reconciliation_input$mix_selection, file.path(output_dir, paste0(pfx, "collective_saturation_shape_mix_selection.csv")))
+    }
     data.table::fwrite(child_identification$by_variable, file.path(output_dir, paste0(pfx, "child_identification.csv")))
     data.table::fwrite(child_identification$overall, file.path(output_dir, paste0(pfx, "depth_gate.csv")))
   }
@@ -4752,8 +5662,13 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
     holdout_spec = holdout_contract,
     training_times = training_times,
     reconciliation_audit = handoff$reconciliation_audit,
+    collective_saturation_reconciliation_input = collective_saturation_reconciliation_input,
+    collective_saturation_reconciliation_audit = if (!is.null(child_fit)) child_fit$collective_saturation_reconciliation_audit else list(scenarios = data.table::data.table(), children = data.table::data.table()),
+    collective_saturation_shape_reconciliation_input = collective_saturation_shape_reconciliation_input,
+    collective_saturation_shape_reconciliation_audit = if (!is.null(child_fit)) child_fit$collective_saturation_shape_reconciliation_audit else list(scenarios = data.table::data.table(), children = data.table::data.table()),
     baseline_spec = baseline_contract,
     curve_transfer_mode = curve_transfer_mode,
+    saturation_handoff = saturation_handoff,
     child_fit = child_fit,
     limitations = data.table::data.table(
       limitation = "same_kpi_data_reuse",

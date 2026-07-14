@@ -151,8 +151,60 @@
 
 - Tests ship in `tests/` with a quick runner and opt-in deep/model-level validation. The installable `econimap/` package structure exists; fuller `testthat` migration and hosted CI remain future work.
 - Reach/frequency is now first-class in the core Stan and standalone paths: population-scaled linear reach x Hill(frequency), effective-media adstock, train-only normalization, decomposition/response consistency, fixed-impressions frequency planning, and joint experiment calibration with posterior audit. Impressions-only proxy construction remains future work.
-- No formal package structure or CI.
+- The formal `econimap` package structure now exists. Hosted CI and full
+  `testthat` migration remain future work; focused source, contract, generated-
+  script drift, and release-gate tests ship in `tests/` and `tools/`.
 - The Shiny app is generated and parse-tested, but not browser/runtime-click tested here.
 - The Stan smoke test uses short chains for speed, so it verifies compilation/data/output plumbing rather than production-quality convergence.
 - One-chain sensitivity runs are useful for geometry screening, but R-hat is now suppressed for one-chain diagnostics and final production review should use multiple chains.
 - Short-chain hostile Stan tests can still hit max treedepth by design. After the fixed-curve precompute and alpha-geometry cleanup, longer-warmup synthetic probes cleared divergences and treedepth hits; persistent production treedepth should now be treated mainly as an identification/prior-strength/data-design issue rather than script plumbing.
+# 2026-07-13: Collective Sequential Saturation Shape Handoff
+
+- Kept the existing child-specific parent-informed adstock handoff unchanged.
+- Added `saturation_handoff = "collective_parent_shape_reconciliation"` to
+  sequential continuation stages. It leaves child saturation metadata generic
+  and constrains normalized aggregate response ratios, not contribution level.
+- Targets use observed sibling mixes at several support multipliers; parent
+  posterior covariance is retained in a multivariate soft likelihood. Existing
+  effectiveness calibration remains the only response-level handoff.
+- Mixes are selected per parent from sibling-share diversity plus support
+  strata; parent-specific churn inflates only that parent's covariance. Fixed
+  nonlinear and reach/frequency branches are excluded from this saturation
+  likelihood rather than being linearly approximated.
+- Post-fit shape output now includes response/shape intervals, coverage, shape
+  error, and posterior child response-difference (curvature-share) intervals.
+- The former raw-contribution reconciliation option has been removed from the
+  public contract. It duplicated effectiveness-level evidence and did not
+  isolate saturation shape.
+- Targeted tests passed: R source/load, collective data-contract and leakage
+  tests, sequential hardening tests, and Stan translation. A full C++ rebuild
+  and substantive multi-seed Stan comparison remain intentionally deferred.
+
+# 2026-07-14: Sequential Root, Identification, And Release Hardening
+
+- Replaced root grid selection with constrained Sobol-multistart profile maximum
+  likelihood over geometric adstock, Hill half-saturation, and steepness.
+  Baseline/control/media coefficients are solved conditionally. The coarse grid
+  remains diagnostic-only and cannot be selected.
+- Retained the linear root as the parsimonious limit and added explicit flat
+  profile, boundary, convergence-instability, and Bayesian-fallback diagnostics.
+- Moving-block bootstrap now reselects linear versus nonlinear form and reports
+  nonlinear selection frequency plus rrate/half-saturation/steepness intervals.
+- Centralized sequential identification calibration. Smooth active-period and
+  support-variation gates prevent sparse or nearly constant children from being
+  mislabeled as identified; included synthetic regimes test the policy.
+- Fixed curves now exit collective shape construction before posterior work.
+  Aggregate shape may remain identified under weak sibling mix, while child
+  curvature allocation is explicitly unresolved.
+- Core standalone scripts are mechanically generated from `R/` modules by
+  `tools/generate_standalone_scripts.R`; `--check` is a drift gate.
+- Added `tools/run_release_validation.R`. It requires CmdStan and runs the
+  focused fair direct-vs-sequential known-truth benchmark and collective-shape
+  recovery test without allowing dependency skips. The broad multi-seed suite
+  remains separate.
+- Collective shape reconciliation remains explicit opt-in. A focused 624-row,
+  one-chain continuation reached the corrected Stan path but took about 2,222
+  seconds for 60 warmup plus 30 sampling iterations and hit maximum treedepth on
+  every sampled transition. The production default now keeps child saturation
+  generic; collective shape is release-blocked pending geometry and gradient-
+  cost improvements.

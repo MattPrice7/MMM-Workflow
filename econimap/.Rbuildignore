@@ -1,0 +1,3 @@
+^inst/stan/hier_mmm$
+^inst/stan/hier_mmm[.]hpp$
+^inst/stan/hier_mmm-[0-9a-f]+$
