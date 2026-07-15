@@ -2669,7 +2669,9 @@ econ_seq_reference_effectiveness_calibration <- function(prior_table,
 econ_seq_hierarchical_transfer_input <- function(prior_table,
                                                  tau_overrides = NULL,
                                                  include_effectiveness = TRUE,
-                                                 include_adstock = TRUE) {
+                                                 include_adstock = TRUE,
+                                                 effectiveness_tau_mode = c("learned", "fixed")) {
+  effectiveness_tau_mode <- match.arg(effectiveness_tau_mode)
   x <- data.table::copy(data.table::as.data.table(prior_table))
   if (!nrow(x)) return(list(effectiveness = data.table::data.table(), adstock = data.table::data.table()))
   value_from <- function(candidates, default = NA_real_) {
@@ -2757,6 +2759,8 @@ econ_seq_hierarchical_transfer_input <- function(prior_table,
         parent_mean = parent_mean__, parent_sd = pmax(parent_sd__, 1e-6),
         reference_spend = child_spend_total,
         tau_prior_mean = pmax(effect_tau_mean__, 0), tau_prior_sd = pmax(effect_tau_sd__, 1e-6),
+        tau_mode = effectiveness_tau_mode,
+        fixed_tau = pmax(effect_tau_sd__, 1e-6),
         aggregate_sd = pmax(effect_aggregate_sd__, 1e-6),
         child_noise_sd = pmax(effect_child_noise_sd__, 1e-6)
       )
@@ -4000,11 +4004,13 @@ fit_parsimonious_total_media_root <- function(data,
 
 #' Create equal-effectiveness child priors from a total-media root.
 #'
-#' The returned `reference_calibration_input` is the default direct handoff to
-#' `fit_hier_mmm(calibration_input = ...)`; `business_priors` remains an
-#' auditable compatibility representation. The transfer width deliberately
-#' includes root sampling uncertainty, same-data reuse inflation, a child
-#' heterogeneity allowance, and observed spend-mix instability.
+#' The returned `reference_calibration_input` is an explicit compatibility
+#' handoff to `fit_hier_mmm(calibration_input = ...)`; the sequential runner
+#' defaults to a joint aggregate-effectiveness transfer with learned sibling
+#' dispersion. `business_priors` remains an auditable compatibility
+#' representation. The transfer width deliberately includes root sampling
+#' uncertainty, same-data reuse inflation, a child heterogeneity allowance,
+#' and observed spend-mix instability.
 build_sequential_effectiveness_priors <- function(root_fit,
                                                    data,
                                                    metadata_input,
@@ -5163,9 +5169,10 @@ build_sequential_effectiveness_priors_from_parent_fit <- function(parent_fit,
 #' child model. Intermediate graph depths are optional. A fitted numeric stage
 #' can be continued with continue_sequential_hierarchical_bayes(), which uses
 #' parent response-curve posterior draws for the deeper handoff. Effectiveness
-#' is applied at observed child spend/support through calibration by default;
-#' inherited adstock and saturation remain estimable. The workflow does not add
-#' a sibling-variable latent layer inside Stan.
+#' is applied through a soft, spend-weighted aggregate effectiveness constraint
+#' by default, with learned sibling dispersion. Inherited adstock and
+#' saturation remain estimable. `reference_calibration` and a fixed-dispersion
+#' aggregate reconciliation remain explicit alternative modes.
 run_sequential_hierarchical_bayes <- function(data,
                                               metadata_input,
                                               dep_var_col,
@@ -5214,15 +5221,18 @@ run_sequential_hierarchical_bayes <- function(data,
                                               holdout_last_n = 0L,
                                               child_prior_overrides = NULL,
                                               data_reuse_inflation = 1.5,
-                                              # Root total-media is the broadest handoff; retain a wider,
-                                              # fixed child-deviation allowance than later parent-child splits.
+                                              # Root total-media is the broadest handoff; retain a wider
+                                              # prior scale for sibling deviation than later parent-child splits.
                                               child_heterogeneity_relative_sd = 0.75,
                                               mix_transfer_scale = 1,
                                               minimum_relative_sd = 0.50,
                                               strong_child_prior_relaxation = 1.20,
                                               curve_transfer_mode = c("effectiveness_adstock_saturation", "effectiveness_adstock", "effectiveness_only"),
                                               saturation_handoff = c("generic_child_prior", "collective_parent_shape_reconciliation", "independent_parent_prior"),
-                                              sequential_effectiveness_application = c("reference_calibration", "hierarchical_tau", "coefficient_approximation"),
+                                              # Learned tau is the default: sibling dispersion is estimated
+                                              # hierarchically.  The fixed option is a transparent sensitivity
+                                              # mode for difficult geometry or a deliberately fixed transfer width.
+                                              sequential_effectiveness_application = c("hierarchical_tau", "fixed_aggregate_reconciliation", "reference_calibration", "coefficient_approximation"),
                                               # Parent-informed independent priors preserve child-specific
                                               # learning without adding a shared-tau funnel to the child fit.
                                               sequential_adstock_application = c("independent_prior", "hierarchical_tau"),
@@ -5438,7 +5448,8 @@ run_sequential_hierarchical_bayes <- function(data,
   sequential_transfer_input <- econ_seq_hierarchical_transfer_input(
     enforcement$prior_table,
     tau_overrides = sequential_tau_overrides,
-    include_effectiveness = identical(sequential_effectiveness_application, "hierarchical_tau"),
+    include_effectiveness = sequential_effectiveness_application %in% c("hierarchical_tau", "fixed_aggregate_reconciliation"),
+    effectiveness_tau_mode = if (identical(sequential_effectiveness_application, "fixed_aggregate_reconciliation")) "fixed" else "learned",
     include_adstock = identical(sequential_adstock_application, "hierarchical_tau") &&
       !identical(curve_transfer_mode, "effectiveness_only")
   )
@@ -5624,7 +5635,9 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
                                                    # soft aggregate shape constraint; individual child curves
                                                    # remain estimable and are never parent-centered directly.
                                                    saturation_handoff = c("collective_parent_shape_reconciliation", "generic_child_prior", "independent_parent_prior"),
-                                                   sequential_effectiveness_application = c("reference_calibration", "hierarchical_tau", "coefficient_approximation"),
+                                                   # Keep learned sibling dispersion as the default continuation
+                                                   # mode; use fixed aggregate reconciliation as a sensitivity mode.
+                                                   sequential_effectiveness_application = c("hierarchical_tau", "fixed_aggregate_reconciliation", "reference_calibration", "coefficient_approximation"),
                                                    sequential_adstock_application = c("independent_prior", "hierarchical_tau"),
                                                    sequential_tau_overrides = NULL,
                                                    parent_draw_count = 200L,
@@ -5794,7 +5807,8 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
   sequential_transfer_input <- econ_seq_hierarchical_transfer_input(
     enforcement$prior_table,
     tau_overrides = sequential_tau_overrides,
-    include_effectiveness = identical(sequential_effectiveness_application, "hierarchical_tau"),
+    include_effectiveness = sequential_effectiveness_application %in% c("hierarchical_tau", "fixed_aggregate_reconciliation"),
+    effectiveness_tau_mode = if (identical(sequential_effectiveness_application, "fixed_aggregate_reconciliation")) "fixed" else "learned",
     include_adstock = identical(sequential_adstock_application, "hierarchical_tau") &&
       !identical(curve_transfer_mode, "effectiveness_only")
   )

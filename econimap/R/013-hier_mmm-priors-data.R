@@ -373,7 +373,7 @@ build_sequential_transfer_hier_mmm <- function(transfer_input,
       variable_idx = integer(), parent_idx = integer(), weight = matrix(0, n, 0L),
       reference_spend = numeric(), child_noise_sd = numeric(), child_share = matrix(0, 0L, 0L),
       parent_mu = numeric(), parent_sd = numeric(), tau_prior_mean = 0,
-      tau_prior_sd = 1, aggregate_sd = numeric()
+      tau_prior_sd = 1, fixed_tau = numeric(), use_learned_tau = 0L, aggregate_sd = numeric()
     ),
     adstock = list(
       audit = data.table(), parent_audit = data.table(), child_n = 0L, parent_n = 0L,
@@ -428,6 +428,16 @@ build_sequential_transfer_hier_mmm <- function(transfer_input,
         data.table::uniqueN(round(eff$tau_prior_sd, 12)) > 1L) {
       stop("Sequential effectiveness tau_prior_mean and tau_prior_sd must be shared across the layer.")
     }
+    if (!"tau_mode" %in% names(eff)) eff[, tau_mode := "learned"]
+    eff[, tau_mode := as.character(tau_mode)]
+    if (any(!eff$tau_mode %in% c("learned", "fixed")) || data.table::uniqueN(eff$tau_mode) > 1L) {
+      stop("Sequential effectiveness tau_mode must be one shared value: 'learned' or 'fixed'.")
+    }
+    if (!"fixed_tau" %in% names(eff)) eff[, fixed_tau := tau_prior_sd]
+    eff[, fixed_tau := suppressWarnings(as.numeric(fixed_tau))]
+    if (any(!is.finite(eff$fixed_tau) | eff$fixed_tau <= 0)) {
+      stop("Sequential effectiveness fixed_tau must be positive.")
+    }
     parents <- unique(eff[, .(parent_id, parent_mean, parent_sd, aggregate_sd)], by = "parent_id")
     parents[, parent_idx := .I]
     eff[parents, on = "parent_id", parent_idx := i.parent_idx]
@@ -448,6 +458,8 @@ build_sequential_transfer_hier_mmm <- function(transfer_input,
       child_noise_sd = eff$child_noise_sd, child_share = share,
       parent_mu = parents$parent_mean, parent_sd = parents$parent_sd,
       tau_prior_mean = eff$tau_prior_mean[1], tau_prior_sd = eff$tau_prior_sd[1],
+      fixed_tau = tapply(eff$fixed_tau, eff$parent_idx, function(x) x[1]),
+      use_learned_tau = as.integer(identical(eff$tau_mode[1], "learned")),
       aggregate_sd = parents$aggregate_sd
     )
   }
@@ -1651,7 +1663,12 @@ prepare_stan_data_hier_mmm <- function(data,
     calibration_observed_sd = experiment_calibration$observed_sd,
     S_seq_effect = sequential_transfer$effectiveness$child_n,
     P_seq_effect = sequential_transfer$effectiveness$parent_n,
-    H_seq_effect = as.integer(sequential_transfer$effectiveness$parent_n > 0L),
+    # A fixed transfer width needs no latent tau parameter.  This keeps the
+    # fixed and learned sequential-effectiveness modes structurally distinct.
+    H_seq_effect = as.integer(
+      sequential_transfer$effectiveness$parent_n > 0L &&
+        sequential_transfer$effectiveness$use_learned_tau == 1L
+    ),
     seq_effect_variable_idx = sequential_transfer$effectiveness$variable_idx,
     seq_effect_parent_idx = sequential_transfer$effectiveness$parent_idx,
     seq_effect_weight = sequential_transfer$effectiveness$weight,
@@ -1662,6 +1679,8 @@ prepare_stan_data_hier_mmm <- function(data,
     seq_effect_parent_sd = sequential_transfer$effectiveness$parent_sd,
     seq_effect_tau_prior_mean = sequential_transfer$effectiveness$tau_prior_mean,
     seq_effect_tau_prior_sd = sequential_transfer$effectiveness$tau_prior_sd,
+    seq_effect_fixed_tau = as.numeric(sequential_transfer$effectiveness$fixed_tau),
+    seq_effect_use_learned_tau = as.integer(sequential_transfer$effectiveness$use_learned_tau),
     seq_effect_aggregate_sd = sequential_transfer$effectiveness$aggregate_sd,
     S_seq_adstock = sequential_transfer$adstock$child_n,
     P_seq_adstock = sequential_transfer$adstock$parent_n,
@@ -1854,6 +1873,10 @@ prepare_stan_data_hier_mmm <- function(data,
   if (length(stan_data$calibration_observed_lift) != stan_data$C_calibration || length(stan_data$calibration_observed_sd) != stan_data$C_calibration) stop("Internal error: calibration evidence lengths do not match C_calibration.")
   if (length(stan_data$seq_effect_variable_idx) != stan_data$S_seq_effect ||
       length(stan_data$seq_effect_parent_idx) != stan_data$S_seq_effect ||
+      length(stan_data$seq_effect_fixed_tau) != stan_data$P_seq_effect ||
+      length(stan_data$seq_effect_use_learned_tau) != 1L ||
+      !stan_data$seq_effect_use_learned_tau %in% c(0L, 1L) ||
+      stan_data$H_seq_effect != if (stan_data$seq_effect_use_learned_tau == 1L) stan_data$P_seq_effect else 0L ||
       nrow(stan_data$seq_effect_weight) != stan_data$N || ncol(stan_data$seq_effect_weight) != stan_data$S_seq_effect ||
       nrow(stan_data$seq_effect_child_share) != stan_data$P_seq_effect || ncol(stan_data$seq_effect_child_share) != stan_data$S_seq_effect) {
     stop("Internal error: sequential effectiveness transfer dimensions are inconsistent.")

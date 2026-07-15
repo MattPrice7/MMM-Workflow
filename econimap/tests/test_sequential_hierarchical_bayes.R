@@ -700,9 +700,9 @@ stopifnot(all(collinear_id$identification_evidence_band != "data_driven"))
 stopifnot(all(constant_id$identification_evidence_band == "predominantly_prior_driven"))
 stopifnot(all(clean_id$thresholds_calibrated))
 stopifnot(length(unique(clean_id$identification_calibration_version)) == 1L)
-stopifnot(eval(formals(run_sequential_hierarchical_bayes)$sequential_effectiveness_application)[1] == "reference_calibration")
+stopifnot(eval(formals(run_sequential_hierarchical_bayes)$sequential_effectiveness_application)[1] == "hierarchical_tau")
 stopifnot(eval(formals(run_sequential_hierarchical_bayes)$sequential_adstock_application)[1] == "independent_prior")
-stopifnot(eval(formals(continue_sequential_hierarchical_bayes)$sequential_effectiveness_application)[1] == "reference_calibration")
+stopifnot(eval(formals(continue_sequential_hierarchical_bayes)$sequential_effectiveness_application)[1] == "hierarchical_tau")
 
 # Parent level and sibling dispersion are separate contracts. Identification
 # diagnostics remain reporting inputs; they no longer manufacture child-specific
@@ -770,6 +770,8 @@ tau_prep <- prepare_stan_data_hier_mmm(
 stopifnot(tau_prep$stan_data$S_seq_effect == 2L)
 stopifnot(tau_prep$stan_data$P_seq_effect == 1L)
 stopifnot(tau_prep$stan_data$H_seq_effect == 1L)
+stopifnot(tau_prep$stan_data$seq_effect_use_learned_tau == 1L)
+stopifnot(length(tau_prep$stan_data$seq_effect_fixed_tau) == 1L)
 stopifnot(length(tau_prep$stan_data$seq_effect_tau_prior_sd) == 1L)
 stopifnot(abs(sum(tau_prep$stan_data$seq_effect_child_share[1, ]) - 1) < 1e-12)
 stopifnot(all.equal(as.numeric(tau_prep$stan_data$seq_effect_child_share[1, ]), c(.75, .25), tolerance = 1e-12))
@@ -805,6 +807,32 @@ tau_base_prep <- prepare_stan_data_hier_mmm(
 stopifnot(identical(tau_prep$metadata$rrate, tau_base_prep$metadata$rrate))
 stopifnot(tau_base_prep$stan_data$H_seq_effect == 0L)
 stopifnot(tau_base_prep$stan_data$H_seq_adstock == 0L)
+
+# Fixed aggregate reconciliation is intentionally a separate, auditable
+# sensitivity mode: it preserves the same aggregate parent constraint while
+# removing the latent sibling-dispersion parameter.
+fixed_tau_input <- econ_seq_hierarchical_transfer_input(
+  tau_handoff,
+  effectiveness_tau_mode = "fixed"
+)
+fixed_tau_prep <- prepare_stan_data_hier_mmm(
+  data = synthetic,
+  metadata_input = metadata,
+  dep_var_col = "kpi",
+  group_col = "geo",
+  time_col = "period",
+  entity_col = "entity",
+  holdout_last_n = 4L,
+  sequential_transfer_input = fixed_tau_input,
+  sample_curve_parameters = "always",
+  stop_on_zero_variance = FALSE
+)
+stopifnot(fixed_tau_prep$stan_data$S_seq_effect == tau_prep$stan_data$S_seq_effect)
+stopifnot(fixed_tau_prep$stan_data$P_seq_effect == tau_prep$stan_data$P_seq_effect)
+stopifnot(fixed_tau_prep$stan_data$H_seq_effect == 0L)
+stopifnot(fixed_tau_prep$stan_data$seq_effect_use_learned_tau == 0L)
+stopifnot(length(fixed_tau_prep$stan_data$seq_effect_fixed_tau) == fixed_tau_prep$stan_data$P_seq_effect)
+stopifnot(all(fixed_tau_prep$stan_data$seq_effect_fixed_tau > 0))
 # Auto coefficient parameterization must work with a holdout mask; this path
 # uses per-group training counts to choose centered/non-centered hierarchy.
 auto_parameterization_prep <- prepare_stan_data_hier_mmm(

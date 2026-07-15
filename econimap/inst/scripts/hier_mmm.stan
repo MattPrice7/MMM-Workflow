@@ -99,7 +99,8 @@ data {
   vector[C_calibration] calibration_observed_lift;
   vector<lower=0>[C_calibration] calibration_observed_sd;
   // Sequential empirical-Bayes transfer. Parent evidence constrains the
-  // spend-weighted aggregate once; tau is learned from sibling deviations.
+  // spend-weighted aggregate once. Child dispersion is either learned from
+  // siblings or supplied as a fixed, analyst-auditable transfer width.
   int<lower=0> S_seq_effect;
   int<lower=0> P_seq_effect;
   int<lower=0, upper=1> H_seq_effect;
@@ -113,6 +114,8 @@ data {
   vector<lower=0>[P_seq_effect] seq_effect_parent_sd;
   real<lower=0> seq_effect_tau_prior_mean;
   real<lower=0> seq_effect_tau_prior_sd;
+  vector<lower=0>[P_seq_effect] seq_effect_fixed_tau;
+  int<lower=0, upper=1> seq_effect_use_learned_tau;
   vector<lower=0>[P_seq_effect] seq_effect_aggregate_sd;
   int<lower=0> S_seq_adstock;
   int<lower=0> P_seq_adstock;
@@ -1157,14 +1160,18 @@ model {
   }
 
   if (P_seq_effect > 0) {
-    seq_effect_tau[1] ~ normal(seq_effect_tau_prior_mean, seq_effect_tau_prior_sd);
+    if (seq_effect_use_learned_tau == 1)
+      seq_effect_tau[1] ~ normal(seq_effect_tau_prior_mean, seq_effect_tau_prior_sd);
     seq_effect_parent ~ normal(seq_effect_parent_mu, seq_effect_parent_sd);
     for (p in 1:P_seq_effect)
       seq_effect_aggregate[p] ~ normal(seq_effect_parent[p], seq_effect_aggregate_sd[p]);
     for (s in 1:S_seq_effect) {
       int p = seq_effect_parent_idx[s];
+      real child_tau = seq_effect_fixed_tau[p];
+      if (seq_effect_use_learned_tau == 1)
+        child_tau = seq_effect_tau[1];
       seq_effectiveness[s] - seq_effect_aggregate[p]
-        ~ normal(0, sqrt(square(seq_effect_tau[1]) + square(seq_effect_child_noise_sd[s])));
+        ~ normal(0, sqrt(square(child_tau) + square(seq_effect_child_noise_sd[s])));
     }
   }
 
