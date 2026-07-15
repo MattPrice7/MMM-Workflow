@@ -701,7 +701,7 @@ stopifnot(all(constant_id$identification_evidence_band == "predominantly_prior_d
 stopifnot(all(clean_id$thresholds_calibrated))
 stopifnot(length(unique(clean_id$identification_calibration_version)) == 1L)
 stopifnot(eval(formals(run_sequential_hierarchical_bayes)$sequential_effectiveness_application)[1] == "hierarchical_tau")
-stopifnot(eval(formals(run_sequential_hierarchical_bayes)$sequential_adstock_application)[1] == "hierarchical_tau")
+stopifnot(eval(formals(run_sequential_hierarchical_bayes)$sequential_adstock_application)[1] == "independent_prior")
 stopifnot(eval(formals(continue_sequential_hierarchical_bayes)$sequential_effectiveness_application)[1] == "hierarchical_tau")
 
 # Parent level and sibling dispersion are separate contracts. Identification

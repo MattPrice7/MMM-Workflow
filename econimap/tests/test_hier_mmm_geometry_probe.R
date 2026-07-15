@@ -75,6 +75,7 @@ if (Sys.getenv("ECONIMAP_RUN_GEOMETRY_PROBE", "0") != "1") {
     N = prep$stan_data$N, N_train = prep$stan_data$N_train, G = prep$stan_data$G,
     J = prep$stan_data$J, J_curve = prep$stan_data$J_curve,
     J_curve_sampled = prep$stan_data$J_curve_sampled,
+    J_dvalue_sampled = prep$stan_data$J_dvalue_sampled,
     J_pos_hier = prep$stan_data$J_pos_hier, J_neg_hier = prep$stan_data$J_neg_hier,
     J_lower_hier = prep$stan_data$J_lower_hier, J_upper_hier = prep$stan_data$J_upper_hier,
     J_bounded_hier = prep$stan_data$J_bounded_hier, J_free_hier = prep$stan_data$J_free_hier,
@@ -91,11 +92,16 @@ if (Sys.getenv("ECONIMAP_RUN_GEOMETRY_PROBE", "0") != "1") {
     )
     sample_curves <- profile %in% c("free_curves_no_hierarchy", "production_direct")
     sample_hierarchy <- profile %in% c("fixed_curves_hierarchy", "production_direct")
+    coef_parameterization <- match.arg(
+      Sys.getenv("ECONIMAP_GEOMETRY_PROBE_COEF_PARAMETERIZATION", "auto"),
+      c("auto", "centered", "noncentered")
+    )
     fit <- fit_hier_mmm(
       data = panel, metadata_input = metadata, dep_var_col = "kpi", group_col = "geo",
       time_col = "period", entity_col = "entity", holdout_last_n = 13L,
       sample_curve_parameters = if (sample_curves) "always" else "never",
       sample_coef_hierarchy = if (sample_hierarchy) "auto" else "never",
+      coef_parameterization = coef_parameterization,
       likelihood = "normal", intercept_type = "flat",
       ucm_spec = list(level = FALSE, season = FALSE, cycle = FALSE),
       chains = 1L, parallel_chains = 1L, iter_warmup = 150L, iter_sampling = 50L,
@@ -106,6 +112,19 @@ if (Sys.getenv("ECONIMAP_RUN_GEOMETRY_PROBE", "0") != "1") {
       stan_file = file.path(root_dir, "inst", "stan", "hier_mmm.stan")
     )
     cat("\nGeometry profile: ", profile, "\n", sep = "")
-    print(as.data.table(fit$diagnostics$sampler_overall))
+    result <- as.data.table(fit$diagnostics$sampler_overall)
+    result[, `:=`(
+      profile = profile,
+      coef_parameterization = coef_parameterization,
+      j_curve_sampled = prep$stan_data$J_curve_sampled,
+      j_dvalue_sampled = prep$stan_data$J_dvalue_sampled
+    )]
+    print(result)
+    output_file <- Sys.getenv("ECONIMAP_GEOMETRY_PROBE_OUTPUT", "")
+    if (nzchar(output_file)) {
+      dir.create(dirname(output_file), recursive = TRUE, showWarnings = FALSE)
+      fwrite(result, output_file)
+      cat("Saved geometry diagnostics to: ", output_file, "\n", sep = "")
+    }
   }
 }

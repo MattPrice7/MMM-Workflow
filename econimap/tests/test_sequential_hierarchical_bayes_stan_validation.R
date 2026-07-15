@@ -464,7 +464,11 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     use_pathfinder_init = TRUE,
     sample_curve_parameters = sample_curve_mode,
     sample_coef_hierarchy = "auto",
-    coef_parameterization = "auto",
+    # The public fitter defaults to non-centered coefficient hierarchies.
+    # Keep this benchmark on that same safer geometry; the paired geometry
+    # probe showed its auto-centered choice can add divergences in a compact
+    # six-geo nonlinear panel.
+    coef_parameterization = "noncentered",
     center_predictors_for_sampling = FALSE,
     likelihood = "student_t",
     intercept_type = "flat",
@@ -501,6 +505,16 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
       iter_warmup = 300L, iter_sampling = 100L,
       likelihood = "normal", response_curve_draw_count = 40L
     ))
+  }
+  transfer_mode <- match.arg(
+    Sys.getenv("ECONIMAP_SEQUENTIAL_VALIDATION_TRANSFER_MODE", "effectiveness_adstock_saturation"),
+    c("effectiveness_only", "effectiveness_adstock", "effectiveness_adstock_saturation")
+  )
+  focused_root_bootstrap_reps <- suppressWarnings(as.integer(
+    Sys.getenv("ECONIMAP_SEQUENTIAL_VALIDATION_FOCUSED_ROOT_BOOTSTRAP_REPS", "12")
+  ))
+  if (!is.finite(focused_root_bootstrap_reps) || focused_root_bootstrap_reps < 2L) {
+    stop("ECONIMAP_SEQUENTIAL_VALIDATION_FOCUSED_ROOT_BOOTSTRAP_REPS must be an integer >= 2.", call. = FALSE)
   }
   if (length(source_root)) fit_args$stan_file <- file.path(source_root[1], "inst", "stan", "hier_mmm.stan")
   validation_files <- if (length(source_root)) {
@@ -559,11 +573,11 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
         root_season_period = 52L, control_cols = "macro"
       ),
       media_scope_config = NULL,
-      root_bootstrap_reps = if (minimal_smoke) 12L else 60L,
+      root_bootstrap_reps = if (minimal_smoke) 12L else if (focused_one_chain) focused_root_bootstrap_reps else 60L,
       root_block_length = 4L,
       sequential_target_layer = "leaf",
       primary_paths = c("direct_leaf", "sequential_root_to_leaf", "sequential_depth1_to_leaf"),
-      prior_transfer_settings = "effectiveness_adstock_saturation",
+      prior_transfer_settings = transfer_mode,
       run_oracle = run_oracle
     )
     validation_holdout_contract <- list(holdout_col = NULL, holdout_value = TRUE, holdout_last_n = 13L)
@@ -664,7 +678,6 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     # Fair primary benchmark: every leaf fit begins with generic metadata,
     # identical data, baseline, holdout, curve flexibility, and sampler args.
     # Parent-derived calibration is the only intentional sequential difference.
-    transfer_mode <- "effectiveness_adstock_saturation"
     root_leaf_label <- "sequential_root_to_leaf"
     root_leaf <- load_or_run(file.path(regime_dir, paste0(root_leaf_label, "_stage.rds")), function() {
       stage_fit_args <- modifyList(fit_args_i, list(
