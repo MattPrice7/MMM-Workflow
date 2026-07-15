@@ -87,25 +87,6 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     )
   }
 
-  make_meridian_equivalent_business_priors <- function(data, training_times) {
-    train <- as.data.table(data)[period %in% training_times]
-    total_kpi <- sum(as.numeric(train$kpi), na.rm = TRUE)
-    total_spend <- sum(unlist(lapply(spend_cols, function(cc) as.numeric(train[[cc]]))), na.rm = TRUE)
-    if (!is.finite(total_kpi) || total_kpi <= 0 || !is.finite(total_spend) || total_spend <= 0) {
-      stop("Meridian-equivalent benchmark requires positive training KPI and total media spend.", call. = FALSE)
-    }
-    data.table(
-      variable = media_vars,
-      prior_metric = "ikpc",
-      prior_mean = 0.40 * total_kpi / total_spend,
-      prior_sd = 0.20 * total_kpi / total_spend,
-      prior_uncertainty_basis = "sd",
-      prior_distribution = "normal",
-      prior_source = "meridian_equivalent_total_paid_media_contribution_default",
-      evidence_notes = "Non-revenue KPI translation of a 40% +/- 20% total paid-media contribution prior; common outcome-per-cost center across channels."
-    )
-  }
-
   make_panel <- function(regime, seed) {
     set.seed(seed)
     periods <- seq.Date(as.Date("2023-01-02"), by = "week", length.out = 104L)
@@ -635,26 +616,6 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
     fwrite(direct_eval$overall, file.path(regime_dir, "direct_leaf_recovery_overall.csv"))
     fwrite(direct_eval$by_variable, file.path(regime_dir, "direct_leaf_recovery_by_variable.csv"))
 
-    meridian_equivalent_priors <- make_meridian_equivalent_business_priors(
-      sim$data, training_times = head(sort(unique(sim$data$period)), -13L)
-    )
-    fwrite(meridian_equivalent_priors, file.path(regime_dir, "meridian_equivalent_business_priors.csv"))
-    direct_meridian_equivalent <- load_or_run(file.path(regime_dir, "direct_econimap_meridian_default_priors_fit.rds"), function() {
-      do.call(fit_hier_mmm, modifyList(fit_args_i, list(
-        data = sim$data,
-        metadata_input = sim$generic_fit_metadata,
-        dep_var_col = "kpi", group_col = "geo", time_col = "period", entity_col = "entity",
-        spend_map = spend_map, business_priors = meridian_equivalent_priors,
-        output_dir = file.path(regime_dir, "direct_econimap_meridian_default_priors_cmdstan"),
-        output_prefix = "direct_econimap_meridian_default_priors"
-      )))
-    }, manifest)
-    direct_meridian_equivalent_eval <- recovery_summary(
-      direct_meridian_equivalent, sim$data, sim$curve_spec, "direct_econimap_meridian_default_priors"
-    )
-    fwrite(direct_meridian_equivalent_eval$overall, file.path(regime_dir, "direct_econimap_meridian_default_priors_recovery_overall.csv"))
-    fwrite(direct_meridian_equivalent_eval$by_variable, file.path(regime_dir, "direct_econimap_meridian_default_priors_recovery_by_variable.csv"))
-
     oracle_eval <- NULL
     if (run_oracle) {
       oracle <- load_or_run(file.path(regime_dir, "direct_oracle_fit.rds"), function() {
@@ -776,7 +737,7 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
       data.table(model = depth1_label, root_curve_type = depth1_leaf$root_fit$root_summary$root_curve_type[1], root_effectiveness_status = depth1_leaf$root_fit$root_summary$root_effectiveness_status[1], depth_gate = depth1_leaf$depth_gate$identification_recommendation[1])
     )
     primary_overall <- rbindlist(c(
-      list(direct_eval$overall, direct_meridian_equivalent_eval$overall), lapply(staged_evals, `[[`, "overall")
+      list(direct_eval$overall), lapply(staged_evals, `[[`, "overall")
     ), fill = TRUE)
     overall <- if (is.null(oracle_eval)) primary_overall else rbindlist(list(primary_overall, oracle_eval$overall), fill = TRUE)
     root_audit <- rbindlist(staged_root_audit, fill = TRUE)
@@ -833,7 +794,7 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
       default = "measured"
     )]
     primary_by_variable <- rbindlist(c(
-      list(direct_eval$by_variable, direct_meridian_equivalent_eval$by_variable), lapply(staged_evals, `[[`, "by_variable")
+      list(direct_eval$by_variable), lapply(staged_evals, `[[`, "by_variable")
     ), fill = TRUE)
     by_variable <- if (is.null(oracle_eval)) primary_by_variable else rbindlist(list(primary_by_variable, oracle_eval$by_variable), fill = TRUE)
     by_variable[, `:=`(regime = regime, validation_seed = validation_seed)]
@@ -880,7 +841,7 @@ if (Sys.getenv("ECONIMAP_RUN_SEQUENTIAL_STAN_VALIDATION", "0") != "1") {
   if ("clean_separated" %in% regimes && any(overall$model == "direct_leaf") &&
       all(c("sequential_root_to_leaf", "sequential_depth1_to_leaf") %in% overall$model)) {
     clean <- overall[regime == "clean_separated" & model != "direct_oracle_upper_bound"]
-    stopifnot(all(clean[, .N, by = validation_seed]$N == 4L))
+            stopifnot(all(clean[, .N, by = validation_seed]$N == if (run_oracle) 4L else 3L))
     stopifnot(all(is.finite(clean$total_relative_error)))
     # Guard the observed staged benefit without pinning the test to one exact
     # posterior realization. This applies only to the deliberately fixed,

@@ -648,6 +648,7 @@ if (file.exists(validation_path)) {
   stopifnot(grepl("truth_metadata", validation_text, fixed = TRUE))
   stopifnot(grepl("generic_fit_metadata", validation_text, fixed = TRUE))
   stopifnot(grepl("oracle_fit_metadata", validation_text, fixed = TRUE))
+  stopifnot(!grepl("meridian_equivalent", validation_text, fixed = TRUE))
   stopifnot(!grepl("validation_version", validation_text, fixed = TRUE))
   stopifnot(grepl("checkpoint_hash", validation_text, fixed = TRUE))
   stopifnot(grepl("effectiveness_mae", validation_text, fixed = TRUE))
