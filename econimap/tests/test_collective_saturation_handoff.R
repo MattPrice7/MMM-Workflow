@@ -51,7 +51,7 @@ stopifnot(all(abs(collective_md$anchor_saturation_precision - metadata$anchor_sa
 stopifnot(all(collective_md$rrate_precision > metadata$rrate_precision))
 stopifnot(all(independent_md$anchor_saturation_precision > metadata$anchor_saturation_precision))
 stopifnot(eval(formals(run_sequential_hierarchical_bayes)$saturation_handoff)[1] == "generic_child_prior")
-stopifnot(eval(formals(continue_sequential_hierarchical_bayes)$saturation_handoff)[1] == "generic_child_prior")
+stopifnot(eval(formals(continue_sequential_hierarchical_bayes)$saturation_handoff)[1] == "collective_parent_shape_reconciliation")
 stopifnot(inherits(try(econ_seq_apply_rrate_priors(
   metadata, parent_evidence,
   saturation_handoff = "collective_parent_response_reconciliation_experimental"

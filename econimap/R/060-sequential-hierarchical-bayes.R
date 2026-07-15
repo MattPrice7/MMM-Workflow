@@ -2803,6 +2803,13 @@ econ_seq_hierarchical_transfer_posterior_audit <- function(fit_obj, transfer_inp
   }
   eff <- data.table::as.data.table(transfer_input$effectiveness %||% data.table::data.table())
   ad <- data.table::as.data.table(transfer_input$adstock %||% data.table::data.table())
+  # Independent child-adstock priors intentionally have no latent parent/tau
+  # table. Keep the posterior audit optional rather than letting that empty
+  # schema discard an otherwise completed child fit.
+  for (cc in c("parent_id", "variable", "reference_spend")) {
+    if (!cc %in% names(eff)) eff[, (cc) := if (identical(cc, "reference_spend")) NA_real_ else NA_character_]
+  }
+  if (!"parent_id" %in% names(ad)) ad[, parent_id := character()]
   eff_parent <- unique(eff$parent_id)
   ad_parent <- unique(ad$parent_id)
   parent_effect <- summarize("seq_effect_parent", eff_parent, "parent_effectiveness")
@@ -5207,13 +5214,15 @@ run_sequential_hierarchical_bayes <- function(data,
                                               holdout_last_n = 0L,
                                               child_prior_overrides = NULL,
                                               data_reuse_inflation = 1.5,
-                                              child_heterogeneity_relative_sd = 0.50,
+                                              # Root total-media is the broadest handoff; retain a wider,
+                                              # fixed child-deviation allowance than later parent-child splits.
+                                              child_heterogeneity_relative_sd = 0.75,
                                               mix_transfer_scale = 1,
-                                              minimum_relative_sd = 0.35,
+                                              minimum_relative_sd = 0.50,
                                               strong_child_prior_relaxation = 1.20,
                                               curve_transfer_mode = c("effectiveness_adstock_saturation", "effectiveness_adstock", "effectiveness_only"),
                                               saturation_handoff = c("generic_child_prior", "collective_parent_shape_reconciliation", "independent_parent_prior"),
-                                              sequential_effectiveness_application = c("hierarchical_tau", "reference_calibration", "coefficient_approximation"),
+                                              sequential_effectiveness_application = c("reference_calibration", "hierarchical_tau", "coefficient_approximation"),
                                               # Parent-informed independent priors preserve child-specific
                                               # learning without adding a shared-tau funnel to the child fit.
                                               sequential_adstock_application = c("independent_prior", "hierarchical_tau"),
@@ -5611,8 +5620,11 @@ continue_sequential_hierarchical_bayes <- function(parent_stage,
                                                    minimum_relative_sd = 0.35,
                                                    strong_child_prior_relaxation = 1.20,
                                                    curve_transfer_mode = c("effectiveness_adstock_saturation", "effectiveness_adstock", "effectiveness_only"),
-                                                   saturation_handoff = c("generic_child_prior", "collective_parent_shape_reconciliation", "independent_parent_prior"),
-                                                   sequential_effectiveness_application = c("hierarchical_tau", "reference_calibration", "coefficient_approximation"),
+                                                   # Below the root, an eligible complete partition receives a
+                                                   # soft aggregate shape constraint; individual child curves
+                                                   # remain estimable and are never parent-centered directly.
+                                                   saturation_handoff = c("collective_parent_shape_reconciliation", "generic_child_prior", "independent_parent_prior"),
+                                                   sequential_effectiveness_application = c("reference_calibration", "hierarchical_tau", "coefficient_approximation"),
                                                    sequential_adstock_application = c("independent_prior", "hierarchical_tau"),
                                                    sequential_tau_overrides = NULL,
                                                    parent_draw_count = 200L,
