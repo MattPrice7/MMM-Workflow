@@ -58,4 +58,67 @@ stopifnot(fit$root_summary$root_geo_media_effect_mode[1] == "partially_pooled_lo
 stopifnot(fit$root_summary$root_geo_media_effect_scale[1] == "log")
 stopifnot(all(fit$root_geo_media_effects$root_media_beta > 0))
 stopifnot(abs(fit$root_summary$root_effectiveness[1] - expected) < 0.15)
+
+# A geo-panel root may need local linear baseline drift while retaining a
+# shared total-media effect. The trend option is deliberately opt-in, and this
+# regression guard confirms that it does not leak into a generic root fit.
+set.seed(603)
+trend_panel <- rbindlist(lapply(seq_along(geos), function(ii) {
+  n <- length(periods)
+  time_index <- seq_len(n)
+  spend <- pmax(15, 130 + 22 * sin(time_index / 4 + ii) + rnorm(n, 0, 16))
+  local_trend <- c(-2.1, -0.9, 0.4, 1.3, 2.5)[ii] * (time_index - mean(time_index))
+  data.table(
+    period = periods,
+    geo = geos[ii],
+    entity = "brand",
+    population = 1e6,
+    paid_support = spend * 9,
+    paid_spend = spend,
+    kpi = 900 + ii * 35 + local_trend + 0.68 * spend + rnorm(n, 0, 6)
+  )
+}))
+trend_metadata <- metadata[variable != "macro"]
+trend_fit <- fit_parsimonious_total_media_root(
+  data = trend_panel,
+  metadata_input = trend_metadata,
+  dep_var_col = "kpi",
+  group_col = "geo",
+  time_col = "period",
+  entity_col = "entity",
+  population_col = "population",
+  root_scope = "hierarchical_panel",
+  root_media_transform = "linear",
+  root_time_baseline = "fourier",
+  root_fourier_harmonics = 0L,
+  root_trend_spec = "none",
+  root_geo_trend = "fixed_linear",
+  root_geo_media_effect = "shared",
+  holdout_last_n = 8L,
+  root_bootstrap_reps = 0L
+)
+stopifnot(trend_fit$root_summary$root_geo_trend[1] == "fixed_linear")
+stopifnot(abs(trend_fit$root_summary$root_effectiveness[1] - 0.68) < 0.10)
+stopifnot(trend_fit$root_scope_eligibility$decision[1] == "fit_hierarchical_root_with_partial_pooling")
+stopifnot(trend_fit$root_holdout_validation$summary$root_holdout_status[1] == "available")
+stopifnot(trend_fit$root_holdout_validation$summary$root_holdout_row_n[1] == length(geos) * 8L)
+stopifnot(trend_fit$root_holdout_validation$summary$root_holdout_media_rmse_improvement[1] > 0)
+stopifnot(trend_fit$root_summary$root_effectiveness_status[1] == "positive_transferable")
+
+# A positive training estimate without incremental holdout value must never be
+# passed to children as if it were transferable parent evidence.
+nontransferable_root <- trend_fit
+nontransferable_root$root_summary <- copy(trend_fit$root_summary)
+nontransferable_root$root_summary[, root_effectiveness_status := "positive_in_sample_not_transferable_holdout"]
+nontransferable_priors <- build_sequential_effectiveness_priors(
+  root_fit = nontransferable_root,
+  data = trend_panel,
+  metadata_input = trend_metadata,
+  time_col = "period",
+  training_times = trend_fit$root_training_times,
+  child_variables = "paid_support",
+  child_spend_map = data.table(variable = "paid_support", spend_col = "paid_spend")
+)
+stopifnot(!nontransferable_priors$business_priors$parent_positive_effect_transferred[1])
+stopifnot(nontransferable_priors$business_priors$prior_mean[1] == 0)
 cat("Positive log-scale geo root test passed.\n")

@@ -1008,22 +1008,28 @@ econ_seq_root_panel <- function(data,
     between_group_variation <- out[, .(
       between_group_spend_sd = stats::sd(root_identifiable_paid_spend__, na.rm = TRUE)
     ), by = root_time__]
-    eligible <- data.table::uniqueN(out$root_group__) > 1L &&
+    observed_variation_eligible <- data.table::uniqueN(out$root_group__) > 1L &&
       sum(is.finite(group_variation$group_spend_sd) & group_variation$group_spend_sd > 1e-10) >= 2L &&
-      sum(is.finite(between_group_variation$between_group_spend_sd) & between_group_variation$between_group_spend_sd > 1e-10) >= 4L &&
-      identical(root_id$overall$identification_recommendation[1], "fit")
+      sum(is.finite(between_group_variation$between_group_spend_sd) & between_group_variation$between_group_spend_sd > 1e-10) >= 4L
+    # Genuine observed cross-group variation is a data-validity requirement.
+    # The continuous identification score informs pooling and reporting; it is
+    # not an arbitrary pre-fit veto on the hierarchical model.
+    eligible <- observed_variation_eligible
     hierarchical_scope_eligibility <- data.table::data.table(
       root_scope = "hierarchical_panel",
       group_n = data.table::uniqueN(out$root_group__),
       groups_with_media_variation_n = sum(is.finite(group_variation$group_spend_sd) & group_variation$group_spend_sd > 1e-10),
       periods_with_between_group_media_variation_n = sum(is.finite(between_group_variation$between_group_spend_sd) & between_group_variation$between_group_spend_sd > 1e-10),
       identification_recommendation = root_id$overall$identification_recommendation[1],
+      observed_variation_eligible = observed_variation_eligible,
       eligible = eligible,
-      decision = if (eligible) "fit_hierarchical_root" else "use_national_root",
-      note = "A hierarchical root is opt-in only when genuinely observed total paid-media exposure has identifiable residual group variation. Mechanically allocated national media are excluded from this screen."
+      decision = if (!eligible) "use_national_root" else if (identical(root_id$overall$identification_recommendation[1], "fit")) {
+        "fit_hierarchical_root"
+      } else "fit_hierarchical_root_with_partial_pooling",
+      note = "A hierarchical root requires genuinely observed total paid-media variation. The continuous identification screen informs pooling and reporting but does not prevent a valid partially pooled fit. Mechanically allocated national media are excluded from this screen."
     )
     if (!eligible) {
-      stop("root_scope = 'hierarchical_panel' requires identifiable cross-group total-media variation. Use the default root_scope = 'national' otherwise.", call. = FALSE)
+      stop("root_scope = 'hierarchical_panel' requires genuinely observed cross-group total-media variation. Use the default root_scope = 'national' for national or mechanically allocated media.", call. = FALSE)
     }
     incomplete <- !is.finite(out$root_y__) | !is.finite(out$root_total_paid_spend__)
     if (length(controls)) {
@@ -1227,7 +1233,9 @@ econ_seq_root_curve_spec <- function(type = c("linear", "adstock_hill"),
   )
 }
 
-econ_seq_root_media_feature <- function(root_data, curve_spec) {
+econ_seq_root_media_feature <- function(root_data,
+                                        curve_spec,
+                                        feature_scale_override = NULL) {
   dt <- data.table::copy(root_data)
   raw_spend <- pmax(suppressWarnings(as.numeric(dt$root_total_paid_spend__)), 0)
   raw_spend[!is.finite(raw_spend)] <- 0
@@ -1248,6 +1256,8 @@ econ_seq_root_media_feature <- function(root_data, curve_spec) {
   )
   if (identical(spec$type, "linear")) {
     scale <- mean(pressure[pressure > 0], na.rm = TRUE)
+    override <- suppressWarnings(as.numeric(feature_scale_override)[1])
+    if (is.finite(override) && override > 1e-8) scale <- override
     if (!is.finite(scale) || scale <= 1e-8) scale <- 1
     feature <- pressure / scale
     conversion <- sum(feature * outcome_multiplier) / sum(raw_spend)
@@ -1288,6 +1298,8 @@ econ_seq_root_media_feature <- function(root_data, curve_spec) {
   saturation <- z / (1 + z)
   saturation[!is.finite(saturation)] <- 0
   scale <- mean(saturation[pressure > 0], na.rm = TRUE)
+  override <- suppressWarnings(as.numeric(feature_scale_override)[1])
+  if (is.finite(override) && override > 1e-8) scale <- override
   if (!is.finite(scale) || scale <= 1e-8) scale <- 1
   feature <- saturation / scale
   conversion <- sum(feature * outcome_multiplier) / sum(raw_spend)
@@ -1352,11 +1364,20 @@ econ_seq_build_root_design <- function(root_data,
                                        root_season_period = 52L,
                                        root_time_baseline = c("auto", "fourier", "knots"),
                                        root_knot_n = 6L,
-                                       root_curve_spec = econ_seq_root_curve_spec()) {
+                                       root_curve_spec = econ_seq_root_curve_spec(),
+                                       root_geo_trend = c("none", "fixed_linear"),
+                                       root_feature_scale = NULL,
+                                       root_scaling_reference = NULL) {
   dt <- data.table::copy(root_data)
   root_trend_spec <- match.arg(root_trend_spec)
+  root_geo_trend <- match.arg(root_geo_trend)
   root_time_baseline <- econ_seq_resolve_root_time_baseline(root_time_baseline, dt)
-  media <- econ_seq_root_media_feature(dt, root_curve_spec)
+  reference <- root_scaling_reference %||% list()
+  media <- econ_seq_root_media_feature(
+    dt,
+    root_curve_spec,
+    feature_scale_override = root_feature_scale %||% reference$media_feature_scale
+  )
   cols <- list(`(Intercept)` = rep(1, nrow(dt)), total_paid_media_scaled = media$feature)
 
   groups <- as.character(dt$root_group__)
@@ -1365,10 +1386,31 @@ econ_seq_build_root_design <- function(root_data,
     for (gg in group_levels[-1]) cols[[paste0("group__", make.names(gg))]] <- as.numeric(groups == gg)
   }
   time_index <- as.numeric(dt$root_time_index__)
-  if (identical(root_trend_spec, "linear") && length(unique(time_index)) > 2L) {
-    trend <- time_index - mean(time_index)
-    trend_sd <- stats::sd(trend)
-    cols$trend__ <- if (is.finite(trend_sd) && trend_sd > 1e-8) trend / trend_sd else trend
+  trend_scaled <- NULL
+  trend_center <- NA_real_
+  trend_scale <- NA_real_
+  if ((identical(root_trend_spec, "linear") || identical(root_geo_trend, "fixed_linear")) &&
+      length(unique(time_index)) > 2L) {
+    trend_center <- suppressWarnings(as.numeric(reference$trend_center)[1])
+    if (!is.finite(trend_center)) trend_center <- mean(time_index)
+    trend_scale <- suppressWarnings(as.numeric(reference$trend_scale)[1])
+    trend_raw <- time_index - trend_center
+    if (!is.finite(trend_scale) || trend_scale <= 1e-8) trend_scale <- stats::sd(trend_raw)
+    trend_scaled <- if (is.finite(trend_scale) && trend_scale > 1e-8) trend_raw / trend_scale else trend_raw
+  }
+  if (identical(root_trend_spec, "linear") && !is.null(trend_scaled)) {
+    cols$trend__ <- trend_scaled
+  }
+  if (identical(root_geo_trend, "fixed_linear")) {
+    if (length(group_levels) < 2L || is.null(trend_scaled)) {
+      stop("root_geo_trend = 'fixed_linear' requires at least two groups and three time periods.", call. = FALSE)
+    }
+    # A shared trend plus group deviations is identifiable with fixed group
+    # intercepts, while preserving a compact root baseline.
+    if (!("trend__" %in% names(cols))) cols$trend__ <- trend_scaled
+    for (gg in group_levels[-1L]) {
+      cols[[paste0("geo_trend__", make.names(gg))]] <- trend_scaled * as.numeric(groups == gg)
+    }
   }
   time_basis <- econ_seq_root_time_basis(
     time_index = time_index,
@@ -1378,11 +1420,19 @@ econ_seq_build_root_design <- function(root_data,
     root_knot_n = root_knot_n
   )
   cols <- c(cols, time_basis$columns)
+  control_scaling <- list()
   for (cc in control_cols) {
     z <- as.numeric(dt[[cc]])
-    z <- z - mean(z, na.rm = TRUE)
-    z_sd <- stats::sd(z, na.rm = TRUE)
-    if (is.finite(z_sd) && z_sd > 1e-8) cols[[paste0("control__", cc)]] <- z / z_sd
+    ref_stats <- reference$control_scaling[[cc]] %||% list()
+    z_center <- suppressWarnings(as.numeric(ref_stats$center)[1])
+    if (!is.finite(z_center)) z_center <- mean(z, na.rm = TRUE)
+    z_scale <- suppressWarnings(as.numeric(ref_stats$scale)[1])
+    z_centered <- z - z_center
+    if (!is.finite(z_scale) || z_scale <= 1e-8) z_scale <- stats::sd(z_centered, na.rm = TRUE)
+    if (is.finite(z_scale) && z_scale > 1e-8) {
+      cols[[paste0("control__", cc)]] <- z_centered / z_scale
+      control_scaling[[cc]] <- list(center = z_center, scale = z_scale)
+    }
   }
   X <- do.call(cbind, cols)
   storage.mode(X) <- "double"
@@ -1394,7 +1444,17 @@ econ_seq_build_root_design <- function(root_data,
     media = media,
     root_time_baseline = time_basis$type,
     root_time_basis_cols = time_basis$names,
-    root_time_basis_n = time_basis$effective_n
+    root_time_basis_n = time_basis$effective_n,
+    root_geo_trend = root_geo_trend,
+    root_trend_spec = root_trend_spec,
+    root_fourier_harmonics = root_fourier_harmonics,
+    root_season_period = root_season_period,
+    root_knot_n = root_knot_n,
+    group_levels = group_levels,
+    media_feature_scale = media$feature_scale,
+    trend_center = trend_center,
+    trend_scale = trend_scale,
+    control_scaling = control_scaling
   )
 }
 
@@ -1538,7 +1598,8 @@ econ_seq_fit_root_pooled_positive_nlme <- function(design,
     root_geo_media_effect_fallback_reason = NA_character_,
     root_time_baseline = design$root_time_baseline,
     root_time_basis_n = design$root_time_basis_n,
-    root_time_basis_penalty_applied = FALSE
+    root_time_basis_penalty_applied = FALSE,
+    root_geo_trend = design$root_geo_trend
   )
   attr(out, "root_fitted_values") <- fitted
   attr(out, "root_residuals") <- resid
@@ -1657,7 +1718,8 @@ econ_seq_fit_root_pooled_lme <- function(design,
     root_geo_media_effect_fallback_reason = NA_character_,
     root_time_baseline = design$root_time_baseline,
     root_time_basis_n = design$root_time_basis_n,
-    root_time_basis_penalty_applied = FALSE
+    root_time_basis_penalty_applied = FALSE,
+    root_geo_trend = design$root_geo_trend
   )
   attr(out, "root_fitted_values") <- fitted
   attr(out, "root_residuals") <- resid
@@ -1677,10 +1739,12 @@ econ_seq_fit_root_lm <- function(root_data,
                                  root_time_baseline = c("auto", "fourier", "knots"),
                                  root_knot_n = 6L,
                                  root_knot_penalty = 1,
-                                 root_geo_media_effect = c("shared", "partially_pooled")) {
+                                 root_geo_media_effect = c("shared", "partially_pooled"),
+                                 root_geo_trend = c("none", "fixed_linear")) {
   root_trend_spec <- match.arg(root_trend_spec)
   root_effect_sign <- match.arg(root_effect_sign)
   root_geo_media_effect <- match.arg(root_geo_media_effect)
+  root_geo_trend <- match.arg(root_geo_trend)
   design <- econ_seq_build_root_design(
     root_data = root_data,
     control_cols = control_cols,
@@ -1689,7 +1753,8 @@ econ_seq_fit_root_lm <- function(root_data,
     root_season_period = root_season_period,
     root_time_baseline = root_time_baseline,
     root_knot_n = root_knot_n,
-    root_curve_spec = root_curve_spec
+    root_curve_spec = root_curve_spec,
+    root_geo_trend = root_geo_trend
   )
   prior <- econ_seq_parse_root_effect_prior(root_effect_prior)
   if (identical(root_geo_media_effect, "partially_pooled") && !prior$active) {
@@ -1805,7 +1870,8 @@ econ_seq_fit_root_lm <- function(root_data,
     } else NA_character_,
     root_time_baseline = design$root_time_baseline,
     root_time_basis_n = design$root_time_basis_n,
-    root_time_basis_penalty_applied = identical(design$root_time_baseline, "knots") && length(time_idx) > 0L
+    root_time_basis_penalty_applied = identical(design$root_time_baseline, "knots") && length(time_idx) > 0L,
+    root_geo_trend = design$root_geo_trend
   )
   attr(out, "root_fitted_values") <- fitted
   attr(out, "root_residuals") <- resid
@@ -1816,7 +1882,127 @@ econ_seq_fit_root_lm <- function(root_data,
     root_media_beta_deviation = 0,
     root_effect_scale = design$effect_conversion
   )
+  attr(out, "root_beta") <- stats::setNames(beta, colnames(X))
+  attr(out, "root_design") <- design
   out
+}
+
+#' Score a shared-effect root against its held-out continuation.
+#'
+#' This intentionally supports only the matched Fourier root path for now.
+#' Knot extrapolation and mixed-effect forecasts need their own fitted-basis
+#' contracts; reporting those as validated here would be misleading.
+econ_seq_root_holdout_validation <- function(root_data,
+                                              training_times,
+                                              root_fit) {
+  empty_summary <- function(status, note) data.table::data.table(
+    root_holdout_status = status,
+    root_holdout_note = note,
+    root_holdout_row_n = 0L,
+    root_holdout_rmse = NA_real_,
+    root_holdout_r_squared = NA_real_,
+    root_holdout_baseline_rmse = NA_real_,
+    root_holdout_media_rmse_improvement = NA_real_,
+    root_holdout_media_sse_improvement = NA_real_
+  )
+  design_train <- attr(root_fit, "root_design")
+  beta <- attr(root_fit, "root_beta")
+  root_fit <- data.table::as.data.table(root_fit)
+  if (!nrow(root_fit)) return(list(summary = empty_summary("unavailable_no_fit", "No root fit was supplied."), predictions = data.table::data.table()))
+  training_times <- unique(training_times)
+  train_idx <- root_data$root_time__ %in% training_times
+  holdout_idx <- !train_idx
+  if (!any(holdout_idx)) {
+    return(list(summary = empty_summary("not_requested", "No held-out root periods were supplied."), predictions = data.table::data.table()))
+  }
+  if (!identical(as.character(root_fit$root_geo_media_effect_mode[1]), "shared")) {
+    return(list(summary = empty_summary(
+      "unavailable_mixed_effect_root",
+      "Out-of-time scoring for partially pooled geo-media roots is not yet implemented; do not treat in-sample fit as validation."
+    ), predictions = data.table::data.table()))
+  }
+  if (is.null(design_train) || !length(beta)) {
+    return(list(summary = empty_summary("unavailable_fit_contract", "The root fit did not retain its shared-effect design contract."), predictions = data.table::data.table()))
+  }
+  if (!identical(design_train$root_time_baseline, "fourier")) {
+    return(list(summary = empty_summary(
+      "unavailable_knot_extrapolation",
+      "Held-out scoring is currently limited to the Fourier root baseline so basis knots are never re-estimated using holdout periods."
+    ), predictions = data.table::data.table()))
+  }
+  full_design <- tryCatch(econ_seq_build_root_design(
+    root_data = root_data,
+    control_cols = names(design_train$control_scaling),
+    root_trend_spec = design_train$root_trend_spec,
+    root_fourier_harmonics = design_train$root_fourier_harmonics,
+    root_season_period = design_train$root_season_period,
+    root_time_baseline = "fourier",
+    root_knot_n = design_train$root_knot_n,
+    root_curve_spec = design_train$media$curve_spec,
+    root_geo_trend = design_train$root_geo_trend,
+    root_feature_scale = design_train$media_feature_scale,
+    root_scaling_reference = list(
+      media_feature_scale = design_train$media_feature_scale,
+      trend_center = design_train$trend_center,
+      trend_scale = design_train$trend_scale,
+      control_scaling = design_train$control_scaling
+    )
+  ), error = function(e) NULL)
+  if (is.null(full_design) || !identical(colnames(full_design$X), names(beta))) {
+    return(list(summary = empty_summary("unavailable_design_mismatch", "The held-out root design did not match the training design exactly."), predictions = data.table::data.table()))
+  }
+  X <- full_design$X
+  y <- full_design$y
+  media_idx <- match("total_paid_media_scaled", colnames(X))
+  if (is.na(media_idx) || any(!is.finite(y))) {
+    return(list(summary = empty_summary("unavailable_invalid_holdout", "The held-out root panel contains invalid outcome or media rows."), predictions = data.table::data.table()))
+  }
+  fitted <- as.numeric(X %*% as.numeric(beta))
+  baseline_idx <- setdiff(seq_len(ncol(X)), media_idx)
+  baseline_fit <- tryCatch(
+    stats::lm.fit(X[train_idx, baseline_idx, drop = FALSE], y[train_idx]),
+    error = function(e) NULL
+  )
+  baseline_beta <- if (is.null(baseline_fit)) rep(NA_real_, length(baseline_idx)) else baseline_fit$coefficients
+  estimable_baseline <- is.finite(baseline_beta)
+  baseline_fitted <- if (any(estimable_baseline)) {
+    as.numeric(X[, baseline_idx[estimable_baseline], drop = FALSE] %*% baseline_beta[estimable_baseline])
+  } else rep(NA_real_, nrow(X))
+  valid_holdout <- holdout_idx & is.finite(y) & is.finite(fitted) & is.finite(baseline_fitted)
+  if (!any(valid_holdout)) {
+    note <- paste0(
+      "No complete held-out root rows remained after design alignment (holdout=", sum(holdout_idx),
+      ", finite_outcome=", sum(holdout_idx & is.finite(y)),
+      ", finite_model=", sum(holdout_idx & is.finite(fitted)),
+      ", finite_baseline=", sum(holdout_idx & is.finite(baseline_fitted)), ")."
+    )
+    return(list(summary = empty_summary("unavailable_invalid_holdout", note), predictions = data.table::data.table()))
+  }
+  hold_y <- y[valid_holdout]
+  hold_fitted <- fitted[valid_holdout]
+  hold_baseline <- baseline_fitted[valid_holdout]
+  full_sse <- sum((hold_y - hold_fitted)^2)
+  baseline_sse <- sum((hold_y - hold_baseline)^2)
+  holdout_summary <- data.table::data.table(
+    root_holdout_status = "available",
+    root_holdout_note = "Training-only feature scaling and Fourier basis; media continuation retains training-period adstock history.",
+    root_holdout_row_n = sum(valid_holdout),
+    root_holdout_rmse = sqrt(mean((hold_y - hold_fitted)^2)),
+    root_holdout_r_squared = if (stats::var(hold_y) > 1e-12) 1 - full_sse / sum((hold_y - mean(hold_y))^2) else NA_real_,
+    root_holdout_baseline_rmse = sqrt(mean((hold_y - hold_baseline)^2)),
+    root_holdout_media_rmse_improvement = sqrt(mean((hold_y - hold_baseline)^2)) - sqrt(mean((hold_y - hold_fitted)^2)),
+    root_holdout_media_sse_improvement = baseline_sse - full_sse
+  )
+  predictions <- data.table::data.table(
+    root_group__ = as.character(root_data$root_group__),
+    root_time__ = root_data$root_time__,
+    root_training_row = train_idx,
+    root_y_model = y,
+    root_fitted = fitted,
+    root_baseline_fitted = baseline_fitted,
+    root_media_contribution = as.numeric(beta[media_idx]) * X[, media_idx]
+  )
+  list(summary = holdout_summary[], predictions = predictions[])
 }
 
 econ_seq_root_curve_candidates <- function(root_media_transform = c("adstock_hill", "linear"),
@@ -1916,7 +2102,9 @@ econ_seq_fit_root_multistart <- function(root_data,
                                          root_time_baseline = c("auto", "fourier", "knots"),
                                          root_knot_n = 6L,
                                          root_knot_penalty = 1,
-                                         root_geo_media_effect = c("shared", "partially_pooled")) {
+                                         root_geo_media_effect = c("shared", "partially_pooled"),
+                                         root_geo_trend = c("none", "fixed_linear")) {
+  root_geo_trend <- match.arg(root_geo_trend)
   bounds <- econ_seq_root_nonlinear_bounds(
     root_data, root_rrate_bounds, root_half_saturation_multiple_bounds, root_steepness_bounds
   )
@@ -1931,7 +2119,8 @@ econ_seq_fit_root_multistart <- function(root_data,
       root_data, control_cols, root_trend_spec, root_fourier_harmonics, root_season_period,
       root_effect_prior, root_effect_sign, spec,
       root_time_baseline = root_time_baseline, root_knot_n = root_knot_n,
-      root_knot_penalty = root_knot_penalty, root_geo_media_effect = root_geo_media_effect
+      root_knot_penalty = root_knot_penalty, root_geo_media_effect = root_geo_media_effect,
+      root_geo_trend = root_geo_trend
     ), error = function(e) NULL)
     if (is.null(fit) || !is.finite(fit$root_profile_objective[1])) return(1e30)
     fit$root_profile_objective[1]
@@ -1964,7 +2153,8 @@ econ_seq_fit_root_multistart <- function(root_data,
     root_data, control_cols, root_trend_spec, root_fourier_harmonics, root_season_period,
     root_effect_prior, root_effect_sign, best_spec,
     root_time_baseline = root_time_baseline, root_knot_n = root_knot_n,
-    root_knot_penalty = root_knot_penalty, root_geo_media_effect = root_geo_media_effect
+    root_knot_penalty = root_knot_penalty, root_geo_media_effect = root_geo_media_effect,
+    root_geo_trend = root_geo_trend
   )
   near <- usable[objective <= min(objective) + 2]
   spread <- if (nrow(near) > 1L) c(
@@ -2005,15 +2195,18 @@ econ_seq_select_root_curve <- function(root_data,
                                        root_time_baseline = c("auto", "fourier", "knots"),
                                        root_knot_n = 6L,
                                        root_knot_penalty = 1,
-                                       root_geo_media_effect = c("shared", "partially_pooled")) {
+                                       root_geo_media_effect = c("shared", "partially_pooled"),
+                                       root_geo_trend = c("none", "fixed_linear")) {
   root_media_transform <- match.arg(root_media_transform)
   root_effect_sign <- match.arg(root_effect_sign)
+  root_geo_trend <- match.arg(root_geo_trend)
   minimum_delta <- max(0, suppressWarnings(as.numeric(root_curve_min_delta_aicc)[1]))
   linear_fit <- econ_seq_fit_root_lm(
     root_data, control_cols, root_trend_spec, root_fourier_harmonics, root_season_period,
     root_effect_prior, root_effect_sign, econ_seq_root_curve_spec("linear"),
     root_time_baseline = root_time_baseline, root_knot_n = root_knot_n,
-    root_knot_penalty = root_knot_penalty, root_geo_media_effect = root_geo_media_effect
+    root_knot_penalty = root_knot_penalty, root_geo_media_effect = root_geo_media_effect,
+    root_geo_trend = root_geo_trend
   )
   linear_fit[, `:=`(candidate_fit_ok = TRUE, candidate_role = "primary_linear_limit")]
   multistart <- if (identical(root_media_transform, "adstock_hill")) econ_seq_fit_root_multistart(
@@ -2021,7 +2214,8 @@ econ_seq_select_root_curve <- function(root_data,
     root_effect_prior, root_effect_sign, root_nonlinear_starts, root_rrate_bounds,
     root_half_saturation_multiple_bounds, root_steepness_bounds, root_optimizer_maxit,
     root_time_baseline = root_time_baseline, root_knot_n = root_knot_n,
-    root_knot_penalty = root_knot_penalty, root_geo_media_effect = root_geo_media_effect
+    root_knot_penalty = root_knot_penalty, root_geo_media_effect = root_geo_media_effect,
+    root_geo_trend = root_geo_trend
   ) else list(fit = NULL, runs = data.table::data.table(), diagnostics = data.table::data.table(
     nonlinear_fit_stable = NA, fallback_recommended = FALSE, fallback_reason = "forced_linear"
   ))
@@ -2049,7 +2243,8 @@ econ_seq_select_root_curve <- function(root_data,
         root_time_baseline = root_time_baseline,
         root_knot_n = root_knot_n,
         root_knot_penalty = root_knot_penalty,
-        root_geo_media_effect = root_geo_media_effect
+        root_geo_media_effect = root_geo_media_effect,
+        root_geo_trend = root_geo_trend
       ),
       error = function(e) NULL
     )
@@ -2167,12 +2362,14 @@ econ_seq_block_bootstrap_root <- function(root_data,
                                           root_knot_n = 6L,
                                           root_knot_penalty = 1,
                                           root_geo_media_effect = c("shared", "partially_pooled"),
+                                          root_geo_trend = c("none", "fixed_linear"),
                                           reselect_curve = TRUE,
                                           reps = 200L,
                                           block_length = 4L,
                                           seed = 123L) {
   root_media_transform <- match.arg(root_media_transform)
   root_effect_sign <- match.arg(root_effect_sign)
+  root_geo_trend <- match.arg(root_geo_trend)
   reps <- max(0L, as.integer(reps)[1])
   empty <- function() data.table::data.table(
     draw = integer(), root_effectiveness = numeric(), fit_ok = logical(),
@@ -2196,7 +2393,8 @@ econ_seq_block_bootstrap_root <- function(root_data,
     root_time_baseline = root_time_baseline,
     root_knot_n = root_knot_n,
     root_knot_penalty = root_knot_penalty,
-    root_geo_media_effect = root_geo_media_effect
+    root_geo_media_effect = root_geo_media_effect,
+    root_geo_trend = root_geo_trend
   ), error = function(e) NULL)
   if (is.null(base_fit)) return(empty())
   base_fitted <- attr(base_fit, "root_fitted_values")
@@ -2257,7 +2455,8 @@ econ_seq_block_bootstrap_root <- function(root_data,
             root_time_baseline = root_time_baseline,
             root_knot_n = root_knot_n,
             root_knot_penalty = root_knot_penalty,
-            root_geo_media_effect = root_geo_media_effect
+            root_geo_media_effect = root_geo_media_effect,
+            root_geo_trend = root_geo_trend
           )$selected_spec,
           error = function(e) NULL
         )
@@ -2282,7 +2481,8 @@ econ_seq_block_bootstrap_root <- function(root_data,
         root_time_baseline = root_time_baseline,
         root_knot_n = root_knot_n,
         root_knot_penalty = root_knot_penalty,
-        root_geo_media_effect = root_geo_media_effect
+        root_geo_media_effect = root_geo_media_effect,
+        root_geo_trend = root_geo_trend
       ), error = function(e) NULL)
       if (is.null(fit)) return(data.table::data.table(draw = ii, root_effectiveness = NA_real_, fit_ok = FALSE,
                                                        root_curve_type = selected_spec$type, root_rrate = selected_spec$rrate,
@@ -4246,6 +4446,7 @@ fit_parsimonious_total_media_root <- function(data,
                                               root_knot_n = 6L,
                                               root_knot_penalty = 1,
                                               root_geo_media_effect = c("shared", "partially_pooled"),
+                                              root_geo_trend = c("none", "fixed_linear"),
                                               root_media_transform = c("adstock_hill", "linear"),
                                               root_rrate_grid = c(0, 0.25, 0.50, 0.70),
                                               root_anchor_saturation_grid = c(0.30, 0.50, 0.70),
@@ -4272,6 +4473,7 @@ fit_parsimonious_total_media_root <- function(data,
   root_trend_spec <- match.arg(root_trend_spec)
   root_pressure_scaling <- match.arg(root_pressure_scaling)
   root_geo_media_effect <- match.arg(root_geo_media_effect)
+  root_geo_trend <- match.arg(root_geo_trend)
   root_time_baseline <- match.arg(root_time_baseline)
   if (is.null(root_pressure_col)) root_pressure_col <- population_col %||% market_size_col
   canonical <- canonicalize_sequential_media_panel(
@@ -4336,6 +4538,7 @@ fit_parsimonious_total_media_root <- function(data,
     root_knot_n = root_knot_n,
     root_knot_penalty = root_knot_penalty,
     root_geo_media_effect = root_geo_media_effect,
+    root_geo_trend = root_geo_trend,
     root_effect_prior = root_effect_prior,
     root_media_transform = root_media_transform,
     root_rrate_grid = root_rrate_grid,
@@ -4361,9 +4564,15 @@ fit_parsimonious_total_media_root <- function(data,
     root_time_baseline = root_time_baseline,
     root_knot_n = root_knot_n,
     root_knot_penalty = root_knot_penalty,
-    root_geo_media_effect = root_geo_media_effect
+    root_geo_media_effect = root_geo_media_effect,
+    root_geo_trend = root_geo_trend
   )
   root_geo_media_effects <- attr(point_fit, "root_geo_media_effects") %||% data.table::data.table()
+  root_holdout_validation <- econ_seq_root_holdout_validation(
+    root_data = panel$data,
+    training_times = training_times,
+    root_fit = point_fit
+  )
   draws <- econ_seq_block_bootstrap_root(
     root_data = root_model_data,
     control_cols = panel$control_cols,
@@ -4386,6 +4595,7 @@ fit_parsimonious_total_media_root <- function(data,
     root_knot_n = root_knot_n,
     root_knot_penalty = root_knot_penalty,
     root_geo_media_effect = root_geo_media_effect,
+    root_geo_trend = root_geo_trend,
     reselect_curve = TRUE,
     reps = root_bootstrap_reps,
     block_length = root_block_length,
@@ -4408,7 +4618,18 @@ fit_parsimonious_total_media_root <- function(data,
   } else NA_real_
   root_sd <- if (length(usable_draws) >= 10L) stats::sd(usable_draws) else point$root_effectiveness_analytic_sd[1]
   if (!is.finite(root_sd) || root_sd <= 0) root_sd <- max(abs(point$root_effectiveness[1]) * 0.50, 1e-8)
-  root_status <- econ_seq_classify_effectiveness(point$root_effectiveness[1], root_sd)
+  root_in_sample_status <- econ_seq_classify_effectiveness(point$root_effectiveness[1], root_sd)
+  root_status <- root_in_sample_status
+  holdout_evidence <- as.character(root_holdout_validation$summary$root_holdout_status[1] %||% "not_requested")
+  holdout_improvement <- suppressWarnings(as.numeric(root_holdout_validation$summary$root_holdout_media_rmse_improvement[1]))
+  if (identical(holdout_evidence, "available")) {
+    if (!is.finite(holdout_improvement) || holdout_improvement <= 0) {
+      root_status <- "positive_in_sample_not_transferable_holdout"
+      holdout_evidence <- "no_incremental_holdout_gain"
+    } else {
+      holdout_evidence <- "incremental_holdout_gain"
+    }
+  }
   nonlinear_diagnostics <- data.table::as.data.table(curve_selection$nonlinear_diagnostics %||% data.table::data.table())
   fallback_recommended <- nrow(nonlinear_diagnostics) && isTRUE(nonlinear_diagnostics$fallback_recommended[1])
   fallback_reason <- if (nrow(nonlinear_diagnostics)) nonlinear_diagnostics$fallback_reason[1] else ""
@@ -4446,7 +4667,9 @@ fit_parsimonious_total_media_root <- function(data,
     root_bootstrap_method = "moving_block_residual_original_media_timeline",
     root_bootstrap_original_media_timeline_preserved = TRUE,
     root_bootstrap_curve_selection_repeated = TRUE,
+    root_effectiveness_in_sample_status = root_in_sample_status,
     root_effectiveness_status = root_status,
+    root_holdout_media_evidence = holdout_evidence,
     root_bayesian_fallback_recommended = fallback_recommended,
     root_bayesian_fallback_reason = fallback_reason,
     root_bayesian_fallback_policy = "invoke_only_for_flat_unstable_or_bound_hitting_nonlinear_likelihood",
@@ -4458,6 +4681,9 @@ fit_parsimonious_total_media_root <- function(data,
     root_evidence_type = "frequentist_moving_block_residual_bootstrap_sampling_distribution",
     root_interpretation = "Portfolio average incremental KPI per paid-media cost unit; do not interpret as a channel-specific causal estimate."
   )]
+  for (column in names(root_holdout_validation$summary)) {
+    point[, (column) := root_holdout_validation$summary[[column]][1]]
+  }
   mix <- econ_seq_mix_diagnostics(canonical$data[get(time_col) %in% training_times], panel$spend_map, time_col = time_col)
   list(
     package_info = econimap_output_metadata("fit_parsimonious_total_media_root", surface = "sequential_root"),
@@ -4476,8 +4702,10 @@ fit_parsimonious_total_media_root <- function(data,
     root_pressure_col = panel$root_pressure_col,
     root_time_baseline = point$root_time_baseline[1],
     root_knot_n = as.integer(root_knot_n),
+    root_geo_trend = root_geo_trend,
     root_geo_media_effect = point$root_geo_media_effect_mode[1],
     root_geo_media_effects = data.table::as.data.table(root_geo_media_effects),
+    root_holdout_validation = root_holdout_validation,
     canonical_data = canonical$data[],
     canonical_metadata = canonical$metadata[],
     canonical_spend_map = modeled_spend_map[],
@@ -5704,6 +5932,7 @@ run_sequential_hierarchical_bayes <- function(data,
                                               root_knot_n = 6L,
                                               root_knot_penalty = 1,
                                               root_geo_media_effect = c("shared", "partially_pooled"),
+                                              root_geo_trend = c("none", "fixed_linear"),
                                               root_media_transform = c("adstock_hill", "linear"),
                                               root_rrate_grid = c(0, 0.25, 0.50, 0.70),
                                               root_anchor_saturation_grid = c(0.30, 0.50, 0.70),
@@ -5757,6 +5986,7 @@ run_sequential_hierarchical_bayes <- function(data,
   root_pressure_scaling <- match.arg(root_pressure_scaling)
   root_time_baseline <- match.arg(root_time_baseline)
   root_geo_media_effect <- match.arg(root_geo_media_effect)
+  root_geo_trend <- match.arg(root_geo_trend)
   if (isTRUE(fit_child) && identical(root_time_baseline, "knots") && !isTRUE(allow_baseline_override)) {
     stop(
       "root_time_baseline = 'knots' is currently a root-only frequentist basis and cannot be represented by the shared Stan child baseline. Use root_time_baseline = 'fourier' for a matched sequential child fit, or set allow_baseline_override = TRUE for an explicitly audited difference.",
@@ -5766,6 +5996,12 @@ run_sequential_hierarchical_bayes <- function(data,
   if (isTRUE(fit_child) && identical(root_time_baseline, "auto") && identical(root_scope, "hierarchical_panel") && !isTRUE(allow_baseline_override)) {
     stop(
       "root_time_baseline = 'auto' selects knots for a geo-panel root, which is not yet the shared Stan child baseline. Use 'fourier' for a matched sequential child fit, or set allow_baseline_override = TRUE for an explicitly audited difference.",
+      call. = FALSE
+    )
+  }
+  if (isTRUE(fit_child) && identical(root_geo_trend, "fixed_linear") && !isTRUE(allow_baseline_override)) {
+    stop(
+      "root_geo_trend = 'fixed_linear' is a root-only frequentist baseline and cannot be represented by the matched Stan child baseline. Set allow_baseline_override = TRUE only for an explicitly audited sensitivity.",
       call. = FALSE
     )
   }
@@ -5835,6 +6071,7 @@ run_sequential_hierarchical_bayes <- function(data,
     root_knot_n = root_knot_n,
     root_knot_penalty = root_knot_penalty,
     root_geo_media_effect = root_geo_media_effect,
+    root_geo_trend = root_geo_trend,
     root_media_transform = root_media_transform,
     root_rrate_grid = root_rrate_grid,
     root_anchor_saturation_grid = root_anchor_saturation_grid,
@@ -6055,7 +6292,9 @@ run_sequential_hierarchical_bayes <- function(data,
     target_layer_id = target_depth$key[1],
     target_rollup_depth = target_depth$depth[1],
     parent_observational_effectiveness = root_fit$root_summary$root_effectiveness[1],
-    parent_prior_effectiveness = root_fit$root_summary$root_effectiveness[1],
+    parent_prior_effectiveness = if (identical(root_fit$root_summary$root_effectiveness_status[1], "positive_transferable")) {
+      root_fit$root_summary$root_effectiveness[1]
+    } else 0,
     parent_effectiveness_status = root_fit$root_summary$root_effectiveness_status[1],
     parent_implied_contribution = root_fit$root_summary$root_effectiveness[1] * sum(handoff$business_priors$child_spend_total),
     child_prior_implied_contribution = sum(handoff$business_priors$implied_child_contribution_mean),
@@ -6071,6 +6310,8 @@ run_sequential_hierarchical_bayes <- function(data,
     data.table::fwrite(root_fit$root_curve_candidates, file.path(output_dir, paste0(pfx, "root_curve_candidates.csv")))
     data.table::fwrite(root_fit$root_identification, file.path(output_dir, paste0(pfx, "root_identification.csv")))
     data.table::fwrite(root_fit$bootstrap_draws, file.path(output_dir, paste0(pfx, "root_bootstrap_draws.csv")))
+    data.table::fwrite(root_fit$root_holdout_validation$summary, file.path(output_dir, paste0(pfx, "root_holdout_validation.csv")))
+    data.table::fwrite(root_fit$root_holdout_validation$predictions, file.path(output_dir, paste0(pfx, "root_holdout_predictions.csv")))
     data.table::fwrite(handoff$business_priors, file.path(output_dir, paste0(pfx, "child_business_priors.csv")))
     data.table::fwrite(handoff$prior_ledger, file.path(output_dir, paste0(pfx, "prior_ledger.csv")))
     data.table::fwrite(handoff$reference_calibration_input, file.path(output_dir, paste0(pfx, "reference_calibration_input.csv")))
