@@ -121,4 +121,44 @@ nontransferable_priors <- build_sequential_effectiveness_priors(
 )
 stopifnot(!nontransferable_priors$business_priors$parent_positive_effect_transferred[1])
 stopifnot(nontransferable_priors$business_priors$prior_mean[1] == 0)
+
+# Observed geo variation alone is not evidence of a positive parent effect.
+# With no true media signal, the positive-constrained root must remain neutral
+# and cannot generate a transferable child prior.
+set.seed(604)
+null_panel <- rbindlist(lapply(seq_along(geos), function(ii) {
+  n <- length(periods)
+  time_index <- seq_len(n)
+  spend <- pmax(15, 120 + 27 * sin(time_index / 4 + ii) + rnorm(n, 0, 15))
+  data.table(
+    period = periods,
+    geo = geos[ii],
+    entity = "brand",
+    population = 1e6,
+    paid_support = spend * 11,
+    paid_spend = spend,
+    kpi = 850 + ii * 25 + c(-1.5, -0.7, 0.2, 1.1, 2.0)[ii] * (time_index - mean(time_index))
+  )
+}))
+null_fit <- fit_parsimonious_total_media_root(
+  data = null_panel,
+  metadata_input = trend_metadata,
+  dep_var_col = "kpi",
+  group_col = "geo",
+  time_col = "period",
+  entity_col = "entity",
+  population_col = "population",
+  root_scope = "hierarchical_panel",
+  root_media_transform = "linear",
+  root_time_baseline = "fourier",
+  root_fourier_harmonics = 0L,
+  root_trend_spec = "none",
+  root_geo_trend = "fixed_linear",
+  root_geo_media_effect = "shared",
+  holdout_last_n = 8L,
+  root_bootstrap_reps = 0L
+)
+stopifnot(null_fit$root_summary$root_effectiveness_status[1] != "positive_transferable")
+stopifnot(!isTRUE(null_fit$root_summary$root_sign_boundary_active[1]) ||
+          abs(null_fit$root_summary$root_effectiveness[1]) < 1e-8)
 cat("Positive log-scale geo root test passed.\n")

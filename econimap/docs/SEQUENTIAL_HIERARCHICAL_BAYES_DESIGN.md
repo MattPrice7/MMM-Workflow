@@ -214,8 +214,9 @@ falls back to the original total-media root when a fitted parent is available.
 
 The default root aggregates KPI and total paid spend to national time before
 fitting. A `hierarchical_panel` root is explicit and only allowed when total
-media has genuine within-period group variation and the root identification
-screen passes. The root compares a linear total-spend limit with a constrained
+media has genuine within-period group variation. Its continuous identification
+screen informs pooling and reporting but does not impose a heuristic pre-fit
+veto. The root compares a linear total-spend limit with a constrained
 Hill/geometric-adstock profile-likelihood fit. Nonlinear parameters are optimized
 from deterministic Sobol multistarts while linear baseline, control, and media
 coefficients are solved conditionally. The old rrate/anchor grid is retained only
@@ -238,8 +239,13 @@ reach conversions. Intensive metrics such as frequency, CPM, CPC, rates, and
 indices are not treated as additive media exposure.
 
 The root and child share one baseline and train/holdout contract. Root curve
-selection and bootstrap use training periods only; holdout rows remain available
-to the child MMM for out-of-sample reporting. The currently enforced shared
+selection and bootstrap use training periods only. For the matched shared-effect
+Fourier root, held-out rows also produce a media-plus-baseline versus
+baseline-only comparison using training-only scaling and preserved adstock
+history. A positive in-sample root that does not improve this holdout is labeled
+`positive_in_sample_not_transferable_holdout` and is not transferred as positive
+child evidence. Mixed-effect and knot-root holdout scoring remain explicitly
+unavailable rather than being misreported. The currently enforced shared
 staged baseline is flat or Fourier. Shared linear-trend and joint UCM staged
 baselines remain unsupported until the same design can be applied at every
 benchmark and child layer.

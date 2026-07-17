@@ -25,11 +25,15 @@ This package directory is the canonical source of truth. See
 - `bau_response_curves.R`: conservative fallback response-curve creation when a
   full MMM is not available.
 - `run_sequential_hierarchical_bayes()`: national total-paid-media root by
-  default, with an opt-in geo-panel root when observed geo media variation is
-  identifiable. The geo root retains the full geo-time panel, uses valid
+  default, with an opt-in geo-panel root when genuinely observed geo media
+  variation exists. The geo root retains the full geo-time panel, uses valid
   exposure scaling for both KPI and pressure, and partially pools total-media
-  effectiveness across groups. It does not treat mechanically allocated
-  national media as geo-identifying evidence. The default handoff estimates sibling
+  effectiveness across groups. Its continuous identification diagnostic informs
+  pooling and reporting rather than acting as a heuristic pre-fit veto. It does
+  not treat mechanically allocated national media as geo-identifying evidence.
+  For the matched shared-effect Fourier root, a held-out continuation compares
+  media-plus-baseline with baseline-only; a positive training estimate that does
+  not improve holdout is not transferred to children. The default handoff estimates sibling
   shared layer-level `tau_effectiveness` around distinct spend-weighted parent
   aggregates and a separate shared logit-scale `tau_adstock`; it does not turn identification scores into prior
   precision. Saturation remains child-specific with optional collective
