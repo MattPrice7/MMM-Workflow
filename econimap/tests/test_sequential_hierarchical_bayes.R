@@ -132,16 +132,23 @@ panel_root_fit <- fit_parsimonious_total_media_root(
   root_time_baseline = "knots",
   root_knot_n = 4L,
   root_geo_media_effect = "partially_pooled",
-  root_bootstrap_reps = 0L
+  root_bootstrap_reps = 8L,
+  seed = 812L
 )
 expected_portfolio_effectiveness <- weighted.mean(panel_effectiveness, panel_population)
-stopifnot(panel_root_fit$root_summary$root_geo_media_effect_mode[1] == "partially_pooled_normal")
+stopifnot(panel_root_fit$root_summary$root_geo_media_effect_mode[1] == "partially_pooled_log_normal")
 stopifnot(panel_root_fit$root_summary$root_geo_media_effect_group_n[1] == length(panel_geos))
+stopifnot(panel_root_fit$root_summary$root_geo_media_effect_scale[1] == "log")
 stopifnot(panel_root_fit$root_pressure_scaling == "per_capita")
 stopifnot(panel_root_fit$root_time_baseline == "knots")
 stopifnot(nrow(panel_root_fit$root_training_panel) == length(panel_periods) * length(panel_geos))
 stopifnot(abs(panel_root_fit$root_summary$root_effectiveness[1] - expected_portfolio_effectiveness) < .15)
 stopifnot(nrow(panel_root_fit$root_geo_media_effects) == length(panel_geos))
+stopifnot(all(panel_root_fit$root_geo_media_effects$root_media_beta > 0))
+# Regression guard: a per-capita root must bootstrap its model-scale KPI.
+# Otherwise every resample reuses the unchanged scaled outcome and appears
+# spuriously certain.
+stopifnot(stats::sd(panel_root_fit$bootstrap_draws$root_effectiveness, na.rm = TRUE) > 1e-8)
 
 # The nonlinear root uses Sobol points only as multistart optimizer seeds. The
 # retained grid is diagnostic and cannot win the primary model selection.
