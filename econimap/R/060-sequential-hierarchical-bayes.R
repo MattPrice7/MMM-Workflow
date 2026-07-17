@@ -930,10 +930,13 @@ econ_seq_root_panel <- function(data,
                                 kpi_weight_col = NULL,
                                 root_control_aggregation = NULL,
                                 root_aggregation_functions = list(),
-                                incomplete_period_action = c("error", "drop")) {
+                                incomplete_period_action = c("error", "drop"),
+                                root_pressure_scaling = c("auto", "none", "per_capita"),
+                                root_pressure_col = NULL) {
   root_control_mode <- match.arg(root_control_mode)
   root_scope <- match.arg(root_scope)
   incomplete_period_action <- match.arg(incomplete_period_action)
+  root_pressure_scaling <- match.arg(root_pressure_scaling)
   if (!is.list(root_aggregation_functions)) stop("root_aggregation_functions must be a named list.", call. = FALSE)
   dt <- econ_seq_input_table(data, "data")
   required <- c(dep_var_col, group_col, time_col, entity_col)
@@ -950,7 +953,16 @@ econ_seq_root_panel <- function(data,
     root_control_cols = root_control_cols,
     root_control_mode = root_control_mode
   )
-  out <- dt[, c(group_col, time_col, entity_col, dep_var_col, sm$spend_col, controls), with = FALSE]
+  root_pressure_col <- as.character(root_pressure_col %||% "")[1]
+  if (!nzchar(root_pressure_col) || is.na(root_pressure_col)) root_pressure_col <- NULL
+  if (!is.null(root_pressure_col) && !(root_pressure_col %in% names(dt))) {
+    stop("root_pressure_col is not present in data: ", root_pressure_col, call. = FALSE)
+  }
+  if (identical(root_pressure_scaling, "per_capita") && is.null(root_pressure_col)) {
+    stop("root_pressure_scaling = 'per_capita' requires a valid population, household, or other exposure column.", call. = FALSE)
+  }
+  input_cols <- unique(c(group_col, time_col, entity_col, dep_var_col, sm$spend_col, controls, root_pressure_col))
+  out <- dt[, ..input_cols]
   data.table::setnames(out, c(group_col, time_col, entity_col, dep_var_col), c("root_group__", "root_time__", "root_entity__", "root_y__"))
   out[, root_y__ := suppressWarnings(as.numeric(root_y__))]
   spend_cols <- sm$spend_col
@@ -1132,6 +1144,37 @@ econ_seq_root_panel <- function(data,
     national[, `:=`(root_group__ = "national", root_entity__ = "ALL")]
     out <- national[]
   }
+  # Media pressure and the KPI must use the same exposure denominator. This
+  # preserves raw-scale effectiveness while making curve pressure comparable
+  # across differently sized groups, following Meridian's scaling principle.
+  use_pressure_scaling <- !identical(root_pressure_scaling, "none") && !is.null(root_pressure_col)
+  if (use_pressure_scaling && identical(root_scope, "national")) {
+    exposure <- dt[, .(root_exposure__ = sum(suppressWarnings(as.numeric(get(root_pressure_col))), na.rm = TRUE)), by = time_col]
+    data.table::setnames(exposure, time_col, "root_time__")
+    out <- merge(out, exposure, by = "root_time__", all.x = TRUE, sort = FALSE)
+  } else if (use_pressure_scaling) {
+    out[, root_exposure__ := suppressWarnings(as.numeric(get(root_pressure_col)))]
+  }
+  if (use_pressure_scaling) {
+    invalid_exposure <- !is.finite(out$root_exposure__) | out$root_exposure__ <= 0
+    if (any(invalid_exposure)) {
+      stop("root_pressure_scaling requires finite, positive exposure values on every usable root row.", call. = FALSE)
+    }
+    out[, `:=`(
+      root_media_pressure__ = root_total_paid_spend__ / root_exposure__,
+      root_y_model__ = root_y__ / root_exposure__,
+      root_outcome_multiplier__ = root_exposure__
+    )]
+    pressure_mode_used <- "per_capita"
+  } else {
+    out[, `:=`(
+      root_exposure__ = 1,
+      root_media_pressure__ = root_total_paid_spend__,
+      root_y_model__ = root_y__,
+      root_outcome_multiplier__ = 1
+    )]
+    pressure_mode_used <- "none"
+  }
   ordered_time <- sort(unique(out$root_time__))
   out[, root_time_index__ := match(root_time__, ordered_time)]
   out[, root_adstock_order__ := root_time_index__]
@@ -1143,10 +1186,10 @@ econ_seq_root_panel <- function(data,
       controls <- setdiff(controls, cc)
     } else out[, (cc) := values]
   }
-  usable <- is.finite(out$root_y__) & is.finite(out$root_total_paid_spend__)
+  usable <- is.finite(out$root_y_model__) & is.finite(out$root_media_pressure__) & is.finite(out$root_total_paid_spend__)
   out <- out[usable]
   if (nrow(out) < 12L) stop("Sequential root has fewer than 12 usable panel rows.", call. = FALSE)
-  if (stats::sd(out$root_total_paid_spend__) <= 1e-12) stop("Total paid-media spend has no usable variation for the sequential root.", call. = FALSE)
+  if (stats::sd(out$root_media_pressure__) <= 1e-12) stop("Total paid-media pressure has no usable variation for the sequential root.", call. = FALSE)
   list(
     data = out[],
     spend_map = sm[],
@@ -1154,6 +1197,8 @@ econ_seq_root_panel <- function(data,
     time_values = ordered_time,
     media_variables = sm$variable,
     root_scope = root_scope,
+    root_pressure_scaling = pressure_mode_used,
+    root_pressure_col = if (use_pressure_scaling) root_pressure_col else NA_character_,
     hierarchical_scope_eligibility = hierarchical_scope_eligibility,
     national_aggregation_audit = aggregation_audit[]
   )
@@ -1184,8 +1229,16 @@ econ_seq_root_curve_spec <- function(type = c("linear", "adstock_hill"),
 
 econ_seq_root_media_feature <- function(root_data, curve_spec) {
   dt <- data.table::copy(root_data)
-  raw <- pmax(suppressWarnings(as.numeric(dt$root_total_paid_spend__)), 0)
-  raw[!is.finite(raw)] <- 0
+  raw_spend <- pmax(suppressWarnings(as.numeric(dt$root_total_paid_spend__)), 0)
+  raw_spend[!is.finite(raw_spend)] <- 0
+  pressure <- if ("root_media_pressure__" %in% names(dt)) {
+    pmax(suppressWarnings(as.numeric(dt$root_media_pressure__)), 0)
+  } else raw_spend
+  pressure[!is.finite(pressure)] <- 0
+  outcome_multiplier <- if ("root_outcome_multiplier__" %in% names(dt)) {
+    suppressWarnings(as.numeric(dt$root_outcome_multiplier__))
+  } else rep(1, nrow(dt))
+  outcome_multiplier[!is.finite(outcome_multiplier) | outcome_multiplier <= 0] <- 1
   spec <- econ_seq_root_curve_spec(
     type = curve_spec$type %||% "linear",
     rrate = curve_spec$rrate %||% 0,
@@ -1194,14 +1247,18 @@ econ_seq_root_media_feature <- function(root_data, curve_spec) {
     steepness = curve_spec$steepness %||% 1
   )
   if (identical(spec$type, "linear")) {
-    scale <- mean(raw[raw > 0], na.rm = TRUE)
+    scale <- mean(pressure[pressure > 0], na.rm = TRUE)
     if (!is.finite(scale) || scale <= 1e-8) scale <- 1
-    feature <- raw / scale
+    feature <- pressure / scale
+    conversion <- sum(feature * outcome_multiplier) / sum(raw_spend)
+    if (!is.finite(conversion) || conversion <= 1e-12) conversion <- 1e-12
     return(list(
       feature = feature,
-      raw_spend = raw,
+      raw_spend = raw_spend,
+      pressure = pressure,
+      outcome_multiplier = outcome_multiplier,
       feature_scale = scale,
-      effect_conversion = sum(feature) / sum(raw),
+      effect_conversion = conversion,
       curve_spec = spec,
       half_saturation = NA_real_,
       adstock = raw,
@@ -1216,7 +1273,7 @@ econ_seq_root_media_feature <- function(root_data, curve_spec) {
     idx <- idx[order(as.numeric(dt[[order_col]][idx]), idx)]
     carry <- 0
     for (row_i in idx) {
-      carry <- raw[row_i] + spec$rrate * carry
+      carry <- pressure[row_i] + spec$rrate * carry
       adstock[row_i] <- carry
     }
   }
@@ -1230,17 +1287,19 @@ econ_seq_root_media_feature <- function(root_data, curve_spec) {
   z <- (pmax(adstock, 0) / pmax(half_saturation, 1e-12)) ^ spec$steepness
   saturation <- z / (1 + z)
   saturation[!is.finite(saturation)] <- 0
-  scale <- mean(saturation[raw > 0], na.rm = TRUE)
+  scale <- mean(saturation[pressure > 0], na.rm = TRUE)
   if (!is.finite(scale) || scale <= 1e-8) scale <- 1
   feature <- saturation / scale
-  conversion <- sum(feature) / sum(raw)
+  conversion <- sum(feature * outcome_multiplier) / sum(raw_spend)
   if (!is.finite(conversion) || conversion <= 1e-12) conversion <- 1e-12
   spec$half_saturation <- half_saturation
   spec$anchor_saturation <- anchor_x ^ spec$steepness /
     (anchor_x ^ spec$steepness + half_saturation ^ spec$steepness)
   list(
     feature = feature,
-    raw_spend = raw,
+    raw_spend = raw_spend,
+    pressure = pressure,
+    outcome_multiplier = outcome_multiplier,
     feature_scale = scale,
     effect_conversion = conversion,
     curve_spec = spec,
@@ -1250,14 +1309,53 @@ econ_seq_root_media_feature <- function(root_data, curve_spec) {
   )
 }
 
+econ_seq_resolve_root_time_baseline <- function(root_time_baseline, root_data) {
+  root_time_baseline <- match.arg(root_time_baseline, c("auto", "fourier", "knots"))
+  if (!identical(root_time_baseline, "auto")) return(root_time_baseline)
+  if (data.table::uniqueN(root_data$root_group__) > 1L) "knots" else "fourier"
+}
+
+econ_seq_root_time_basis <- function(time_index,
+                                     root_time_baseline,
+                                     root_fourier_harmonics = 2L,
+                                     root_season_period = 52L,
+                                     root_knot_n = 6L) {
+  time_index <- suppressWarnings(as.numeric(time_index))
+  unique_time_n <- data.table::uniqueN(time_index[is.finite(time_index)])
+  if (identical(root_time_baseline, "knots")) {
+    # A small shared natural-spline basis is a constrained knot baseline for
+    # the frequentist root. It is deliberately common across groups; it is not
+    # represented as Meridian's Bayesian random-walk intercept.
+    df <- min(max(2L, as.integer(root_knot_n)[1]), max(2L, unique_time_n - 2L))
+    basis <- tryCatch(splines::ns(time_index, df = df, intercept = FALSE), error = function(e) NULL)
+    if (is.null(basis)) return(list(columns = list(), names = character(), type = "knots", effective_n = 0L))
+    columns <- lapply(seq_len(ncol(basis)), function(ii) as.numeric(basis[, ii]))
+    names(columns) <- paste0("time_knot_", seq_along(columns))
+    return(list(columns = columns, names = names(columns), type = "knots", effective_n = length(columns)))
+  }
+  root_fourier_harmonics <- max(0L, as.integer(root_fourier_harmonics)[1])
+  root_season_period <- as.numeric(root_season_period)[1]
+  columns <- list()
+  if (root_fourier_harmonics > 0L && is.finite(root_season_period) && root_season_period > 1) {
+    for (kk in seq_len(root_fourier_harmonics)) {
+      columns[[paste0("season_sin_", kk)]] <- sin(2 * pi * kk * time_index / root_season_period)
+      columns[[paste0("season_cos_", kk)]] <- cos(2 * pi * kk * time_index / root_season_period)
+    }
+  }
+  list(columns = columns, names = names(columns), type = "fourier", effective_n = length(columns))
+}
+
 econ_seq_build_root_design <- function(root_data,
                                        control_cols = character(),
                                        root_trend_spec = c("none", "linear"),
                                        root_fourier_harmonics = 2L,
                                        root_season_period = 52L,
+                                       root_time_baseline = c("auto", "fourier", "knots"),
+                                       root_knot_n = 6L,
                                        root_curve_spec = econ_seq_root_curve_spec()) {
   dt <- data.table::copy(root_data)
   root_trend_spec <- match.arg(root_trend_spec)
+  root_time_baseline <- econ_seq_resolve_root_time_baseline(root_time_baseline, dt)
   media <- econ_seq_root_media_feature(dt, root_curve_spec)
   cols <- list(`(Intercept)` = rep(1, nrow(dt)), total_paid_media_scaled = media$feature)
 
@@ -1272,14 +1370,14 @@ econ_seq_build_root_design <- function(root_data,
     trend_sd <- stats::sd(trend)
     cols$trend__ <- if (is.finite(trend_sd) && trend_sd > 1e-8) trend / trend_sd else trend
   }
-  root_fourier_harmonics <- max(0L, as.integer(root_fourier_harmonics)[1])
-  root_season_period <- as.numeric(root_season_period)[1]
-  if (root_fourier_harmonics > 0L && is.finite(root_season_period) && root_season_period > 1) {
-    for (kk in seq_len(root_fourier_harmonics)) {
-      cols[[paste0("season_sin_", kk)]] <- sin(2 * pi * kk * time_index / root_season_period)
-      cols[[paste0("season_cos_", kk)]] <- cos(2 * pi * kk * time_index / root_season_period)
-    }
-  }
+  time_basis <- econ_seq_root_time_basis(
+    time_index = time_index,
+    root_time_baseline = root_time_baseline,
+    root_fourier_harmonics = root_fourier_harmonics,
+    root_season_period = root_season_period,
+    root_knot_n = root_knot_n
+  )
+  cols <- c(cols, time_basis$columns)
   for (cc in control_cols) {
     z <- as.numeric(dt[[cc]])
     z <- z - mean(z, na.rm = TRUE)
@@ -1290,10 +1388,13 @@ econ_seq_build_root_design <- function(root_data,
   storage.mode(X) <- "double"
   list(
     X = X,
-    y = as.numeric(dt$root_y__),
+    y = as.numeric(if ("root_y_model__" %in% names(dt)) dt$root_y_model__ else dt$root_y__),
     effect_scale = 1 / media$effect_conversion,
     effect_conversion = media$effect_conversion,
-    media = media
+    media = media,
+    root_time_baseline = time_basis$type,
+    root_time_basis_cols = time_basis$names,
+    root_time_basis_n = time_basis$effective_n
   )
 }
 
@@ -1315,6 +1416,116 @@ econ_seq_parse_root_effect_prior <- function(root_effect_prior = NULL) {
   list(active = TRUE, mean = mean_value, sd = sd_value, source = source)
 }
 
+econ_seq_fit_root_pooled_lme <- function(design,
+                                         root_data,
+                                         root_effect_sign,
+                                         root_curve_spec) {
+  if (!requireNamespace("nlme", quietly = TRUE)) return(NULL)
+  groups <- as.character(root_data$root_group__)
+  if (data.table::uniqueN(groups) < 3L) return(NULL)
+  X <- design$X
+  if (!all(is.finite(X)) || any(!is.finite(design$y))) return(NULL)
+  original_names <- colnames(X)
+  safe_names <- make.names(original_names, unique = TRUE)
+  colnames(X) <- safe_names
+  media_col <- safe_names[match("total_paid_media_scaled", original_names)]
+  if (!length(media_col) || is.na(media_col)) return(NULL)
+  fit_data <- as.data.frame(X)
+  fit_data$root_y__ <- design$y
+  fit_data$root_group__ <- factor(groups)
+  fixed_formula <- stats::as.formula(paste("root_y__ ~ 0 +", paste(safe_names, collapse = " + ")))
+  random_formula <- stats::as.formula(paste0("~ 0 + ", media_col, " | root_group__"))
+  mixed_fit <- tryCatch(
+    nlme::lme(
+      fixed = fixed_formula,
+      random = random_formula,
+      data = fit_data,
+      method = "ML",
+      na.action = stats::na.fail,
+      control = nlme::lmeControl(returnObject = TRUE, msMaxIter = 100L, msVerbose = FALSE)
+    ),
+    error = function(e) NULL
+  )
+  if (is.null(mixed_fit)) return(NULL)
+  fixed_beta <- nlme::fixef(mixed_fit)
+  if (!(media_col %in% names(fixed_beta))) return(NULL)
+  random_effects <- nlme::ranef(mixed_fit)
+  random_by_group <- setNames(rep(0, nlevels(fit_data$root_group__)), levels(fit_data$root_group__))
+  if (media_col %in% names(random_effects)) {
+    random_by_group[rownames(random_effects)] <- as.numeric(random_effects[[media_col]])
+  }
+  beta_common <- as.numeric(fixed_beta[[media_col]])
+  beta_by_row <- beta_common + unname(random_by_group[groups])
+  fitted <- as.numeric(X %*% fixed_beta[safe_names] + (beta_by_row - beta_common) * X[, media_col])
+  resid <- design$y - fitted
+  raw_spend <- design$media$raw_spend
+  weighted_feature <- design$media$feature * design$media$outcome_multiplier
+  spend_total <- sum(raw_spend)
+  if (!is.finite(spend_total) || spend_total <= 0) return(NULL)
+  effect <- sum(beta_by_row * weighted_feature) / spend_total
+  fixed_cov <- tryCatch(as.matrix(stats::vcov(mixed_fit)), error = function(e) matrix(NA_real_, 0L, 0L))
+  fixed_media_sd <- if (media_col %in% rownames(fixed_cov)) sqrt(pmax(fixed_cov[media_col, media_col], 0)) else NA_real_
+  random_variance <- tryCatch(suppressWarnings(as.numeric(nlme::VarCorr(mixed_fit)[1, "Variance"])), error = function(e) NA_real_)
+  group_weight <- tapply(weighted_feature, groups, sum) / spend_total
+  effect_sd <- sqrt(pmax(
+    (fixed_media_sd * sum(weighted_feature) / spend_total)^2 +
+      pmax(random_variance, 0) * sum(group_weight^2),
+    0
+  ))
+  log_likelihood <- as.numeric(stats::logLik(mixed_fit))
+  effective_k <- attr(stats::logLik(mixed_fit), "df") + root_curve_spec$curve_parameter_n
+  root_aic <- -2 * log_likelihood + 2 * effective_k
+  root_aicc <- if (length(resid) > effective_k + 1L) {
+    root_aic + (2 * effective_k * (effective_k + 1L)) / (length(resid) - effective_k - 1L)
+  } else Inf
+  if ((identical(root_effect_sign, "positive") && effect < 0) ||
+      (identical(root_effect_sign, "negative") && effect > 0)) return(NULL)
+  slopes <- data.table::data.table(
+    root_group__ = names(random_by_group),
+    root_media_beta = beta_common + as.numeric(random_by_group),
+    root_media_beta_deviation = as.numeric(random_by_group),
+    root_effect_scale = sum(weighted_feature) / spend_total
+  )
+  out <- data.table::data.table(
+    root_effectiveness = effect,
+    root_effectiveness_analytic_sd = effect_sd,
+    root_r_squared = if (stats::var(design$y) > 1e-12) 1 - sum(resid^2) / sum((design$y - mean(design$y))^2) else NA_real_,
+    root_rmse = sqrt(mean(resid^2)),
+    root_row_n = length(resid),
+    root_design_rank = qr(X)$rank + data.table::uniqueN(groups),
+    root_effect_scale = 1 / design$effect_conversion,
+    root_effect_conversion = design$effect_conversion,
+    root_media_beta = beta_common,
+    root_sse = sum(resid^2),
+    root_profile_objective = -2 * log_likelihood,
+    root_aicc = root_aicc,
+    root_curve_type = root_curve_spec$type,
+    root_rrate = root_curve_spec$rrate,
+    root_anchor_saturation = root_curve_spec$anchor_saturation,
+    root_half_saturation = design$media$half_saturation,
+    root_steepness = root_curve_spec$steepness,
+    root_curve_parameter_n = root_curve_spec$curve_parameter_n,
+    root_prior_active = FALSE,
+    root_prior_mean = NA_real_,
+    root_prior_sd = NA_real_,
+    root_prior_source = NA_character_,
+    root_effect_sign = root_effect_sign,
+    root_sign_boundary_active = FALSE,
+    root_fit_method = "frequentist_mixed_effects_profile_ml",
+    root_geo_media_effect_mode = "partially_pooled_normal",
+    root_geo_media_effect_group_n = data.table::uniqueN(groups),
+    root_geo_media_effect_tau = sqrt(pmax(random_variance, 0)),
+    root_time_baseline = design$root_time_baseline,
+    root_time_basis_n = design$root_time_basis_n,
+    root_time_basis_penalty_applied = FALSE
+  )
+  attr(out, "root_fitted_values") <- fitted
+  attr(out, "root_residuals") <- resid
+  attr(out, "root_media_timeline") <- design$media$pressure
+  attr(out, "root_geo_media_effects") <- slopes
+  out
+}
+
 econ_seq_fit_root_lm <- function(root_data,
                                  control_cols = character(),
                                  root_trend_spec = c("none", "linear"),
@@ -1322,22 +1533,38 @@ econ_seq_fit_root_lm <- function(root_data,
                                  root_season_period = 52L,
                                  root_effect_prior = NULL,
                                  root_effect_sign = c("positive", "unconstrained", "negative"),
-                                 root_curve_spec = econ_seq_root_curve_spec()) {
+                                 root_curve_spec = econ_seq_root_curve_spec(),
+                                 root_time_baseline = c("auto", "fourier", "knots"),
+                                 root_knot_n = 6L,
+                                 root_knot_penalty = 1,
+                                 root_geo_media_effect = c("shared", "partially_pooled")) {
   root_trend_spec <- match.arg(root_trend_spec)
   root_effect_sign <- match.arg(root_effect_sign)
+  root_geo_media_effect <- match.arg(root_geo_media_effect)
   design <- econ_seq_build_root_design(
     root_data = root_data,
     control_cols = control_cols,
     root_trend_spec = root_trend_spec,
     root_fourier_harmonics = root_fourier_harmonics,
     root_season_period = root_season_period,
+    root_time_baseline = root_time_baseline,
+    root_knot_n = root_knot_n,
     root_curve_spec = root_curve_spec
   )
+  prior <- econ_seq_parse_root_effect_prior(root_effect_prior)
+  if (identical(root_geo_media_effect, "partially_pooled") && !prior$active) {
+    pooled <- econ_seq_fit_root_pooled_lme(
+      design = design,
+      root_data = root_data,
+      root_effect_sign = root_effect_sign,
+      root_curve_spec = design$media$curve_spec
+    )
+    if (!is.null(pooled)) return(pooled)
+  }
   X <- design$X
   y <- design$y
   p <- ncol(X)
   effect_idx <- match("total_paid_media_scaled", colnames(X))
-  prior <- econ_seq_parse_root_effect_prior(root_effect_prior)
   cross_x <- crossprod(X)
   cross_y <- crossprod(X, y)
   base_beta <- tryCatch(qr.solve(X, y), error = function(e) rep(0, ncol(X)))
@@ -1347,6 +1574,12 @@ econ_seq_fit_root_lm <- function(root_data,
   diagonal_scale <- max(diag(cross_x), 1)
   penalty <- rep(diagonal_scale * 1e-10, p)
   prior_target <- rep(0, p)
+  time_idx <- match(design$root_time_basis_cols, colnames(X), nomatch = 0L)
+  time_idx <- time_idx[time_idx > 0L]
+  root_knot_penalty <- suppressWarnings(as.numeric(root_knot_penalty)[1])
+  if (identical(design$root_time_baseline, "knots") && length(time_idx) && is.finite(root_knot_penalty) && root_knot_penalty > 0) {
+    penalty[time_idx] <- penalty[time_idx] + diagonal_scale * root_knot_penalty
+  }
   if (isTRUE(prior$active)) {
     beta_sd <- prior$sd / abs(design$effect_conversion)
     beta_target <- prior$mean / design$effect_conversion
@@ -1372,7 +1605,8 @@ econ_seq_fit_root_lm <- function(root_data,
   rank_x <- qr(X)$rank
   sigma2 <- sum(resid^2) / max(length(y) - rank_x, 1L)
   cov_beta <- tryCatch(sigma2 * solve(system), error = function(e) matrix(NA_real_, nrow = p, ncol = p))
-  effect <- beta[effect_idx] * design$effect_conversion
+  effect <- sum(beta[effect_idx] * design$media$feature * design$media$outcome_multiplier) /
+    sum(design$media$raw_spend)
   effect_sd <- sqrt(pmax(cov_beta[effect_idx, effect_idx], 0)) * abs(design$effect_conversion)
   sse <- sum(resid^2)
   root_profile_objective <- length(y) * log(pmax(sse / length(y), 1e-12))
@@ -1411,11 +1645,23 @@ econ_seq_fit_root_lm <- function(root_data,
     root_prior_source = prior$source,
     root_effect_sign = root_effect_sign,
     root_sign_boundary_active = sign_boundary_active,
-    root_fit_method = if (prior$active) "frequentist_profile_penalized_likelihood" else "frequentist_profile_gaussian_mle"
+    root_fit_method = if (prior$active) "frequentist_profile_penalized_likelihood" else "frequentist_profile_gaussian_mle",
+    root_geo_media_effect_mode = if (identical(root_geo_media_effect, "partially_pooled") && prior$active) "shared_effect_prior_compatibility_fallback" else "shared",
+    root_geo_media_effect_group_n = data.table::uniqueN(root_data$root_group__),
+    root_geo_media_effect_tau = NA_real_,
+    root_time_baseline = design$root_time_baseline,
+    root_time_basis_n = design$root_time_basis_n,
+    root_time_basis_penalty_applied = identical(design$root_time_baseline, "knots") && length(time_idx) > 0L
   )
   attr(out, "root_fitted_values") <- fitted
   attr(out, "root_residuals") <- resid
-  attr(out, "root_media_timeline") <- design$media$raw_spend
+  attr(out, "root_media_timeline") <- design$media$pressure
+  attr(out, "root_geo_media_effects") <- data.table::data.table(
+    root_group__ = sort(unique(as.character(root_data$root_group__))),
+    root_media_beta = beta[effect_idx],
+    root_media_beta_deviation = 0,
+    root_effect_scale = design$effect_conversion
+  )
   out
 }
 
@@ -1481,7 +1727,8 @@ econ_seq_root_nonlinear_bounds <- function(root_data,
                                            rrate_bounds = c(0, 0.95),
                                            half_saturation_multiple_bounds = c(0.05, 10),
                                            steepness_bounds = c(0.25, 5)) {
-  active <- pmax(suppressWarnings(as.numeric(root_data$root_total_paid_spend__)), 0)
+  pressure_col <- if ("root_media_pressure__" %in% names(root_data)) "root_media_pressure__" else "root_total_paid_spend__"
+  active <- pmax(suppressWarnings(as.numeric(root_data[[pressure_col]])), 0)
   active <- active[is.finite(active) & active > 0]
   if (!length(active)) stop("Root nonlinear bounds require positive training-period media support.", call. = FALSE)
   ref <- stats::median(active)
@@ -1511,7 +1758,11 @@ econ_seq_fit_root_multistart <- function(root_data,
                                          root_rrate_bounds = c(0, 0.95),
                                          root_half_saturation_multiple_bounds = c(0.05, 10),
                                          root_steepness_bounds = c(0.25, 5),
-                                         root_optimizer_maxit = 300L) {
+                                         root_optimizer_maxit = 300L,
+                                         root_time_baseline = c("auto", "fourier", "knots"),
+                                         root_knot_n = 6L,
+                                         root_knot_penalty = 1,
+                                         root_geo_media_effect = c("shared", "partially_pooled")) {
   bounds <- econ_seq_root_nonlinear_bounds(
     root_data, root_rrate_bounds, root_half_saturation_multiple_bounds, root_steepness_bounds
   )
@@ -1524,7 +1775,9 @@ econ_seq_fit_root_multistart <- function(root_data,
     )
     fit <- tryCatch(econ_seq_fit_root_lm(
       root_data, control_cols, root_trend_spec, root_fourier_harmonics, root_season_period,
-      root_effect_prior, root_effect_sign, spec
+      root_effect_prior, root_effect_sign, spec,
+      root_time_baseline = root_time_baseline, root_knot_n = root_knot_n,
+      root_knot_penalty = root_knot_penalty, root_geo_media_effect = root_geo_media_effect
     ), error = function(e) NULL)
     if (is.null(fit) || !is.finite(fit$root_profile_objective[1])) return(1e30)
     fit$root_profile_objective[1]
@@ -1555,7 +1808,9 @@ econ_seq_fit_root_multistart <- function(root_data,
   )
   best_fit <- econ_seq_fit_root_lm(
     root_data, control_cols, root_trend_spec, root_fourier_harmonics, root_season_period,
-    root_effect_prior, root_effect_sign, best_spec
+    root_effect_prior, root_effect_sign, best_spec,
+    root_time_baseline = root_time_baseline, root_knot_n = root_knot_n,
+    root_knot_penalty = root_knot_penalty, root_geo_media_effect = root_geo_media_effect
   )
   near <- usable[objective <= min(objective) + 2]
   spread <- if (nrow(near) > 1L) c(
@@ -1592,19 +1847,27 @@ econ_seq_select_root_curve <- function(root_data,
                                        root_rrate_bounds = c(0, 0.95),
                                        root_half_saturation_multiple_bounds = c(0.05, 10),
                                        root_steepness_bounds = c(0.25, 5),
-                                       root_optimizer_maxit = 300L) {
+                                       root_optimizer_maxit = 300L,
+                                       root_time_baseline = c("auto", "fourier", "knots"),
+                                       root_knot_n = 6L,
+                                       root_knot_penalty = 1,
+                                       root_geo_media_effect = c("shared", "partially_pooled")) {
   root_media_transform <- match.arg(root_media_transform)
   root_effect_sign <- match.arg(root_effect_sign)
   minimum_delta <- max(0, suppressWarnings(as.numeric(root_curve_min_delta_aicc)[1]))
   linear_fit <- econ_seq_fit_root_lm(
     root_data, control_cols, root_trend_spec, root_fourier_harmonics, root_season_period,
-    root_effect_prior, root_effect_sign, econ_seq_root_curve_spec("linear")
+    root_effect_prior, root_effect_sign, econ_seq_root_curve_spec("linear"),
+    root_time_baseline = root_time_baseline, root_knot_n = root_knot_n,
+    root_knot_penalty = root_knot_penalty, root_geo_media_effect = root_geo_media_effect
   )
   linear_fit[, `:=`(candidate_fit_ok = TRUE, candidate_role = "primary_linear_limit")]
   multistart <- if (identical(root_media_transform, "adstock_hill")) econ_seq_fit_root_multistart(
     root_data, control_cols, root_trend_spec, root_fourier_harmonics, root_season_period,
     root_effect_prior, root_effect_sign, root_nonlinear_starts, root_rrate_bounds,
-    root_half_saturation_multiple_bounds, root_steepness_bounds, root_optimizer_maxit
+    root_half_saturation_multiple_bounds, root_steepness_bounds, root_optimizer_maxit,
+    root_time_baseline = root_time_baseline, root_knot_n = root_knot_n,
+    root_knot_penalty = root_knot_penalty, root_geo_media_effect = root_geo_media_effect
   ) else list(fit = NULL, runs = data.table::data.table(), diagnostics = data.table::data.table(
     nonlinear_fit_stable = NA, fallback_recommended = FALSE, fallback_reason = "forced_linear"
   ))
@@ -1628,7 +1891,11 @@ econ_seq_select_root_curve <- function(root_data,
         root_season_period = root_season_period,
         root_effect_prior = root_effect_prior,
         root_effect_sign = root_effect_sign,
-        root_curve_spec = spec
+        root_curve_spec = spec,
+        root_time_baseline = root_time_baseline,
+        root_knot_n = root_knot_n,
+        root_knot_penalty = root_knot_penalty,
+        root_geo_media_effect = root_geo_media_effect
       ),
       error = function(e) NULL
     )
@@ -1742,6 +2009,10 @@ econ_seq_block_bootstrap_root <- function(root_data,
                                           root_half_saturation_multiple_bounds = c(0.05, 10),
                                           root_steepness_bounds = c(0.25, 5),
                                           root_optimizer_maxit = 300L,
+                                          root_time_baseline = c("auto", "fourier", "knots"),
+                                          root_knot_n = 6L,
+                                          root_knot_penalty = 1,
+                                          root_geo_media_effect = c("shared", "partially_pooled"),
                                           reselect_curve = TRUE,
                                           reps = 200L,
                                           block_length = 4L,
@@ -1767,7 +2038,11 @@ econ_seq_block_bootstrap_root <- function(root_data,
     root_season_period = root_season_period,
     root_effect_prior = root_effect_prior,
     root_effect_sign = root_effect_sign,
-    root_curve_spec = root_curve_spec
+    root_curve_spec = root_curve_spec,
+    root_time_baseline = root_time_baseline,
+    root_knot_n = root_knot_n,
+    root_knot_penalty = root_knot_penalty,
+    root_geo_media_effect = root_geo_media_effect
   ), error = function(e) NULL)
   if (is.null(base_fit)) return(empty())
   base_fitted <- attr(base_fit, "root_fitted_values")
@@ -1811,7 +2086,11 @@ econ_seq_block_bootstrap_root <- function(root_data,
             root_rrate_bounds = root_rrate_bounds,
             root_half_saturation_multiple_bounds = root_half_saturation_multiple_bounds,
             root_steepness_bounds = root_steepness_bounds,
-            root_optimizer_maxit = root_optimizer_maxit
+            root_optimizer_maxit = root_optimizer_maxit,
+            root_time_baseline = root_time_baseline,
+            root_knot_n = root_knot_n,
+            root_knot_penalty = root_knot_penalty,
+            root_geo_media_effect = root_geo_media_effect
           )$selected_spec,
           error = function(e) NULL
         )
@@ -1832,7 +2111,11 @@ econ_seq_block_bootstrap_root <- function(root_data,
         root_season_period = root_season_period,
         root_effect_prior = root_effect_prior,
         root_effect_sign = root_effect_sign,
-        root_curve_spec = selected_spec
+        root_curve_spec = selected_spec,
+        root_time_baseline = root_time_baseline,
+        root_knot_n = root_knot_n,
+        root_knot_penalty = root_knot_penalty,
+        root_geo_media_effect = root_geo_media_effect
       ), error = function(e) NULL)
       if (is.null(fit)) return(data.table::data.table(draw = ii, root_effectiveness = NA_real_, fit_ok = FALSE,
                                                        root_curve_type = selected_spec$type, root_rrate = selected_spec$rrate,
@@ -3757,11 +4040,15 @@ econ_seq_training_time_values <- function(data,
 
 #' Fit the default parsimonious total-paid-media root.
 #'
-#' This is a frequentist panel regression with group effects, trend, optional
-#' Fourier seasonality, declared controls, a guarded linear versus concave
-#' adstock/Hill total-spend candidate search, and a blocked time bootstrap. An
-#' optional Gaussian calibration penalty is available for a root estimate that
-#' needs external business evidence; it is not described as a Bayesian prior.
+#' The default is a nationally aggregated, frequentist total-paid-media root.
+#' When genuinely observed group-level paid-media variation is identifiable,
+#' `root_scope = "hierarchical_panel"` retains the geo-time panel and can fit
+#' partially pooled geo total-media effects. Exposure scaling applies to both
+#' the KPI and media pressure while outcome-per-cost reporting remains on raw
+#' KPI/spend totals. The root supports a shared low-dimensional Fourier or knot
+#' time basis, guarded linear versus concave adstock/Hill selection, and a
+#' blocked time bootstrap. An optional Gaussian calibration penalty is
+#' available for the shared-effect fit; it is not described as a Bayesian prior.
 fit_parsimonious_total_media_root <- function(data,
                                               metadata_input,
                                               dep_var_col,
@@ -3775,6 +4062,8 @@ fit_parsimonious_total_media_root <- function(data,
                                               market_size_col = NULL,
                                               target_population_col = NULL,
                                               invalid_allocation_fallback = c("error", "equal"),
+                                              root_pressure_scaling = c("auto", "none", "per_capita"),
+                                              root_pressure_col = NULL,
                                               root_control_cols = NULL,
                                               root_control_mode = c("declared_controls", "all_nonmedia", "none"),
                                               root_scope = c("national", "hierarchical_panel"),
@@ -3786,6 +4075,10 @@ fit_parsimonious_total_media_root <- function(data,
                                               root_trend_spec = c("none", "linear"),
                                               root_fourier_harmonics = 2L,
                                               root_season_period = 52L,
+                                              root_time_baseline = c("auto", "fourier", "knots"),
+                                              root_knot_n = 6L,
+                                              root_knot_penalty = 1,
+                                              root_geo_media_effect = c("shared", "partially_pooled"),
                                               root_media_transform = c("adstock_hill", "linear"),
                                               root_rrate_grid = c(0, 0.25, 0.50, 0.70),
                                               root_anchor_saturation_grid = c(0.30, 0.50, 0.70),
@@ -3810,6 +4103,10 @@ fit_parsimonious_total_media_root <- function(data,
   incomplete_period_action <- match.arg(incomplete_period_action)
   invalid_allocation_fallback <- match.arg(invalid_allocation_fallback)
   root_trend_spec <- match.arg(root_trend_spec)
+  root_pressure_scaling <- match.arg(root_pressure_scaling)
+  root_geo_media_effect <- match.arg(root_geo_media_effect)
+  root_time_baseline <- match.arg(root_time_baseline)
+  if (is.null(root_pressure_col)) root_pressure_col <- population_col %||% market_size_col
   canonical <- canonicalize_sequential_media_panel(
     data = data,
     metadata_input = metadata_input,
@@ -3848,7 +4145,9 @@ fit_parsimonious_total_media_root <- function(data,
     kpi_weight_col = kpi_weight_col,
     root_control_aggregation = root_control_aggregation,
     root_aggregation_functions = root_aggregation_functions,
-    incomplete_period_action = incomplete_period_action
+    incomplete_period_action = incomplete_period_action,
+    root_pressure_scaling = root_pressure_scaling,
+    root_pressure_col = root_pressure_col
   )
   training_times <- econ_seq_training_time_values(
     data = canonical$data,
@@ -3866,6 +4165,10 @@ fit_parsimonious_total_media_root <- function(data,
     root_trend_spec = root_trend_spec,
     root_fourier_harmonics = root_fourier_harmonics,
     root_season_period = root_season_period,
+    root_time_baseline = root_time_baseline,
+    root_knot_n = root_knot_n,
+    root_knot_penalty = root_knot_penalty,
+    root_geo_media_effect = root_geo_media_effect,
     root_effect_prior = root_effect_prior,
     root_media_transform = root_media_transform,
     root_rrate_grid = root_rrate_grid,
@@ -3879,6 +4182,21 @@ fit_parsimonious_total_media_root <- function(data,
     root_optimizer_maxit = root_optimizer_maxit
   )
   point <- curve_selection$selected
+  point_fit <- econ_seq_fit_root_lm(
+    root_data = root_model_data,
+    control_cols = panel$control_cols,
+    root_trend_spec = root_trend_spec,
+    root_fourier_harmonics = root_fourier_harmonics,
+    root_season_period = root_season_period,
+    root_effect_prior = root_effect_prior,
+    root_effect_sign = root_effect_sign,
+    root_curve_spec = curve_selection$selected_spec,
+    root_time_baseline = root_time_baseline,
+    root_knot_n = root_knot_n,
+    root_knot_penalty = root_knot_penalty,
+    root_geo_media_effect = root_geo_media_effect
+  )
+  root_geo_media_effects <- attr(point_fit, "root_geo_media_effects") %||% data.table::data.table()
   draws <- econ_seq_block_bootstrap_root(
     root_data = root_model_data,
     control_cols = panel$control_cols,
@@ -3897,6 +4215,10 @@ fit_parsimonious_total_media_root <- function(data,
     root_half_saturation_multiple_bounds = root_half_saturation_multiple_bounds,
     root_steepness_bounds = root_steepness_bounds,
     root_optimizer_maxit = root_optimizer_maxit,
+    root_time_baseline = root_time_baseline,
+    root_knot_n = root_knot_n,
+    root_knot_penalty = root_knot_penalty,
+    root_geo_media_effect = root_geo_media_effect,
     reselect_curve = TRUE,
     reps = root_bootstrap_reps,
     block_length = root_block_length,
@@ -3962,6 +4284,8 @@ fit_parsimonious_total_media_root <- function(data,
     root_bayesian_fallback_reason = fallback_reason,
     root_bayesian_fallback_policy = "invoke_only_for_flat_unstable_or_bound_hitting_nonlinear_likelihood",
     root_scope = root_scope,
+    root_pressure_scaling = panel$root_pressure_scaling,
+    root_pressure_col = panel$root_pressure_col,
     root_identification_recommendation = root_id$overall$identification_recommendation[1],
     root_prior_width_multiplier = root_id$overall$prior_width_multiplier[1],
     root_evidence_type = "frequentist_moving_block_residual_bootstrap_sampling_distribution",
@@ -3981,6 +4305,12 @@ fit_parsimonious_total_media_root <- function(data,
     root_holdout_value = holdout_value,
     root_holdout_last_n = holdout_last_n,
     root_scope = root_scope,
+    root_pressure_scaling = panel$root_pressure_scaling,
+    root_pressure_col = panel$root_pressure_col,
+    root_time_baseline = point$root_time_baseline[1],
+    root_knot_n = as.integer(root_knot_n),
+    root_geo_media_effect = point$root_geo_media_effect_mode[1],
+    root_geo_media_effects = data.table::as.data.table(root_geo_media_effects),
     canonical_data = canonical$data[],
     canonical_metadata = canonical$metadata[],
     canonical_spend_map = modeled_spend_map[],
@@ -5185,6 +5515,8 @@ run_sequential_hierarchical_bayes <- function(data,
                                               market_size_col = NULL,
                                               target_population_col = NULL,
                                               invalid_allocation_fallback = c("error", "equal"),
+                                              root_pressure_scaling = c("auto", "none", "per_capita"),
+                                              root_pressure_col = NULL,
                                               child_variables = NULL,
                                               rollup_map = NULL,
                                               rollup_depth = "leaf",
@@ -5201,6 +5533,10 @@ run_sequential_hierarchical_bayes <- function(data,
                                               root_trend_spec = c("none", "linear"),
                                               root_fourier_harmonics = 2L,
                                               root_season_period = 52L,
+                                              root_time_baseline = c("fourier", "knots", "auto"),
+                                              root_knot_n = 6L,
+                                              root_knot_penalty = 1,
+                                              root_geo_media_effect = c("shared", "partially_pooled"),
                                               root_media_transform = c("adstock_hill", "linear"),
                                               root_rrate_grid = c(0, 0.25, 0.50, 0.70),
                                               root_anchor_saturation_grid = c(0.30, 0.50, 0.70),
@@ -5251,6 +5587,21 @@ run_sequential_hierarchical_bayes <- function(data,
   incomplete_period_action <- match.arg(incomplete_period_action)
   invalid_allocation_fallback <- match.arg(invalid_allocation_fallback)
   root_trend_spec <- match.arg(root_trend_spec)
+  root_pressure_scaling <- match.arg(root_pressure_scaling)
+  root_time_baseline <- match.arg(root_time_baseline)
+  root_geo_media_effect <- match.arg(root_geo_media_effect)
+  if (isTRUE(fit_child) && identical(root_time_baseline, "knots") && !isTRUE(allow_baseline_override)) {
+    stop(
+      "root_time_baseline = 'knots' is currently a root-only frequentist basis and cannot be represented by the shared Stan child baseline. Use root_time_baseline = 'fourier' for a matched sequential child fit, or set allow_baseline_override = TRUE for an explicitly audited difference.",
+      call. = FALSE
+    )
+  }
+  if (isTRUE(fit_child) && identical(root_time_baseline, "auto") && identical(root_scope, "hierarchical_panel") && !isTRUE(allow_baseline_override)) {
+    stop(
+      "root_time_baseline = 'auto' selects knots for a geo-panel root, which is not yet the shared Stan child baseline. Use 'fourier' for a matched sequential child fit, or set allow_baseline_override = TRUE for an explicitly audited difference.",
+      call. = FALSE
+    )
+  }
   sequential_effectiveness_application <- match.arg(sequential_effectiveness_application)
   sequential_adstock_application <- match.arg(sequential_adstock_application)
   curve_transfer_mode <- match.arg(curve_transfer_mode)
@@ -5300,6 +5651,8 @@ run_sequential_hierarchical_bayes <- function(data,
     market_size_col = market_size_col,
     target_population_col = target_population_col,
     invalid_allocation_fallback = invalid_allocation_fallback,
+    root_pressure_scaling = root_pressure_scaling,
+    root_pressure_col = root_pressure_col,
     root_control_cols = root_control_cols,
     root_control_mode = root_control_mode,
     root_scope = root_scope,
@@ -5311,6 +5664,10 @@ run_sequential_hierarchical_bayes <- function(data,
     root_trend_spec = root_trend_spec,
     root_fourier_harmonics = root_fourier_harmonics,
     root_season_period = root_season_period,
+    root_time_baseline = root_time_baseline,
+    root_knot_n = root_knot_n,
+    root_knot_penalty = root_knot_penalty,
+    root_geo_media_effect = root_geo_media_effect,
     root_media_transform = root_media_transform,
     root_rrate_grid = root_rrate_grid,
     root_anchor_saturation_grid = root_anchor_saturation_grid,

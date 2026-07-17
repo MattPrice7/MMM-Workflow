@@ -84,6 +84,65 @@ stopifnot(all(root$bootstrap_draws$curve_selection_repeated))
 stopifnot(all(root$root_panel$root_adstock_order__ == root$root_panel$root_time_index__))
 stopifnot(nrow(root$national_spend) == length(periods) * nrow(spend_map))
 
+# A geo-panel root reduces media parameters without discarding the geo-time
+# panel. When a valid exposure denominator is available it scales both KPI and
+# media pressure, while retaining raw spend for the outcome-per-cost result.
+set.seed(812)
+panel_periods <- seq.Date(as.Date("2022-01-03"), by = "week", length.out = 72L)
+panel_geos <- paste0("panel_geo_", 1:5)
+panel_population <- c(.8, 1.1, 1.7, 2.3, 3.2) * 1e6
+panel_effectiveness <- c(.55, .65, .70, .75, .85)
+panel_root_data <- rbindlist(lapply(seq_along(panel_geos), function(ii) {
+  spend <- pmax(10, panel_population[ii] / 1e6 * (
+    110 + 30 * sin(seq_along(panel_periods) / 5 + ii) + rnorm(length(panel_periods), 0, 13)
+  ))
+  macro <- sin(seq_along(panel_periods) / 12)
+  data.table(
+    period = panel_periods,
+    geo = panel_geos[ii],
+    entity = "brand",
+    population = panel_population[ii],
+    total_support = spend * 8,
+    total_spend = spend,
+    macro = macro,
+    kpi = panel_population[ii] / 1e6 * (550 + 24 * macro) + panel_effectiveness[ii] * spend + rnorm(length(panel_periods), 0, 5)
+  )
+}))
+panel_root_metadata <- data.table(
+  variable = c("total_support", "macro"),
+  role = c("media", "control"),
+  spend_col = c("total_spend", NA_character_),
+  rollup_path = c("total_paid_media > total", "business_controls > macro"),
+  coef = 0,
+  coef_precision = 1,
+  coef_bound = c("pos", "free")
+)
+panel_root_fit <- fit_parsimonious_total_media_root(
+  data = panel_root_data,
+  metadata_input = panel_root_metadata,
+  dep_var_col = "kpi",
+  group_col = "geo",
+  time_col = "period",
+  entity_col = "entity",
+  population_col = "population",
+  root_scope = "hierarchical_panel",
+  root_control_cols = "macro",
+  root_pressure_scaling = "auto",
+  root_media_transform = "linear",
+  root_time_baseline = "knots",
+  root_knot_n = 4L,
+  root_geo_media_effect = "partially_pooled",
+  root_bootstrap_reps = 0L
+)
+expected_portfolio_effectiveness <- weighted.mean(panel_effectiveness, panel_population)
+stopifnot(panel_root_fit$root_summary$root_geo_media_effect_mode[1] == "partially_pooled_normal")
+stopifnot(panel_root_fit$root_summary$root_geo_media_effect_group_n[1] == length(panel_geos))
+stopifnot(panel_root_fit$root_pressure_scaling == "per_capita")
+stopifnot(panel_root_fit$root_time_baseline == "knots")
+stopifnot(nrow(panel_root_fit$root_training_panel) == length(panel_periods) * length(panel_geos))
+stopifnot(abs(panel_root_fit$root_summary$root_effectiveness[1] - expected_portfolio_effectiveness) < .15)
+stopifnot(nrow(panel_root_fit$root_geo_media_effects) == length(panel_geos))
+
 # The nonlinear root uses Sobol points only as multistart optimizer seeds. The
 # retained grid is diagnostic and cannot win the primary model selection.
 sobol <- econ_seq_sobol_points(24L, 3L)
